@@ -61,6 +61,7 @@
     "protobufjs": "^7.5.4",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
+    "react-resizable-panels": "^3.0.6",
     "tailwind-merge": "^3.4.0",
     "ws": "^8.19.0"
   },
