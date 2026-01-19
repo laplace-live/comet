@@ -638,8 +638,8 @@ export function MessageBubble({ message, emojiInfoMap, isSent, session, userCach
   const isFanGroup = session.session_type === SESSION_TYPE.FAN_GROUP
 
   // Get the user ID for the Bilibili space link
-  const avatarUserId = isSent ? userInfo?.mid : session.talker_id
-  const bilibiliSpaceUrl = avatarUserId ? `https://space.bilibili.com/${avatarUserId}` : null
+  const resolvedUid = isSent ? userInfo?.mid : session.talker_id
+  const bilibiliSpaceUrl = resolvedUid ? `https://space.bilibili.com/${resolvedUid}` : null
 
   return (
     <div className={`flex gap-3 ${isSent ? 'flex-row-reverse' : ''}`}>
