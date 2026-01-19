@@ -2,6 +2,7 @@ import {
   Bot,
   ChevronRight,
   Code,
+  Copy,
   ExternalLink,
   Image as ImageIcon,
   MessageSquareText,
@@ -24,6 +25,7 @@ import { enforceHttps } from '@/utils/enforceHttps'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { ContextMenu, ContextMenuItem, ContextMenuPopup, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu'
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
@@ -663,6 +665,79 @@ export function MessageBubble({
     }
   }
 
+  // Get copyable text from the message content
+  const getCopyableText = (): string => {
+    try {
+      const content = JSON.parse(message.content)
+      return extractTextContent(content.content) || extractTextContent(content) || message.content
+    } catch {
+      return message.content || ''
+    }
+  }
+
+  // Get image URL from image message content
+  const getImageUrl = (): string | null => {
+    if (message.msg_type !== MSG_TYPE.IMAGE) return null
+    try {
+      const content = JSON.parse(message.content)
+      return content.url ? enforceHttps(content.url) : null
+    } catch {
+      return null
+    }
+  }
+
+  const handleCopy = async () => {
+    // Handle image messages - copy the image itself using Electron's clipboard API
+    if (message.msg_type === MSG_TYPE.IMAGE) {
+      const imageUrl = getImageUrl()
+      if (imageUrl) {
+        try {
+          // Use Electron's native clipboard API to copy image (bypasses CORS)
+          const result = await window.electronAPI.clipboard.copyImage({ imageUrl })
+          if (result.success) {
+            toastManager.add({
+              type: 'success',
+              title: '已复制图片',
+            })
+          } else {
+            // Fallback: copy the image URL if image copy fails
+            await navigator.clipboard.writeText(imageUrl)
+            toastManager.add({
+              type: 'success',
+              title: '已复制图片链接',
+            })
+          }
+          return
+        } catch {
+          // Fallback: copy the image URL if image copy fails
+          await navigator.clipboard.writeText(imageUrl)
+          toastManager.add({
+            type: 'success',
+            title: '已复制图片链接',
+          })
+          return
+        }
+      }
+    }
+
+    // Handle text messages
+    const text = getCopyableText()
+    if (text) {
+      try {
+        await navigator.clipboard.writeText(text)
+        toastManager.add({
+          type: 'success',
+          title: '已复制',
+        })
+      } catch {
+        toastManager.add({
+          type: 'error',
+          title: '复制失败',
+        })
+      }
+    }
+  }
+
   // Revoke command messages (msg_type 5) should be hidden - they're technical messages to trigger recall
   if (message.msg_type === MSG_TYPE.REVOKE) {
     return null
@@ -744,22 +819,40 @@ export function MessageBubble({
       </Menu>
 
       <div className={`flex max-w-[70%] flex-col gap-1 ${isSent ? 'items-end' : ''}`}>
-        <div
-          className={cn(
-            'rounded-2xl',
-            isRichContent
-              ? 'overflow-hidden'
-              : [
-                  'px-4 py-2.5',
-                  isSent
-                    ? 'bg-linear-to-br from-pink-500 to-rose-500 text-white'
-                    : 'bg-white shadow-sm dark:bg-zinc-800',
-                ],
-            message.msg_status === 1 && 'opacity-50'
-          )}
-        >
-          {renderMessageContent(message, emojiInfoMap)}
-        </div>
+        <ContextMenu>
+          <ContextMenuTrigger
+            render={
+              <div
+                className={cn(
+                  'rounded-2xl',
+                  isRichContent
+                    ? 'overflow-hidden'
+                    : [
+                        'px-4 py-2.5',
+                        isSent
+                          ? 'bg-linear-to-br from-pink-500 to-rose-500 text-white'
+                          : 'bg-white shadow-sm dark:bg-zinc-800',
+                      ],
+                  message.msg_status === 1 && 'opacity-50'
+                )}
+              >
+                {renderMessageContent(message, emojiInfoMap)}
+              </div>
+            }
+          />
+          <ContextMenuPopup>
+            <ContextMenuItem onClick={handleCopy}>
+              <Copy />
+              复制
+            </ContextMenuItem>
+            {isRecallable && onRecall && (
+              <ContextMenuItem onClick={handleRecall}>
+                <Undo2 />
+                撤回
+              </ContextMenuItem>
+            )}
+          </ContextMenuPopup>
+        </ContextMenu>
         <div className={`flex items-center gap-1.5 ${isSent ? 'flex-row-reverse' : ''}`}>
           <Tooltip>
             <TooltipTrigger className='cursor-default px-1 text-muted-foreground text-xs'>

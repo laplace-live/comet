@@ -1,6 +1,6 @@
 import path, { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, ipcMain, Notification, nativeImage, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Notification, nativeImage, nativeTheme, shell } from 'electron'
 import started from 'electron-squirrel-startup'
 
 import { registerBilibiliIpcHandlers } from './api/bilibili'
@@ -134,6 +134,34 @@ ipcMain.handle('show-notification', async (_event, params: ShowNotificationParam
   notification.show()
   console.log('[Notification] Shown for:', params.title)
   return { shown: true }
+})
+
+// Clipboard IPC handler - copy image from URL
+interface CopyImageParams {
+  imageUrl: string
+}
+
+ipcMain.handle('clipboard:copy-image', async (_event, params: CopyImageParams) => {
+  try {
+    const response = await fetch(params.imageUrl)
+    if (!response.ok) {
+      return { success: false, error: 'Failed to fetch image' }
+    }
+
+    const arrayBuffer = await response.arrayBuffer()
+    const buffer = Buffer.from(arrayBuffer)
+    const image = nativeImage.createFromBuffer(buffer)
+
+    if (image.isEmpty()) {
+      return { success: false, error: 'Invalid image data' }
+    }
+
+    clipboard.writeImage(image)
+    return { success: true }
+  } catch (err) {
+    console.error('[Clipboard] Failed to copy image:', err)
+    return { success: false, error: err instanceof Error ? err.message : 'Unknown error' }
+  }
 })
 
 const createWindow = () => {

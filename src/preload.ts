@@ -175,6 +175,15 @@ export interface NavigateToSessionParams {
   sessionType: number
 }
 
+export interface CopyImageParams {
+  imageUrl: string
+}
+
+export interface CopyImageResult {
+  success: boolean
+  error?: string
+}
+
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -265,5 +274,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.removeListener('bilibili:navigate-to-session', listener)
       }
     },
+  },
+
+  // Clipboard utilities
+  clipboard: {
+    copyImage: (params: CopyImageParams): Promise<CopyImageResult> =>
+      ipcRenderer.invoke('clipboard:copy-image', params),
   },
 })

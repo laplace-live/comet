@@ -215,6 +215,15 @@ export interface NavigateToSessionParams {
   sessionType: number
 }
 
+export interface CopyImageParams {
+  imageUrl: string
+}
+
+export interface CopyImageResult {
+  success: boolean
+  error?: string
+}
+
 export interface ElectronAPI {
   // Platform detection for OS-specific UI adjustments (e.g., 'darwin', 'win32', 'linux')
   platform: NodeJS.Platform
@@ -257,6 +266,11 @@ export interface ElectronAPI {
     // System notifications
     showNotification: (params: ShowNotificationParams) => Promise<{ shown: boolean; reason?: string }>
     onNavigateToSession: (callback: (params: NavigateToSessionParams) => void) => () => void
+  }
+
+  // Clipboard utilities
+  clipboard: {
+    copyImage: (params: CopyImageParams) => Promise<CopyImageResult>
   }
 }
 
