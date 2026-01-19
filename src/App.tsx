@@ -55,18 +55,39 @@ export default function App() {
     if (!isConnected) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle shortcuts with Cmd (macOS) or Ctrl (Windows/Linux)
+      if (!e.metaKey && !e.ctrlKey) return
+
       // Cmd+, (macOS) or Ctrl+, (Windows/Linux) to open settings
       // Check both e.key and e.code for better cross-platform compatibility
       const isCommaKey = e.key === ',' || e.code === 'Comma'
-      if ((e.metaKey || e.ctrlKey) && isCommaKey) {
+      if (isCommaKey) {
         e.preventDefault()
         toggleSettings()
+        return
+      }
+
+      // Cmd/Ctrl + 1-9 to switch to accounts 1-9, Cmd/Ctrl + 0 for account 10
+      const digitMatch = e.code.match(/^Digit([0-9])$/)
+      if (digitMatch && accounts.length > 1) {
+        const digit = Number.parseInt(digitMatch[1], 10)
+        // 1-9 maps to index 0-8, 0 maps to index 9
+        const accountIndex = digit === 0 ? 9 : digit - 1
+
+        if (accountIndex < accounts.length) {
+          const targetAccount = accounts[accountIndex]
+          // Only switch if not already active and not expired
+          if (targetAccount.mid !== activeAccountMid && !targetAccount.isExpired) {
+            e.preventDefault()
+            switchAccount(targetAccount.mid)
+          }
+        }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isConnected, toggleSettings])
+  }, [isConnected, toggleSettings, accounts, activeAccountMid, switchAccount])
 
   // Check login on mount
   useEffect(() => {

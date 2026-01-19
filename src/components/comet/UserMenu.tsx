@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Code, LogOut, Plus, RefreshCw, Settings, Trash2 } from 'lucide-react'
+import { Check, LogOut, Plus, RefreshCw, Settings, Trash2 } from 'lucide-react'
 
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
 
@@ -7,17 +7,7 @@ import { modifierKey } from '@/utils/platform'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
-import {
-  Dialog,
-  DialogClose,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogPanel,
-  DialogPopup,
-  DialogTitle,
-} from '@/components/ui/dialog'
+import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '@/components/ui/dialog'
 import {
   Menu,
   MenuGroup,
@@ -98,9 +88,11 @@ export function UserMenu({
               <MenuSeparator />
               <MenuGroup>
                 <MenuGroupLabel>切换账号</MenuGroupLabel>
-                {accounts.map(account => {
+                {accounts.map((account, index) => {
                   const isActive = account.mid === activeAccountMid
                   const isExpired = account.isExpired
+                  // 1-9 for first 9 accounts, 0 for 10th account
+                  const shortcutKey = index < 9 ? index + 1 : index === 9 ? 0 : null
 
                   const handleClick = () => {
                     if (isExpired) {
@@ -116,17 +108,12 @@ export function UserMenu({
                       onClick={handleClick}
                       className={isActive && !isExpired ? 'bg-accent/50' : ''}
                     >
-                      <div className='flex w-full items-center gap-3'>
+                      <div className='flex w-full items-center gap-1'>
                         <div className='relative'>
                           <Avatar className={`size-6 ${isExpired ? 'opacity-50' : ''}`}>
                             {account.face && <AvatarImage src={enforceHttps(account.face)} alt={account.uname} />}
                             <AvatarFallback className='text-xs'>{account.uname.charAt(0)}</AvatarFallback>
                           </Avatar>
-                          {isExpired && (
-                            <div className='absolute -right-0.5 -bottom-0.5 rounded-full bg-background p-0.5'>
-                              <AlertTriangle className='size-2.5 text-amber-500' />
-                            </div>
-                          )}
                         </div>
                         <div className='flex flex-1 flex-col items-start overflow-hidden'>
                           <span className={`w-full truncate text-sm ${isExpired ? 'text-muted-foreground' : ''}`}>
@@ -136,8 +123,14 @@ export function UserMenu({
                         </div>
                         {isExpired ? (
                           <RefreshCw className='size-4 text-amber-500' />
+                        ) : isActive ? (
+                          <Check className='size-4 text-primary' />
                         ) : (
-                          isActive && <Check className='size-4 text-primary' />
+                          shortcutKey !== null && (
+                            <MenuShortcut>
+                              {modifierKey}+{shortcutKey}
+                            </MenuShortcut>
+                          )
                         )}
                       </div>
                     </MenuItem>
@@ -197,10 +190,6 @@ export function UserMenu({
             <div className='space-y-6'>
               {/* Developer Settings Section */}
               <div className='space-y-4'>
-                <div className='flex items-center gap-2'>
-                  <Code className='size-4 text-muted-foreground' />
-                  <h3 className='font-medium text-sm'>开发者设置</h3>
-                </div>
                 <Separator />
                 <div className='flex items-center justify-between gap-4'>
                   <div className='space-y-0.5'>
@@ -214,9 +203,6 @@ export function UserMenu({
               </div>
             </div>
           </DialogPanel>
-          <DialogFooter variant='bare'>
-            <DialogClose render={<Button variant='outline' />}>关闭</DialogClose>
-          </DialogFooter>
         </DialogPopup>
       </Dialog>
     </div>
