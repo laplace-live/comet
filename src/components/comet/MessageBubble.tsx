@@ -553,7 +553,18 @@ function renderDefaultContent(content: Record<string, unknown>, msgType: number)
 }
 
 // Message inspector popover component
-function MessageInspector({ message }: { message: BilibiliMessage }) {
+function MessageInspector({ message, emojiInfoMap }: { message: BilibiliMessage; emojiInfoMap: EmojiInfoMap }) {
+  // Get relevant emoji info for this message by checking if any emoji codes appear in the content
+  const relevantEmojiInfo: Record<string, (typeof emojiInfoMap)[string]> = {}
+  if (message.content) {
+    for (const [emojiCode, info] of Object.entries(emojiInfoMap)) {
+      if (message.content.includes(emojiCode)) {
+        relevantEmojiInfo[emojiCode] = info
+      }
+    }
+  }
+  const hasEmojiInfo = Object.keys(relevantEmojiInfo).length > 0
+
   return (
     <Popover>
       <PopoverTrigger
@@ -580,11 +591,19 @@ function MessageInspector({ message }: { message: BilibiliMessage }) {
           </div>
           <Separator />
           <div>
-            <span className='text-muted-foreground'>raw:</span>
-            <pre className='mt-1 max-h-64 overflow-auto rounded bg-zinc-100 p-2 font-mono text-xs dark:bg-zinc-800'>
+            <span className='text-muted-foreground'>message:</span>
+            <pre className='mt-1 max-h-48 overflow-auto rounded bg-zinc-100 p-2 font-mono text-xs dark:bg-zinc-800'>
               {JSON.stringify(message, null, 2)}
             </pre>
           </div>
+          {hasEmojiInfo && (
+            <div>
+              <span className='text-muted-foreground'>e_infos (relevant):</span>
+              <pre className='mt-1 max-h-48 overflow-auto rounded bg-zinc-100 p-2 font-mono text-xs dark:bg-zinc-800'>
+                {JSON.stringify(relevantEmojiInfo, null, 2)}
+              </pre>
+            </div>
+          )}
         </div>
       </PopoverPopup>
     </Popover>
@@ -668,7 +687,7 @@ export function MessageBubble({ message, emojiInfoMap, isSent, session, userCach
               {sourceLabel}
             </span>
           )}
-          <MessageInspector message={message} />
+          <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />
         </div>
       </div>
     </div>
