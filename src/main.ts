@@ -139,6 +139,57 @@ ipcMain.handle('show-notification', async (_event, params: ShowNotificationParam
   return { shown: true }
 })
 
+// Create a badge overlay icon for Windows taskbar
+function createBadgeIcon(count: number): Electron.NativeImage {
+  // Create a 16x16 badge icon with the count
+  const size = 16
+  const canvas = `
+    <svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}" fill="#ef4444"/>
+      <text x="${size / 2}" y="${size / 2 + 1}"
+        font-family="Arial, sans-serif"
+        font-size="${count > 99 ? 7 : count > 9 ? 8 : 10}"
+        font-weight="bold"
+        fill="white"
+        text-anchor="middle"
+        dominant-baseline="middle">
+        ${count > 99 ? '99+' : count}
+      </text>
+    </svg>
+  `
+  return nativeImage.createFromBuffer(Buffer.from(canvas))
+}
+
+// Badge count IPC handler (macOS dock badge / Windows taskbar overlay)
+ipcMain.handle('app:set-badge-count', (_event, count: number) => {
+  if (process.platform === 'darwin') {
+    // On macOS, setBadge takes a string - empty string clears the badge
+    app.dock?.setBadge(count > 0 ? String(count) : '')
+    return { success: true }
+  }
+
+  if (process.platform === 'win32') {
+    // On Windows, use overlay icon on the taskbar
+    const windows = BrowserWindow.getAllWindows()
+    const mainWindow = windows[0]
+
+    if (mainWindow) {
+      if (count > 0) {
+        const badgeIcon = createBadgeIcon(count)
+        mainWindow.setOverlayIcon(badgeIcon, `${count} unread messages`)
+      } else {
+        // Clear the overlay icon
+        mainWindow.setOverlayIcon(null, '')
+      }
+      return { success: true }
+    }
+    return { success: false, reason: 'no_window' }
+  }
+
+  // Linux and other platforms - not supported yet
+  return { success: false, reason: 'platform_not_supported' }
+})
+
 // Clipboard IPC handler - copy image from URL
 interface CopyImageParams {
   imageUrl: string

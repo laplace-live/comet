@@ -230,6 +230,9 @@ export interface ElectronAPI {
   // App info
   getVersion: () => Promise<string>
 
+  // Badge count (macOS dock badge / Windows taskbar overlay)
+  setBadgeCount: (count: number) => Promise<{ success: boolean; reason?: string }>
+
   bilibili: {
     // QR Code Login
     qrGenerate: () => Promise<QRGenerateResult>

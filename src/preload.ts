@@ -193,6 +193,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // App info
   getVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
 
+  // Badge count (macOS dock badge / Windows taskbar overlay)
+  setBadgeCount: (count: number): Promise<{ success: boolean; reason?: string }> =>
+    ipcRenderer.invoke('app:set-badge-count', count),
+
   bilibili: {
     // QR Code Login
     qrGenerate: (): Promise<QRGenerateResult> => ipcRenderer.invoke('bilibili:qr-generate'),

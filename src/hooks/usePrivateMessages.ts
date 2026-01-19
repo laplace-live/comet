@@ -1299,6 +1299,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [isConnected, wsConnected, connectWebSocket])
 
+  // Update dock badge with total unread count (macOS)
+  useEffect(() => {
+    const totalUnread = sessions.reduce((sum, session) => sum + (session.unread_count || 0), 0)
+    window.electronAPI.setBadgeCount(totalUnread).catch(err => {
+      console.error('[usePrivateMessages] Failed to update dock badge:', err)
+    })
+  }, [sessions])
+
   return {
     // State
     sessions,
