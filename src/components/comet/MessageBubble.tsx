@@ -779,6 +779,7 @@ export function MessageBubble({
   // Get the user ID for the Bilibili space link
   const resolvedUid = isSent ? userInfo?.mid : session.talker_id
   const bilibiliSpaceUrl = resolvedUid ? `https://space.bilibili.com/${resolvedUid}` : null
+  const laplaceUrl = resolvedUid ? `https://laplace.live/user/${resolvedUid}` : null
 
   return (
     <div className={`flex gap-3 ${isSent ? 'flex-row-reverse' : ''}`}>
@@ -809,6 +810,14 @@ export function MessageBubble({
               </MenuItem>
             </a>
           )}
+          {laplaceUrl && (
+            <a href={laplaceUrl} target='_blank' rel='noopener noreferrer'>
+              <MenuItem>
+                <ExternalLink />
+                LAPLACE Live!
+              </MenuItem>
+            </a>
+          )}
           {isRecallable && onRecall && (
             <MenuItem onClick={handleRecall}>
               <Undo2 />
@@ -828,7 +837,7 @@ export function MessageBubble({
                   isRichContent
                     ? 'overflow-hidden'
                     : [
-                        'px-4 py-1.5',
+                        'min-w-9 px-3 py-2',
                         isSent
                           ? 'rounded-tr-none bg-linear-to-br from-sky-500 to-blue-500 text-white'
                           : 'rounded-tl-none bg-white shadow-xs dark:bg-zinc-800',
