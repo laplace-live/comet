@@ -1,5 +1,4 @@
 import { AlertTriangle, Check, Code, LogOut, Plus, RefreshCw, Settings, Trash2 } from 'lucide-react'
-import { useState } from 'react'
 
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
 
@@ -18,11 +17,21 @@ import {
   DialogPopup,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
+import {
+  Menu,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuShortcut,
+  MenuTrigger,
+} from '@/components/ui/menu'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 
 import { useSettings } from '@/stores/useSettings'
+import { modifierKey } from '@/utils/platform'
 
 interface UserMenuProps {
   userInfo?: CheckLoginResult | null
@@ -47,8 +56,7 @@ export function UserMenu({
   onRemoveAccount,
   onReauthAccount,
 }: UserMenuProps) {
-  const [settingsOpen, setSettingsOpen] = useState(false)
-  const { developerMode, setDeveloperMode } = useSettings()
+  const { developerMode, setDeveloperMode, settingsOpen, openSettings, closeSettings } = useSettings()
 
   if (!userInfo?.uname) return null
 
@@ -152,9 +160,10 @@ export function UserMenu({
 
           {/* Settings */}
           <MenuSeparator />
-          <MenuItem onClick={() => setSettingsOpen(true)}>
+          <MenuItem onClick={openSettings}>
             <Settings className='size-4' />
             设置
+            <MenuShortcut>{modifierKey}+,</MenuShortcut>
           </MenuItem>
 
           {/* Logout and remove */}
@@ -178,7 +187,7 @@ export function UserMenu({
       </Menu>
 
       {/* Settings Dialog */}
-      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+      <Dialog open={settingsOpen} onOpenChange={open => (open ? openSettings() : closeSettings())}>
         <DialogPopup>
           <DialogHeader>
             <DialogTitle>设置</DialogTitle>

@@ -5,6 +5,8 @@ import { usePrivateMessages } from '@/hooks/usePrivateMessages'
 import { AddAccountDialog, LoginScreen, MessagesPanel, SessionList } from '@/components/comet'
 import { ToastProvider } from '@/components/ui/toast'
 
+import { useSettings } from '@/stores/useSettings'
+
 export default function App() {
   const {
     sessions,
@@ -46,6 +48,25 @@ export default function App() {
   } = usePrivateMessages()
 
   const [initialLoading, setInitialLoading] = useState(true)
+  const toggleSettings = useSettings(state => state.toggleSettings)
+
+  // Global keyboard shortcuts (only when logged in)
+  useEffect(() => {
+    if (!isConnected) return
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd+, (macOS) or Ctrl+, (Windows/Linux) to open settings
+      // Check both e.key and e.code for better cross-platform compatibility
+      const isCommaKey = e.key === ',' || e.code === 'Comma'
+      if ((e.metaKey || e.ctrlKey) && isCommaKey) {
+        e.preventDefault()
+        toggleSettings()
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isConnected, toggleSettings])
 
   // Check login on mount
   useEffect(() => {
