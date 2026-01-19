@@ -21,9 +21,25 @@ interface SessionItemProps {
   onClick: () => void
 }
 
+/**
+ * Get VIP nickname color if user has active VIP status
+ */
+function getVipNicknameColor(userCache: UserCache, talkerId: number): string | undefined {
+  const cachedUser = userCache[talkerId]
+  if (!cachedUser?.vip) return undefined
+
+  const { type, status, nickname_color } = cachedUser.vip
+  // VIP is active when both type and status are non-zero
+  if (type !== 0 && status !== 0 && nickname_color) {
+    return nickname_color
+  }
+  return undefined
+}
+
 export function SessionItem({ session, isSelected, userCache, onClick }: SessionItemProps) {
   const avatar = getSessionAvatar(session, userCache)
   const cachedUser = userCache[session.talker_id]
+  const vipNicknameColor = getVipNicknameColor(userCache, session.talker_id)
 
   return (
     <button
@@ -49,7 +65,9 @@ export function SessionItem({ session, isSelected, userCache, onClick }: Session
 
       <div className='min-w-0 flex-1'>
         <div className='flex items-center justify-between gap-2'>
-          <span className='truncate font-medium'>{getSessionName(session, userCache)}</span>
+          <span className='truncate font-medium' style={vipNicknameColor ? { color: vipNicknameColor } : undefined}>
+            {getSessionName(session, userCache)}
+          </span>
           {session.last_msg && (
             <span className='flex-none text-muted-foreground text-xs'>{formatTime(session.last_msg.timestamp)}</span>
           )}

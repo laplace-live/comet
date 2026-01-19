@@ -11,6 +11,11 @@ export interface UserCacheEntry {
     desc: string
     type: number
   }
+  vip?: {
+    type: number
+    status: number
+    nickname_color: string
+  }
 }
 
 export interface UserCache {

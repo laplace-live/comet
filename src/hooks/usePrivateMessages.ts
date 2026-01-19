@@ -137,6 +137,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
               name: user.name,
               face: user.face,
               official: user.official,
+              vip: user.vip,
             }
           }
           setUserCache(prev => ({ ...prev, ...newCache }))
