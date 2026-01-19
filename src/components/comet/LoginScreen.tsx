@@ -151,7 +151,7 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         <div className='w-full max-w-md space-y-3'>
           <div className='select-none text-center'>
             <img src={appIcon} alt='LAPLACE Comet' className='mx-auto mb-2 size-20' />
-            <h1 className='font-bold text-2xl tracking-tight'>LAPLACE Comet</h1>
+            <h1 className='font-bold font-logo text-3xl tracking-tight'>LAPLACE Comet</h1>
             <Tooltip>
               <TooltipTrigger className='mx-auto flex cursor-help items-center gap-1 text-base text-muted-foreground tracking-tight'>
                 隐私优先的哔哩哔哩私信管理器
@@ -218,18 +218,15 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               </Button>
             )}
 
-            {/* Status indicator */}
-            {status === 'waiting_scan' && (
-              <div className='flex select-none items-center gap-2 text-muted-foreground text-sm'>
+            <p className='flex select-none items-center justify-center gap-2 text-muted-foreground text-sm'>
+              {status === 'waiting_scan' && (
                 <span className='relative flex size-2'>
-                  <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75' />
-                  <span className='relative inline-flex size-2 rounded-full bg-sky-500' />
+                  <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-75' />
+                  <span className='relative inline-flex size-2 rounded-full bg-amber-500' />
                 </span>
-                等待扫描中…
-              </div>
-            )}
-
-            <p className='select-none text-muted-foreground text-sm'>{getStatusText()}</p>
+              )}
+              {getStatusText()}
+            </p>
           </div>
         </div>
       </div>
