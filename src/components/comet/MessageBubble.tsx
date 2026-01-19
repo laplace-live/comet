@@ -830,8 +830,8 @@ export function MessageBubble({
                     : [
                         'px-4 py-1.5',
                         isSent
-                          ? 'rounded-tr-none bg-linear-to-br from-pink-500 to-rose-500 text-white'
-                          : 'rounded-tl-none bg-white shadow-sm dark:bg-zinc-800',
+                          ? 'rounded-tr-none bg-linear-to-br from-sky-500 to-blue-500 text-white'
+                          : 'rounded-tl-none bg-white shadow-xs dark:bg-zinc-800',
                       ],
                   message.msg_status === 1 && 'opacity-50'
                 )}
@@ -865,7 +865,7 @@ export function MessageBubble({
               className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs ${
                 isAutoReply
                   ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                  : 'bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
+                  : 'bg-zinc-200/50 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
               }`}
             >
               {isAutoReply && <Bot className='size-3' />}

@@ -53,7 +53,7 @@ export function MessagesPanel({
 }: MessagesPanelProps) {
   return (
     <div
-      className={`flex flex-1 flex-col bg-linear-to-b from-white to-zinc-50/80 dark:from-zinc-900 dark:to-zinc-950/80 ${isVisible ? 'flex' : 'hidden md:flex'}`}
+      className={`flex flex-1 flex-col bg-linear-to-b from-zinc-50/80 to-zinc-100/80 dark:from-zinc-900 dark:to-zinc-950 ${isVisible ? 'flex' : 'hidden md:flex'}`}
     >
       {selectedSession ? (
         <ChatView
