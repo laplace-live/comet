@@ -663,12 +663,28 @@ export function MessageBubble({
     }
   }
 
+  // Revoke command messages (msg_type 5) should be hidden - they're technical messages to trigger recall
+  if (message.msg_type === MSG_TYPE.REVOKE) {
+    return null
+  }
+
   // System tip messages (msg_type 18) should be displayed centered without bubble styling
   if (message.msg_type === MSG_TYPE.SYSTEM_TIP) {
     return (
       <div className='flex justify-center py-1'>
         <div className='rounded-full bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>
           {renderMessageContent(message, emojiInfoMap)}
+        </div>
+      </div>
+    )
+  }
+
+  // Recalled/revoked messages (msg_status === 1) should be displayed centered like system messages
+  if (message.msg_status === 1) {
+    return (
+      <div className='flex justify-center py-1'>
+        <div className='rounded-full bg-zinc-100 px-3 py-1 text-muted-foreground text-xs dark:bg-zinc-800/50'>
+          {isSent ? '你撤回了一条消息' : '对方撤回了一条消息'}
         </div>
       </div>
     )
