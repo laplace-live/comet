@@ -17,6 +17,11 @@ interface SettingsState {
   openSettings: () => void
   closeSettings: () => void
   toggleSettings: () => void
+
+  /** Whether the about modal is open */
+  aboutOpen: boolean
+  openAbout: () => void
+  closeAbout: () => void
 }
 
 // ============================================================================
@@ -35,6 +40,10 @@ export const useSettings = create<SettingsState>()(
       openSettings: () => set({ settingsOpen: true }),
       closeSettings: () => set({ settingsOpen: false }),
       toggleSettings: () => set(state => ({ settingsOpen: !state.settingsOpen })),
+
+      aboutOpen: false,
+      openAbout: () => set({ aboutOpen: true }),
+      closeAbout: () => set({ aboutOpen: false }),
     }),
     {
       name: 'laplace-comet-settings',

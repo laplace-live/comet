@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { usePrivateMessages } from '@/hooks/usePrivateMessages'
 
-import { AddAccountDialog, LoginScreen, MessagesPanel, SessionList } from '@/components/comet'
+import { AboutDialog, AddAccountDialog, LoginScreen, MessagesPanel, SessionList } from '@/components/comet'
 import { ToastProvider } from '@/components/ui/toast'
 
 import { useSettings } from '@/stores/useSettings'
@@ -48,7 +48,30 @@ export default function App() {
   } = usePrivateMessages()
 
   const [initialLoading, setInitialLoading] = useState(true)
-  const toggleSettings = useSettings(state => state.toggleSettings)
+  const openSettings = useSettings(state => state.openSettings)
+  const openAbout = useSettings(state => state.openAbout)
+
+  // Listen for About menu event from main process (always available)
+  useEffect(() => {
+    const cleanupAbout = window.electronAPI.onOpenAbout(() => {
+      openAbout()
+    })
+    return () => {
+      cleanupAbout()
+    }
+  }, [openAbout])
+
+  // Listen for Settings menu event from main process (only when logged in)
+  useEffect(() => {
+    if (!isConnected) return
+
+    const cleanupSettings = window.electronAPI.onOpenSettings(() => {
+      openSettings()
+    })
+    return () => {
+      cleanupSettings()
+    }
+  }, [isConnected, openSettings])
 
   // Global keyboard shortcuts (only when logged in)
   useEffect(() => {
@@ -63,7 +86,7 @@ export default function App() {
       const isCommaKey = e.key === ',' || e.code === 'Comma'
       if (isCommaKey) {
         e.preventDefault()
-        toggleSettings()
+        openSettings()
         return
       }
 
@@ -87,7 +110,7 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isConnected, toggleSettings, accounts, activeAccountMid, switchAccount])
+  }, [isConnected, openSettings, accounts, activeAccountMid, switchAccount])
 
   // Check login on mount
   useEffect(() => {
@@ -123,6 +146,9 @@ export default function App() {
 
   return (
     <ToastProvider>
+      {/* About Dialog - always available, even on login screen */}
+      <AboutDialog />
+
       <div className='flex h-screen bg-linear-to-br from-slate-50 via-zinc-50 to-stone-100 font-sans dark:from-zinc-950 dark:via-neutral-950 dark:to-stone-950'>
         {!isConnected ? (
           <LoginScreen onLoginSuccess={handleLoginSuccess} />

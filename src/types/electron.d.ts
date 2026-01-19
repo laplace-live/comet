@@ -228,6 +228,9 @@ export interface ElectronAPI {
   // Platform detection for OS-specific UI adjustments (e.g., 'darwin', 'win32', 'linux')
   platform: NodeJS.Platform
 
+  // App info
+  getVersion: () => Promise<string>
+
   bilibili: {
     // QR Code Login
     qrGenerate: () => Promise<QRGenerateResult>
@@ -272,6 +275,10 @@ export interface ElectronAPI {
   clipboard: {
     copyImage: (params: CopyImageParams) => Promise<CopyImageResult>
   }
+
+  // App menu event listeners (return cleanup function)
+  onOpenAbout: (callback: () => void) => () => void
+  onOpenSettings: (callback: () => void) => () => void
 }
 
 declare global {

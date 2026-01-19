@@ -1,4 +1,4 @@
-import { Check, LogOut, Plus, RefreshCw, Settings, Trash2 } from 'lucide-react'
+import { Check, Info, LogOut, Plus, RefreshCw, Settings, Trash2 } from 'lucide-react'
 
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
 
@@ -46,7 +46,7 @@ export function UserMenu({
   onRemoveAccount,
   onReauthAccount,
 }: UserMenuProps) {
-  const { developerMode, setDeveloperMode, settingsOpen, openSettings, closeSettings } = useSettings()
+  const { developerMode, setDeveloperMode, settingsOpen, openSettings, closeSettings, openAbout } = useSettings()
 
   if (!userInfo?.uname) return null
 
@@ -157,6 +157,10 @@ export function UserMenu({
             <Settings className='size-4' />
             设置
             <MenuShortcut>{modifierKey}+,</MenuShortcut>
+          </MenuItem>
+          <MenuItem onClick={openAbout}>
+            <Info className='size-4' />
+            关于
           </MenuItem>
 
           {/* Logout and remove */}

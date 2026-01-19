@@ -1,6 +1,6 @@
 import path, { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, clipboard, ipcMain, Notification, nativeImage, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeImage, nativeTheme, shell } from 'electron'
 import started from 'electron-squirrel-startup'
 
 import { registerBilibiliIpcHandlers } from './api/bilibili'
@@ -39,6 +39,9 @@ registerBilibiliIpcHandlers()
 
 // Initialize WebSocket for real-time notifications
 initBroadcastWebSocket()
+
+// App info IPC handler
+ipcMain.handle('app:get-version', () => app.getVersion())
 
 // Helper to fetch image from URL and convert to NativeImage
 async function fetchImageAsNativeImage(url: string): Promise<Electron.NativeImage | undefined> {
@@ -207,6 +210,109 @@ const createWindow = () => {
   }
 }
 
+// Create application menu
+const createApplicationMenu = () => {
+  const isMac = process.platform === 'darwin'
+
+  const template: Electron.MenuItemConstructorOptions[] = [
+    // App menu (macOS only)
+    ...(isMac
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              {
+                label: '关于 LAPLACE Comet',
+                click: () => {
+                  const focusedWindow = BrowserWindow.getFocusedWindow()
+                  if (focusedWindow) {
+                    focusedWindow.webContents.send('app:open-about')
+                  }
+                },
+              },
+              { type: 'separator' as const },
+              {
+                label: '设置...',
+                accelerator: 'Cmd+,',
+                click: () => {
+                  const focusedWindow = BrowserWindow.getFocusedWindow()
+                  if (focusedWindow) {
+                    focusedWindow.webContents.send('app:open-settings')
+                  }
+                },
+              },
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const },
+            ],
+          },
+        ]
+      : []),
+    // Edit menu
+    {
+      label: '编辑',
+      submenu: [
+        { role: 'undo' as const, label: '撤销' },
+        { role: 'redo' as const, label: '重做' },
+        { type: 'separator' as const },
+        { role: 'cut' as const, label: '剪切' },
+        { role: 'copy' as const, label: '复制' },
+        { role: 'paste' as const, label: '粘贴' },
+        ...(isMac
+          ? [
+              { role: 'pasteAndMatchStyle' as const, label: '粘贴并匹配样式' },
+              { role: 'delete' as const, label: '删除' },
+              { role: 'selectAll' as const, label: '全选' },
+            ]
+          : [
+              { role: 'delete' as const, label: '删除' },
+              { type: 'separator' as const },
+              { role: 'selectAll' as const, label: '全选' },
+            ]),
+      ],
+    },
+    // View menu
+    {
+      label: '视图',
+      submenu: [
+        { role: 'reload' as const, label: '重新加载' },
+        { role: 'forceReload' as const, label: '强制重新加载' },
+        { role: 'toggleDevTools' as const, label: '开发者工具' },
+        { type: 'separator' as const },
+        { role: 'resetZoom' as const, label: '重置缩放' },
+        { role: 'zoomIn' as const, label: '放大' },
+        { role: 'zoomOut' as const, label: '缩小' },
+        { type: 'separator' as const },
+        { role: 'togglefullscreen' as const, label: '全屏' },
+      ],
+    },
+    // Window menu
+    {
+      label: '窗口',
+      submenu: [
+        { role: 'minimize' as const, label: '最小化' },
+        { role: 'zoom' as const, label: '缩放' },
+        ...(isMac
+          ? [
+              { type: 'separator' as const },
+              { role: 'front' as const, label: '前置所有窗口' },
+              { type: 'separator' as const },
+              { role: 'window' as const },
+            ]
+          : [{ role: 'close' as const, label: '关闭' }]),
+      ],
+    },
+  ]
+
+  const menu = Menu.buildFromTemplate(template)
+  Menu.setApplicationMenu(menu)
+}
+
 // Open target="_blank" links in system browser
 app.on('web-contents-created', (_event, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
@@ -222,7 +328,10 @@ app.on('web-contents-created', (_event, contents) => {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.on('ready', createWindow)
+app.on('ready', () => {
+  createApplicationMenu()
+  createWindow()
+})
 
 // Cleanup WebSocket on quit
 app.on('before-quit', () => {

@@ -190,6 +190,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Platform detection for OS-specific UI adjustments
   platform: process.platform,
 
+  // App info
+  getVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
+
   bilibili: {
     // QR Code Login
     qrGenerate: (): Promise<QRGenerateResult> => ipcRenderer.invoke('bilibili:qr-generate'),
@@ -280,5 +283,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clipboard: {
     copyImage: (params: CopyImageParams): Promise<CopyImageResult> =>
       ipcRenderer.invoke('clipboard:copy-image', params),
+  },
+
+  // App menu event listeners
+  onOpenAbout: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('app:open-about', listener)
+    return () => {
+      ipcRenderer.removeListener('app:open-about', listener)
+    }
+  },
+  onOpenSettings: (callback: () => void) => {
+    const listener = () => callback()
+    ipcRenderer.on('app:open-settings', listener)
+    return () => {
+      ipcRenderer.removeListener('app:open-settings', listener)
+    }
   },
 })

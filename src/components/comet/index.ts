@@ -1,3 +1,4 @@
+export { AboutDialog } from './AboutDialog'
 export { AddAccountDialog } from './AddAccountDialog'
 export { LoginScreen } from './LoginScreen'
 export { MessageBubble } from './MessageBubble'
