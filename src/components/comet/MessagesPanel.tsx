@@ -34,7 +34,7 @@ interface MessagesPanelProps {
   onBack: () => void
   onSendMessage: (content: string) => Promise<boolean>
   onSendImage: (imageData: string, mimeType: string) => Promise<boolean>
-  onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<boolean>
+  onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
 }
 
 export function MessagesPanel({
@@ -87,7 +87,7 @@ interface ChatViewProps {
   onBack: () => void
   onSendMessage: (content: string) => Promise<boolean>
   onSendImage: (imageData: string, mimeType: string) => Promise<boolean>
-  onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<boolean>
+  onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
 }
 
 function ChatView({

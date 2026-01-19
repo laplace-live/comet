@@ -27,6 +27,7 @@ import { Button } from '@/components/ui/button'
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu'
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
+import { toastManager } from '@/components/ui/toast'
 import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface MessageBubbleProps {
@@ -36,7 +37,7 @@ interface MessageBubbleProps {
   session: BilibiliSession
   userCache: UserCache
   userInfo: CheckLoginResult | null
-  onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<boolean>
+  onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
 }
 
 // Get message source label
@@ -649,7 +650,16 @@ export function MessageBubble({
     if (onRecall && message.msg_key) {
       // Pass msg_seqno for local state update and msg_key as string for API
       // Using String() to preserve the full integer value (avoids JavaScript number precision loss)
-      await onRecall(message.msg_seqno, String(message.msg_key))
+      const result = await onRecall(message.msg_seqno, String(message.msg_key))
+
+      if (!result.success) {
+        // Show error toast when recall fails
+        toastManager.add({
+          type: 'error',
+          title: '撤回失败',
+          description: result.error || '无法撤回该消息',
+        })
+      }
     }
   }
 

@@ -13,7 +13,7 @@ export interface MessagesListProps {
   session: BilibiliSession
   userCache: UserCache
   userInfo: CheckLoginResult | null
-  onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<boolean>
+  onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
 }
 
 // Memoized messages list to prevent re-renders when input changes

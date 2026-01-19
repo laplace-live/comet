@@ -71,7 +71,7 @@ export interface UsePrivateMessagesReturn {
   clearSelectedSession: () => void
   sendMessage: (content: string) => Promise<boolean>
   sendImageMessage: (imageData: string, mimeType: string) => Promise<boolean>
-  recallMessage: (msgSeqno: number, msgKeyStr: string) => Promise<boolean>
+  recallMessage: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
   connectWebSocket: () => Promise<void>
   disconnectWebSocket: () => Promise<void>
 
@@ -626,10 +626,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Recall a message by sending a msg_type=5 message with the target msg_key
   // We use msgSeqno for local state update (reliable number) and msgKeyStr for the API (string to avoid precision loss)
   const recallMessage = useCallback(
-    async (msgSeqno: number, msgKeyStr: string): Promise<boolean> => {
+    async (msgSeqno: number, msgKeyStr: string): Promise<{ success: boolean; error?: string }> => {
       const senderMid = userInfo?.mid
       if (!selectedSession || !senderMid) {
-        return false
+        return { success: false, error: '无法撤回消息' }
       }
 
       try {
@@ -645,12 +645,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         if (isErrorResponse(data)) {
           console.error('Failed to recall message:', data.error)
-          return false
+          return { success: false, error: data.error || '撤回失败' }
         }
 
         if (data.code !== 0) {
           console.error('Failed to recall message:', data.message)
-          return false
+          // Return the server's error message for display
+          return { success: false, error: data.message || '撤回失败' }
         }
 
         // Update the local message to show as recalled (msg_status = 1)
@@ -664,10 +665,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           })
         )
 
-        return true
+        return { success: true }
       } catch (err) {
         console.error('Failed to recall message:', err)
-        return false
+        return { success: false, error: '撤回失败' }
       }
     },
     [selectedSession, userInfo]

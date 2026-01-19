@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { usePrivateMessages } from '@/hooks/usePrivateMessages'
 
 import { AddAccountDialog, LoginScreen, MessagesPanel, SessionList } from '@/components/comet'
+import { ToastProvider } from '@/components/ui/toast'
 
 export default function App() {
   const {
@@ -79,65 +80,67 @@ export default function App() {
   }
 
   return (
-    <div className='flex h-screen bg-linear-to-br from-slate-50 via-zinc-50 to-stone-100 font-sans dark:from-zinc-950 dark:via-neutral-950 dark:to-stone-950'>
-      {!isConnected ? (
-        <LoginScreen onLoginSuccess={handleLoginSuccess} />
-      ) : (
-        <>
-          <SessionList
-            sessions={sessions}
-            selectedSession={selectedSession}
-            loading={loading}
-            loadingMore={loadingMore}
-            hasMoreSessions={hasMoreSessions}
-            isHidden={!!selectedSession}
-            isConnected={isConnected}
-            userCache={userCache}
-            userInfo={userInfo}
-            accounts={accounts}
-            activeAccountMid={activeAccountMid}
-            onSessionClick={selectSession}
-            onLoadMore={loadMoreSessions}
-            onRefresh={fetchSessions}
-            onLogout={logout}
-            onSwitchAccount={switchAccount}
-            onAddAccount={startAddingAccount}
-            onRemoveAccount={removeAccount}
-            onReauthAccount={startReauthAccount}
-          />
+    <ToastProvider>
+      <div className='flex h-screen bg-linear-to-br from-slate-50 via-zinc-50 to-stone-100 font-sans dark:from-zinc-950 dark:via-neutral-950 dark:to-stone-950'>
+        {!isConnected ? (
+          <LoginScreen onLoginSuccess={handleLoginSuccess} />
+        ) : (
+          <>
+            <SessionList
+              sessions={sessions}
+              selectedSession={selectedSession}
+              loading={loading}
+              loadingMore={loadingMore}
+              hasMoreSessions={hasMoreSessions}
+              isHidden={!!selectedSession}
+              isConnected={isConnected}
+              userCache={userCache}
+              userInfo={userInfo}
+              accounts={accounts}
+              activeAccountMid={activeAccountMid}
+              onSessionClick={selectSession}
+              onLoadMore={loadMoreSessions}
+              onRefresh={fetchSessions}
+              onLogout={logout}
+              onSwitchAccount={switchAccount}
+              onAddAccount={startAddingAccount}
+              onRemoveAccount={removeAccount}
+              onReauthAccount={startReauthAccount}
+            />
 
-          <MessagesPanel
-            selectedSession={selectedSession}
-            messages={messages}
-            emojiInfoMap={emojiInfoMap}
-            messagesLoading={messagesLoading}
-            sendingMessage={sendingMessage}
-            isVisible={!!selectedSession}
-            userCache={userCache}
-            userInfo={userInfo}
-            onBack={clearSelectedSession}
-            onSendMessage={sendMessage}
-            onSendImage={sendImageMessage}
-            onRecall={recallMessage}
-          />
+            <MessagesPanel
+              selectedSession={selectedSession}
+              messages={messages}
+              emojiInfoMap={emojiInfoMap}
+              messagesLoading={messagesLoading}
+              sendingMessage={sendingMessage}
+              isVisible={!!selectedSession}
+              userCache={userCache}
+              userInfo={userInfo}
+              onBack={clearSelectedSession}
+              onSendMessage={sendMessage}
+              onSendImage={sendImageMessage}
+              onRecall={recallMessage}
+            />
 
-          {/* Add Account / Re-auth Dialog */}
-          <AddAccountDialog
-            open={isAddingAccount}
-            onOpenChange={open => {
-              if (!open) {
-                if (reauthAccount) {
-                  cancelReauthAccount()
-                } else {
-                  cancelAddingAccount()
+            {/* Add Account / Re-auth Dialog */}
+            <AddAccountDialog
+              open={isAddingAccount}
+              onOpenChange={open => {
+                if (!open) {
+                  if (reauthAccount) {
+                    cancelReauthAccount()
+                  } else {
+                    cancelAddingAccount()
+                  }
                 }
-              }
-            }}
-            onSuccess={reauthAccount ? onReauthSuccess : onAccountAdded}
-            reauthAccount={reauthAccount}
-          />
-        </>
-      )}
-    </div>
+              }}
+              onSuccess={reauthAccount ? onReauthSuccess : onAccountAdded}
+              reauthAccount={reauthAccount}
+            />
+          </>
+        )}
+      </div>
+    </ToastProvider>
   )
 }
