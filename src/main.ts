@@ -24,6 +24,12 @@ if (started) {
   app.quit()
 }
 
+// Set AppUserModelId for Windows - required for proper notification behavior
+// This must match the Squirrel installer name for notifications to work correctly
+if (process.platform === 'win32') {
+  app.setAppUserModelId('live.laplace.comet')
+}
+
 // Security helper: only allow http(s) URLs to be opened externally
 const isSafeForExternalOpen = (url: string): boolean => {
   try {
@@ -110,10 +116,18 @@ ipcMain.handle('show-notification', async (_event, params: ShowNotificationParam
       mainWindow.show()
       mainWindow.focus()
 
-      // On macOS, also bring app to front
+      // On macOS, bring app to front via dock
       if (process.platform === 'darwin') {
         app.dock?.show()
         app.focus({ steal: true })
+      }
+
+      // On Windows, use setAlwaysOnTop workaround to force window to foreground
+      // Windows has ForegroundLockTimeout that prevents apps from stealing focus
+      if (process.platform === 'win32') {
+        mainWindow.setAlwaysOnTop(true)
+        mainWindow.focus()
+        mainWindow.setAlwaysOnTop(false)
       }
 
       // Send event to renderer to navigate to the session
