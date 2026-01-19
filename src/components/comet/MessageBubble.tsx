@@ -32,6 +32,8 @@ import { Separator } from '@/components/ui/separator'
 import { toastManager } from '@/components/ui/toast'
 import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip'
 
+import { useSettings } from '@/stores/useSettings'
+
 interface MessageBubbleProps {
   message: BilibiliMessage
   emojiInfoMap: EmojiInfoMap
@@ -644,6 +646,7 @@ export function MessageBubble({
   userInfo,
   onRecall,
 }: MessageBubbleProps) {
+  const { developerMode } = useSettings()
   const sourceLabel = getMessageSourceLabel(message.msg_source)
   const isAutoReply = isAutoReplySource(message.msg_source)
   const isRecallable = canRecallMessage(message, isSent)
@@ -739,8 +742,20 @@ export function MessageBubble({
   }
 
   // Revoke command messages (msg_type 5) should be hidden - they're technical messages to trigger recall
+  // In developer mode, show these as system-like messages for debugging
   if (message.msg_type === MSG_TYPE.REVOKE) {
-    return null
+    if (!developerMode) {
+      return null
+    }
+    // Show revoke event in developer mode
+    return (
+      <div className='flex justify-center py-1'>
+        <div className='flex items-center gap-2 rounded-full border border-amber-500/50 border-dashed bg-amber-50 px-3 py-1 text-amber-700 text-xs dark:bg-amber-950/30 dark:text-amber-400'>
+          <Code className='size-3' />
+          <span>撤回事件 (msg_type: {MSG_TYPE.REVOKE})</span>
+        </div>
+      </div>
+    )
   }
 
   // System tip messages (msg_type 18) should be displayed centered without bubble styling
@@ -755,7 +770,8 @@ export function MessageBubble({
   }
 
   // Recalled/revoked messages (msg_status === 1) should be displayed centered like system messages
-  if (message.msg_status === 1) {
+  // In developer mode, show the original content with a visual indicator
+  if (message.msg_status === 1 && !developerMode) {
     return (
       <div className='flex justify-center py-1'>
         <div className='rounded-full bg-zinc-100 px-3 py-1 text-muted-foreground text-xs dark:bg-zinc-800/50'>
@@ -764,6 +780,9 @@ export function MessageBubble({
       </div>
     )
   }
+
+  // In developer mode, mark recalled messages but show their content
+  const isRecalledInDevMode = message.msg_status === 1 && developerMode
 
   // Rich content types that need different styling
   const RICH_CONTENT_TYPES: number[] = [MSG_TYPE.IMAGE, MSG_TYPE.CUSTOM_EMOJI, MSG_TYPE.VIDEO_PUSH, MSG_TYPE.SHARE]
@@ -828,6 +847,13 @@ export function MessageBubble({
       </Menu>
 
       <div className={cn('flex max-w-[70%] flex-col gap-1', isSent ? 'items-end' : 'items-start')}>
+        {/* Developer mode indicator for recalled messages */}
+        {isRecalledInDevMode && (
+          <div className='flex items-center gap-1 text-amber-600 text-xs dark:text-amber-400'>
+            <Undo2 className='size-3' />
+            <span>已撤回</span>
+          </div>
+        )}
         <ContextMenu>
           <ContextMenuTrigger
             render={
@@ -842,7 +868,8 @@ export function MessageBubble({
                           ? 'rounded-tr-none bg-linear-to-br from-sky-500 to-blue-500 text-white'
                           : 'rounded-tl-none bg-white shadow-xs dark:bg-zinc-800',
                       ],
-                  message.msg_status === 1 && 'opacity-50'
+                  // Show recalled indicator styling in developer mode
+                  isRecalledInDevMode && 'ring-2 ring-amber-500/50 ring-offset-1'
                 )}
               >
                 {renderMessageContent(message, emojiInfoMap)}

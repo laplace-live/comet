@@ -1,4 +1,5 @@
-import { AlertTriangle, Check, LogOut, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { AlertTriangle, Check, Code, LogOut, Plus, RefreshCw, Settings, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
 
@@ -6,7 +7,22 @@ import { enforceHttps } from '@/utils/enforceHttps'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogClose,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+} from '@/components/ui/dialog'
 import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
+import { Separator } from '@/components/ui/separator'
+import { Switch } from '@/components/ui/switch'
+
+import { useSettings } from '@/stores/useSettings'
 
 interface UserMenuProps {
   userInfo?: CheckLoginResult | null
@@ -31,6 +47,9 @@ export function UserMenu({
   onRemoveAccount,
   onReauthAccount,
 }: UserMenuProps) {
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const { developerMode, setDeveloperMode } = useSettings()
+
   if (!userInfo?.uname) return null
 
   const hasMultipleAccounts = accounts.length > 1
@@ -131,6 +150,13 @@ export function UserMenu({
             </>
           )}
 
+          {/* Settings */}
+          <MenuSeparator />
+          <MenuItem onClick={() => setSettingsOpen(true)}>
+            <Settings className='size-4' />
+            设置
+          </MenuItem>
+
           {/* Logout and remove */}
           <MenuSeparator />
           {hasMultipleAccounts && onRemoveAccount && userInfo.mid !== undefined && (
@@ -150,6 +176,40 @@ export function UserMenu({
           )}
         </MenuPopup>
       </Menu>
+
+      {/* Settings Dialog */}
+      <Dialog open={settingsOpen} onOpenChange={setSettingsOpen}>
+        <DialogPopup>
+          <DialogHeader>
+            <DialogTitle>设置</DialogTitle>
+            <DialogDescription>应用程序设置</DialogDescription>
+          </DialogHeader>
+          <DialogPanel>
+            <div className='space-y-6'>
+              {/* Developer Settings Section */}
+              <div className='space-y-4'>
+                <div className='flex items-center gap-2'>
+                  <Code className='size-4 text-muted-foreground' />
+                  <h3 className='font-medium text-sm'>开发者设置</h3>
+                </div>
+                <Separator />
+                <div className='flex items-center justify-between gap-4'>
+                  <div className='space-y-0.5'>
+                    <label htmlFor='developer-mode' className='cursor-pointer font-medium text-sm'>
+                      开发者模式
+                    </label>
+                    <p className='text-muted-foreground text-xs'>显示消息事件的原始内容，便于调试消息列表</p>
+                  </div>
+                  <Switch id='developer-mode' checked={developerMode} onCheckedChange={setDeveloperMode} />
+                </div>
+              </div>
+            </div>
+          </DialogPanel>
+          <DialogFooter variant='bare'>
+            <DialogClose render={<Button variant='outline' />}>关闭</DialogClose>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
     </div>
   )
 }
