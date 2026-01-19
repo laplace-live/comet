@@ -818,20 +818,20 @@ export function MessageBubble({
         </MenuPopup>
       </Menu>
 
-      <div className={`flex max-w-[70%] flex-col gap-1 ${isSent ? 'items-end' : ''}`}>
+      <div className={cn('flex max-w-[70%] flex-col gap-1', isSent ? 'items-end' : 'items-start')}>
         <ContextMenu>
           <ContextMenuTrigger
             render={
               <div
                 className={cn(
-                  'rounded-2xl',
+                  'rounded-xl',
                   isRichContent
                     ? 'overflow-hidden'
                     : [
-                        'px-4 py-2.5',
+                        'px-4 py-1.5',
                         isSent
-                          ? 'bg-linear-to-br from-pink-500 to-rose-500 text-white'
-                          : 'bg-white shadow-sm dark:bg-zinc-800',
+                          ? 'rounded-tr-none bg-linear-to-br from-pink-500 to-rose-500 text-white'
+                          : 'rounded-tl-none bg-white shadow-sm dark:bg-zinc-800',
                       ],
                   message.msg_status === 1 && 'opacity-50'
                 )}
