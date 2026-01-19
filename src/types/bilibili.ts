@@ -241,6 +241,19 @@ export interface FanGroupSystemContent {
   content: string
 }
 
+// System tip content (msg_type 18)
+// The content field contains a serialized JSON array string
+export interface SystemTipItem {
+  text: string
+  color_day: string
+  color_nig: string
+  jump_url?: string
+}
+
+export interface SystemTipContent {
+  content: string // Serialized JSON array of SystemTipItem
+}
+
 // Message type constants
 export const MSG_TYPE = {
   TEXT: 1,

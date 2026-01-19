@@ -112,6 +112,9 @@ function renderMessageContent(message: BilibiliMessage): React.ReactNode {
       case MSG_TYPE.FAN_GROUP_SYSTEM:
         return renderFanGroupSystemContent(content)
 
+      case MSG_TYPE.SYSTEM_TIP:
+        return renderSystemTipContent(content)
+
       default:
         return renderDefaultContent(content, message.msg_type)
     }
@@ -411,6 +414,60 @@ function renderFanGroupSystemContent(content: { content?: unknown; group_id?: nu
   return <p className='text-sm italic'>{text || '[粉丝团系统消息]'}</p>
 }
 
+// System tip message (msg_type 18)
+// Content format: { content: "[{\"text\":\"...\", \"color_day\":\"#9499A0\", \"color_nig\":\"#9499A0\"}]" }
+// The inner content is a serialized JSON string that needs to be parsed
+function renderSystemTipContent(content: { content?: string }): React.ReactNode {
+  try {
+    // The content.content field is a serialized JSON array string
+    const tipItems: Array<{ text?: string; color_day?: string; color_nig?: string; jump_url?: string }> =
+      typeof content.content === 'string' ? JSON.parse(content.content) : []
+
+    if (!Array.isArray(tipItems) || tipItems.length === 0) {
+      return <p className='text-center text-muted-foreground text-xs'>[系统提示]</p>
+    }
+
+    return (
+      <p className='text-center text-xs'>
+        {tipItems.map((item, index) => {
+          const key = `${index}-${item.text?.slice(0, 10)}`
+          const dayColor = item.color_day || '#9499A0'
+          const nightColor = item.color_nig || '#9499A0'
+          const textContent = item.text || ''
+
+          // Use two spans to handle light/dark mode colors since inline styles
+          // have higher specificity than class-based dark: modifiers
+          const textElement = (
+            <span key={key}>
+              <span className='dark:hidden' style={{ color: dayColor }}>
+                {textContent}
+              </span>
+              <span className='hidden dark:inline' style={{ color: nightColor }}>
+                {textContent}
+              </span>
+            </span>
+          )
+
+          // Wrap with link if jump_url is provided
+          if (item.jump_url) {
+            return (
+              <a key={key} href={item.jump_url} target='_blank' rel='noopener noreferrer' className='hover:underline'>
+                {textElement}
+              </a>
+            )
+          }
+
+          return textElement
+        })}
+      </p>
+    )
+  } catch {
+    // Fallback if parsing fails
+    const text = extractTextContent(content)
+    return <p className='text-center text-muted-foreground text-xs'>{text || '[系统提示]'}</p>
+  }
+}
+
 // Default fallback for unknown types
 function renderDefaultContent(content: Record<string, unknown>, msgType: number): React.ReactNode {
   // Try to extract readable text from content using safe extraction
@@ -465,6 +522,15 @@ function MessageInspector({ message }: { message: BilibiliMessage }) {
 export function MessageBubble({ message, isSent, session, userCache, userInfo }: MessageBubbleProps) {
   const sourceLabel = getMessageSourceLabel(message.msg_source)
   const isAutoReply = isAutoReplySource(message.msg_source)
+
+  // System tip messages (msg_type 18) should be displayed centered without bubble styling
+  if (message.msg_type === MSG_TYPE.SYSTEM_TIP) {
+    return (
+      <div className='flex justify-center py-1'>
+        <div className='rounded-full bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>{renderMessageContent(message)}</div>
+      </div>
+    )
+  }
 
   // Rich content types that need different styling
   const RICH_CONTENT_TYPES: number[] = [MSG_TYPE.IMAGE, MSG_TYPE.CUSTOM_EMOJI, MSG_TYPE.VIDEO_PUSH, MSG_TYPE.SHARE]
