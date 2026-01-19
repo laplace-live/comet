@@ -1,10 +1,14 @@
 import { ImagePlus, Send } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { cn } from '@/lib/utils'
+
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { InputGroup, InputGroupAddon, InputGroupTextarea } from '@/components/ui/input-group'
 import { Spinner } from '@/components/ui/spinner'
+
+const MAX_MESSAGE_LENGTH = 1000
 
 export interface ImageToSend {
   file: File
@@ -250,10 +254,11 @@ export function MessageInput({
             <InputGroupTextarea
               ref={textareaRef}
               value={inputValue}
-              onChange={e => setInputValue(e.target.value)}
+              onChange={e => setInputValue(e.target.value.slice(0, MAX_MESSAGE_LENGTH))}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder='输入消息…'
+              maxLength={MAX_MESSAGE_LENGTH}
               className='field-sizing-content max-h-32 min-h-0 flex-1 resize-none break-all'
             />
             <InputGroupAddon align={'block-end'}>
@@ -267,12 +272,22 @@ export function MessageInput({
               >
                 <ImagePlus className='size-4' />
               </Button>
-              <Button
-                size='icon'
-                onClick={handleSendText}
-                disabled={!inputValue.trim() || sendingMessage}
-                className='ml-auto'
+              {/* Character counter */}
+              <span
+                className={cn(
+                  'ml-auto text-xs tabular-nums transition-colors',
+                  inputValue.length === 0
+                    ? 'text-transparent'
+                    : inputValue.length >= MAX_MESSAGE_LENGTH
+                      ? 'text-destructive'
+                      : inputValue.length >= MAX_MESSAGE_LENGTH * 0.8
+                        ? 'text-amber-500'
+                        : 'text-muted-foreground'
+                )}
               >
+                {inputValue.length}/{MAX_MESSAGE_LENGTH}
+              </span>
+              <Button size='icon' onClick={handleSendText} disabled={!inputValue.trim() || sendingMessage}>
                 {sendingMessage ? <Spinner className='size-4' /> : <Send className='size-4' />}
               </Button>
             </InputGroupAddon>
