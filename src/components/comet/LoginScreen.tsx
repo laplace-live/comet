@@ -1,10 +1,11 @@
-import { MessageSquare, RefreshCw } from 'lucide-react'
+import { HelpCircle, MessageSquare, RefreshCw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { QR_CODE_STATUS } from '@/types/bilibili'
 
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
+import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface LoginScreenProps {
   onLoginSuccess: () => void
@@ -151,7 +152,28 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               <MessageSquare className='size-10 text-white' />
             </div>
             <h1 className='font-bold text-2xl tracking-tight'>LAPLACE Comet</h1>
-            <h2 className='text-base text-muted-foreground tracking-tight'>隐私优先的哔哩哔哩私信管理器</h2>
+            <Tooltip>
+              <TooltipTrigger className='mx-auto flex cursor-help items-center gap-1 text-base text-muted-foreground tracking-tight'>
+                隐私优先的哔哩哔哩私信管理器
+                <HelpCircle className='size-4' />
+              </TooltipTrigger>
+              <TooltipPopup className='max-w-xs'>
+                <ul className='space-y-1 text-left'>
+                  <li>
+                    <strong>仅本地存储</strong> - 所有凭证和数据均存储在您的本地设备上
+                  </li>
+                  <li>
+                    <strong>系统级加密</strong> - 敏感凭证使用操作系统的安全存储加密
+                  </li>
+                  <li>
+                    <strong>无数据追踪</strong> - 应用不会收集或传输任何使用数据
+                  </li>
+                  <li>
+                    <strong>代码签名</strong> - 应用程序均已签名并经过公证
+                  </li>
+                </ul>
+              </TooltipPopup>
+            </Tooltip>
           </div>
 
           <div className='flex flex-col items-center space-y-4'>
