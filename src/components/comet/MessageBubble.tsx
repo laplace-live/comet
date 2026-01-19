@@ -693,6 +693,7 @@ export function MessageBubble({
     <div className={`flex gap-3 ${isSent ? 'flex-row-reverse' : ''}`}>
       <Menu>
         <MenuTrigger
+          nativeButton={false}
           render={
             <Avatar className='size-8 flex-none cursor-pointer ring-1 ring-border/50 transition-opacity hover:opacity-80'>
               {avatarUrl && <AvatarImage src={enforceHttps(avatarUrl)} referrerPolicy='no-referrer' />}
