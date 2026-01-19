@@ -908,7 +908,7 @@ export function MessageBubble({
               {sourceLabel}
             </span>
           )}
-          <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />
+          {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
         </div>
       </div>
     </div>
