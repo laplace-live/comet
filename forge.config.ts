@@ -1,0 +1,95 @@
+import { FuseV1Options, FuseVersion } from '@electron/fuses'
+import { MakerDeb } from '@electron-forge/maker-deb'
+import { MakerRpm } from '@electron-forge/maker-rpm'
+import { MakerSquirrel } from '@electron-forge/maker-squirrel'
+import { MakerZIP } from '@electron-forge/maker-zip'
+import { FusesPlugin } from '@electron-forge/plugin-fuses'
+import { VitePlugin } from '@electron-forge/plugin-vite'
+import type { ForgeConfig } from '@electron-forge/shared-types'
+
+const config: ForgeConfig = {
+  packagerConfig: {
+    asar: true,
+    // Environment-specific icon configuration
+    icon: (() => {
+      const isDev = process.env.NODE_ENV === 'development'
+      const environment = isDev ? 'dev' : 'prod'
+
+      return `src/assets/icons/${environment}/icon`
+    })(),
+    executableName: 'comet',
+    appBundleId: 'live.laplace.comet',
+    osxSign: process.env.APPLE_IDENTITY
+      ? {
+          identity: process.env.APPLE_IDENTITY,
+        }
+      : undefined,
+    osxNotarize:
+      process.env.APPLE_API_KEY_ID && process.env.APPLE_API_ISSUER
+        ? {
+            appleApiKey: `~/private_keys/AuthKey_${process.env.APPLE_API_KEY_ID}.p8`,
+            appleApiKeyId: process.env.APPLE_API_KEY_ID,
+            appleApiIssuer: process.env.APPLE_API_ISSUER,
+          }
+        : undefined,
+  },
+  rebuildConfig: {},
+  makers: [
+    new MakerSquirrel({
+      // https://www.electronforge.io/config/makers/squirrel.windows?q=setAppUserModelId#spaces-in-the-app-name
+      name: 'LAPLACEComet',
+      authors: 'LAPLACE Live!',
+      description: 'Privacy-first Bilibili Private Message Manager',
+      setupIcon: 'src/assets/icons/installer/icon.ico',
+    }),
+    new MakerZIP({}, ['darwin']),
+    new MakerRpm({
+      options: {
+        bin: 'comet',
+      },
+    }),
+    new MakerDeb({
+      options: {
+        bin: 'comet',
+      },
+    }),
+  ],
+  plugins: [
+    new VitePlugin({
+      // `build` can specify multiple entry builds, which can be Main process, Preload scripts, Worker process, etc.
+      // If you are familiar with Vite configuration, it will look really familiar.
+      build: [
+        {
+          // `entry` is just an alias for `build.lib.entry` in the corresponding file of `config`.
+          entry: 'src/main.ts',
+          config: 'vite.main.config.ts',
+          target: 'main',
+        },
+        {
+          entry: 'src/preload.ts',
+          config: 'vite.preload.config.ts',
+          target: 'preload',
+        },
+      ],
+      renderer: [
+        {
+          name: 'main_window',
+          config: 'vite.renderer.config.ts',
+        },
+      ],
+    }),
+    // Fuses are used to enable/disable various Electron functionality
+    // at package time, before code signing the application
+    new FusesPlugin({
+      version: FuseVersion.V1,
+      [FuseV1Options.RunAsNode]: false,
+      [FuseV1Options.EnableCookieEncryption]: true,
+      [FuseV1Options.EnableNodeOptionsEnvironmentVariable]: false,
+      [FuseV1Options.EnableNodeCliInspectArguments]: false,
+      [FuseV1Options.EnableEmbeddedAsarIntegrityValidation]: true,
+      [FuseV1Options.OnlyLoadAppFromAsar]: true,
+    }),
+  ],
+}
+
+export default config

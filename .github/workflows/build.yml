@@ -1,0 +1,192 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main, master]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: win
+          - os: macos-latest
+            platform: darwin
+
+    runs-on: ${{ matrix.os }}
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run linter
+        run: pnpm lint
+
+      - name: Import Apple Certificate
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/v')
+        # if: matrix.os == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Create a temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          # Create the keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import certificate
+          echo "$APPLE_CERTIFICATE" | base64 --decode -o $RUNNER_TEMP/certificate.p12
+          security import $RUNNER_TEMP/certificate.p12 -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+
+          # Add keychain to search list
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | sed 's/"//g')
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Clean up
+          rm $RUNNER_TEMP/certificate.p12
+
+      - name: Prepare Apple API Key
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/v')
+        # if: matrix.os == 'macos-latest'
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          mkdir -p ~/private_keys
+          echo "$APPLE_API_KEY" > ~/private_keys/AuthKey_${{ secrets.APPLE_API_KEY_ID }}.p8
+
+      - name: Debug Build Environment
+        if: matrix.os == 'macos-latest'
+        run: npx tsx scripts/debug-build-env.ts
+        env:
+          APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
+      - name: Build application (Release)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: pnpm make
+        env:
+          NODE_ENV: production
+          APPLE_IDENTITY: ${{ secrets.APPLE_IDENTITY }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+
+      - name: Build application (Development)
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: pnpm make
+        env:
+          NODE_ENV: development
+
+      - name: Sign Windows binaries with Trusted Signing
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/v')
+        uses: azure/trusted-signing-action@v0
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: https://eus.codesigning.azure.net/
+          trusted-signing-account-name: ${{ secrets.AZURE_SIGNING_ACCOUNT_NAME }}
+          certificate-profile-name: ${{ secrets.AZURE_CERTIFICATE_PROFILE_NAME }}
+          files-folder: out/make/squirrel.windows/x64
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Upload Windows Release Assets
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: |
+            out/make/squirrel.windows/x64/*.exe
+            out/make/squirrel.windows/x64/*.nupkg
+            out/make/squirrel.windows/x64/RELEASES
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload macOS Release Assets
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: |
+            out/make/zip/darwin/**/*.zip
+            out/make/zip/darwin/**/RELEASES.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Linux Release Assets
+        if: matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: false
+          generate_release_notes: true
+          files: |
+            out/make/deb/x64/*.deb
+            out/make/rpm/x64/*.rpm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts for debugging (Windows)
+        if: matrix.os == 'windows-latest' && !startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v6
+        with:
+          name: build-win-${{ github.sha }}
+          path: |
+            out/make/squirrel.windows/x64/*.exe
+            out/make/squirrel.windows/x64/*.nupkg
+            out/make/squirrel.windows/x64/RELEASES
+          retention-days: 7
+
+      - name: Upload artifacts for debugging (macOS)
+        if: matrix.os == 'macos-latest' && !startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v6
+        with:
+          name: build-darwin-${{ github.sha }}
+          path: out/make/zip/darwin/**/*.zip
+          retention-days: 7
+
+      - name: Upload artifacts for debugging (Linux)
+        if: matrix.os == 'ubuntu-latest' && !startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v6
+        with:
+          name: build-linux-${{ github.sha }}
+          path: |
+            out/make/deb/x64/*.deb
+            out/make/rpm/x64/*.rpm
+          retention-days: 7
