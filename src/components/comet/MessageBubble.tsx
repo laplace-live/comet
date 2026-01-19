@@ -1,4 +1,14 @@
-import { Bot, ChevronRight, Code, ExternalLink, Image as ImageIcon, MessageSquareText, User, Users } from 'lucide-react'
+import {
+  Bot,
+  ChevronRight,
+  Code,
+  ExternalLink,
+  Image as ImageIcon,
+  MessageSquareText,
+  Undo2,
+  User,
+  Users,
+} from 'lucide-react'
 
 import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
 import type { UserCache } from '@/lib/message-utils'
@@ -26,6 +36,7 @@ interface MessageBubbleProps {
   session: BilibiliSession
   userCache: UserCache
   userInfo: CheckLoginResult | null
+  onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<boolean>
 }
 
 // Get message source label
@@ -611,9 +622,36 @@ function MessageInspector({ message, emojiInfoMap }: { message: BilibiliMessage;
   )
 }
 
-export function MessageBubble({ message, emojiInfoMap, isSent, session, userCache, userInfo }: MessageBubbleProps) {
+// Check if a message can be recalled (within 120 seconds)
+function canRecallMessage(message: BilibiliMessage, isSent: boolean): boolean {
+  if (!isSent) return false
+  if (message.msg_status !== 0) return false // Already recalled or invalid
+
+  const now = Math.floor(Date.now() / 1000)
+  const messageAge = now - message.timestamp
+  return messageAge <= 120 // 120 seconds = 2 minutes
+}
+
+export function MessageBubble({
+  message,
+  emojiInfoMap,
+  isSent,
+  session,
+  userCache,
+  userInfo,
+  onRecall,
+}: MessageBubbleProps) {
   const sourceLabel = getMessageSourceLabel(message.msg_source)
   const isAutoReply = isAutoReplySource(message.msg_source)
+  const isRecallable = canRecallMessage(message, isSent)
+
+  const handleRecall = async () => {
+    if (onRecall && message.msg_key) {
+      // Pass msg_seqno for local state update and msg_key as string for API
+      // Using String() to preserve the full integer value (avoids JavaScript number precision loss)
+      await onRecall(message.msg_seqno, String(message.msg_key))
+    }
+  }
 
   // System tip messages (msg_type 18) should be displayed centered without bubble styling
   if (message.msg_type === MSG_TYPE.SYSTEM_TIP) {
@@ -660,7 +698,7 @@ export function MessageBubble({ message, emojiInfoMap, isSent, session, userCach
             </Avatar>
           }
         />
-        <MenuPopup side={'bottom'} align='start'>
+        <MenuPopup side={'bottom'} align={isSent ? 'end' : 'start'}>
           {bilibiliSpaceUrl && (
             <a href={bilibiliSpaceUrl} target='_blank' rel='noopener noreferrer'>
               <MenuItem>
@@ -668,6 +706,12 @@ export function MessageBubble({ message, emojiInfoMap, isSent, session, userCach
                 个人空间
               </MenuItem>
             </a>
+          )}
+          {isRecallable && onRecall && (
+            <MenuItem onClick={handleRecall}>
+              <Undo2 />
+              撤回
+            </MenuItem>
           )}
         </MenuPopup>
       </Menu>

@@ -16,6 +16,21 @@ import type {
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, USER_AGENT } from '@/lib/const'
 
+/**
+ * Preserve large integer fields as strings in JSON response text.
+ * JavaScript's Number type cannot accurately represent integers larger than 2^53 - 1,
+ * but Bilibili's msg_key values exceed this limit. This function converts large integer
+ * values to strings before JSON parsing to preserve precision.
+ *
+ * @param responseText - Raw JSON response text
+ * @returns Modified JSON text with large msg_key integers converted to strings
+ */
+function preserveLargeIntegers(responseText: string): string {
+  // Match "msg_key": followed by a large integer (15+ digits to be safe)
+  // and convert it to a string value
+  return responseText.replace(/"msg_key"\s*:\s*(\d{15,})/g, '"msg_key":"$1"')
+}
+
 // Types for multi-account storage
 export interface StoredAccountUserInfo {
   mid: number
@@ -523,6 +538,8 @@ export function registerBilibiliIpcHandlers() {
   )
 
   // Fetch sessions (updated to use stored credentials)
+  // Note: msg_key values in last_msg are large integers that exceed JavaScript's Number.MAX_SAFE_INTEGER
+  // We preserve them as strings by using a custom JSON parsing approach
   ipcMain.handle(
     'bilibili:fetch-sessions',
     async (
@@ -564,7 +581,9 @@ export function registerBilibiliIpcHandlers() {
           },
         })
 
-        const data: BilibiliSessionsResponse = await resp.json()
+        // Get response as text first, then preserve large integers before parsing
+        const responseText = await resp.text()
+        const data: BilibiliSessionsResponse = JSON.parse(preserveLargeIntegers(responseText))
 
         if (data.code !== 0) {
           return { error: data.message || 'Failed to fetch sessions', code: data.code }
@@ -579,6 +598,8 @@ export function registerBilibiliIpcHandlers() {
   )
 
   // Fetch messages
+  // Note: msg_key values are large integers that exceed JavaScript's Number.MAX_SAFE_INTEGER
+  // We preserve them as strings by using a custom JSON parsing approach
   ipcMain.handle(
     'bilibili:fetch-messages',
     async (
@@ -630,7 +651,9 @@ export function registerBilibiliIpcHandlers() {
           },
         })
 
-        const data: BilibiliMessagesResponse = await resp.json()
+        // Get response as text first, then preserve large integers before parsing
+        const responseText = await resp.text()
+        const data: BilibiliMessagesResponse = JSON.parse(preserveLargeIntegers(responseText))
 
         if (data.code !== 0) {
           return { error: data.message || 'Failed to fetch messages', code: data.code }
@@ -756,7 +779,9 @@ export function registerBilibiliIpcHandlers() {
           body: formData.toString(),
         })
 
-        const data: BilibiliSendMessageResponse = await resp.json()
+        // Get response as text first, then preserve large integers before parsing
+        const responseText = await resp.text()
+        const data: BilibiliSendMessageResponse = JSON.parse(preserveLargeIntegers(responseText))
 
         if (data.code !== 0) {
           return { error: data.message || 'Failed to send message', code: data.code }

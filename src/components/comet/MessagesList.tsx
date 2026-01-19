@@ -13,6 +13,7 @@ export interface MessagesListProps {
   session: BilibiliSession
   userCache: UserCache
   userInfo: CheckLoginResult | null
+  onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<boolean>
 }
 
 // Memoized messages list to prevent re-renders when input changes
@@ -22,6 +23,7 @@ export const MessagesList = memo(function MessagesList({
   session,
   userCache,
   userInfo,
+  onRecall,
 }: MessagesListProps) {
   return (
     <div className='space-y-4'>
@@ -34,6 +36,7 @@ export const MessagesList = memo(function MessagesList({
           session={session}
           userCache={userCache}
           userInfo={userInfo}
+          onRecall={onRecall}
         />
       ))}
     </div>

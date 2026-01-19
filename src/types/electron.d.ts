@@ -66,7 +66,8 @@ export interface SendMessageResponse {
   message?: string
   ttl?: number
   data?: {
-    msg_key: number
+    // msg_key may be a string to preserve precision for large integers
+    msg_key: number | string
     e_infos?: Array<{
       text: string
       url: string
@@ -187,7 +188,8 @@ export interface NewMessageNotification {
     content: string
     msgSeqno: number
     timestamp: number
-    msgKey: number
+    // msgKey is stored as string to preserve precision for large integers
+    msgKey: string
   }
 }
 

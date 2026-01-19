@@ -13,7 +13,8 @@ export interface BilibiliLastMessage {
   msg_seqno: number
   timestamp: number
   at_uids: number[] | null
-  msg_key: number
+  // msg_key is stored as string to preserve precision (values exceed Number.MAX_SAFE_INTEGER)
+  msg_key: number | string
   msg_status: number
   notify_code: string
   new_face_version?: number
@@ -91,7 +92,8 @@ export interface BilibiliMessage {
   msg_seqno: number
   timestamp: number
   at_uids: number[] | null
-  msg_key: number
+  // msg_key is stored as string to preserve precision (values exceed Number.MAX_SAFE_INTEGER)
+  msg_key: number | string
   msg_status: number
   notify_code: string
   new_face_version?: number
@@ -358,7 +360,8 @@ export interface BilibiliSendMessageResponse {
   message: string
   ttl?: number
   data: {
-    msg_key: number
+    // msg_key may be a string to preserve precision for large integers
+    msg_key: number | string
     e_infos?: BilibiliEmojiInfo[]
     msg_content?: string
     key_hit_infos?: {

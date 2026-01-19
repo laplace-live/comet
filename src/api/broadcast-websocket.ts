@@ -46,7 +46,8 @@ export interface NewMessageNotification {
     content: string
     msgSeqno: number
     timestamp: number
-    msgKey: number
+    // msgKey is stored as string to preserve precision for large integers
+    msgKey: string
   }
 }
 
@@ -452,7 +453,8 @@ export class BroadcastWebSocketManager {
                 content: instantMsg.content || '',
                 msgSeqno: Number(instantMsg.msgSeqno || 0),
                 timestamp: Number(instantMsg.timestamp || 0),
-                msgKey: Number(instantMsg.msgKey || 0),
+                // Keep msgKey as string to preserve precision for large integers
+                msgKey: String(instantMsg.msgKey || ''),
               }
             : undefined,
         }

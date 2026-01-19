@@ -71,6 +71,7 @@ export interface UsePrivateMessagesReturn {
   clearSelectedSession: () => void
   sendMessage: (content: string) => Promise<boolean>
   sendImageMessage: (imageData: string, mimeType: string) => Promise<boolean>
+  recallMessage: (msgSeqno: number, msgKeyStr: string) => Promise<boolean>
   connectWebSocket: () => Promise<void>
   disconnectWebSocket: () => Promise<void>
 
@@ -617,6 +618,56 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         return false
       } finally {
         setSendingMessage(false)
+      }
+    },
+    [selectedSession, userInfo]
+  )
+
+  // Recall a message by sending a msg_type=5 message with the target msg_key
+  // We use msgSeqno for local state update (reliable number) and msgKeyStr for the API (string to avoid precision loss)
+  const recallMessage = useCallback(
+    async (msgSeqno: number, msgKeyStr: string): Promise<boolean> => {
+      const senderMid = userInfo?.mid
+      if (!selectedSession || !senderMid) {
+        return false
+      }
+
+      try {
+        // Send a recall message (msg_type=5) with the target msg_key as content
+        // According to the API doc, the content is just the msg_key number (not JSON)
+        // We use msgKeyStr (string) to avoid JavaScript number precision loss with large integers
+        const data = await window.electronAPI.bilibili.sendMessage({
+          receiverId: String(selectedSession.talker_id),
+          receiverType: String(selectedSession.session_type),
+          msgType: '5', // Recall message type
+          content: msgKeyStr,
+        })
+
+        if (isErrorResponse(data)) {
+          console.error('Failed to recall message:', data.error)
+          return false
+        }
+
+        if (data.code !== 0) {
+          console.error('Failed to recall message:', data.message)
+          return false
+        }
+
+        // Update the local message to show as recalled (msg_status = 1)
+        // Use msgSeqno for comparison as it's a smaller number without precision issues
+        setMessages(prev =>
+          prev.map(m => {
+            if (m.msg_seqno === msgSeqno) {
+              return { ...m, msg_status: 1 }
+            }
+            return m
+          })
+        )
+
+        return true
+      } catch (err) {
+        console.error('Failed to recall message:', err)
+        return false
       }
     },
     [selectedSession, userInfo]
@@ -1280,6 +1331,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     clearSelectedSession,
     sendMessage,
     sendImageMessage,
+    recallMessage,
     connectWebSocket,
     disconnectWebSocket,
 
