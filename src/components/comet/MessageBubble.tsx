@@ -1,5 +1,6 @@
 import { Bot, ChevronRight, Code, Image as ImageIcon, MessageSquareText, User, Users } from 'lucide-react'
 
+import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliMessage, BilibiliSession } from '@/types/bilibili'
 import type { CheckLoginResult } from '@/types/electron'
@@ -19,6 +20,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip'
 
 interface MessageBubbleProps {
   message: BilibiliMessage
+  emojiInfoMap: EmojiInfoMap
   isSent: boolean
   session: BilibiliSession
   userCache: UserCache
@@ -83,13 +85,13 @@ function isAutoReplySource(msgSource: number): boolean {
 }
 
 // Parse and render message content based on type
-function renderMessageContent(message: BilibiliMessage): React.ReactNode {
+function renderMessageContent(message: BilibiliMessage, emojiInfoMap: EmojiInfoMap): React.ReactNode {
   try {
     const content = JSON.parse(message.content)
 
     switch (message.msg_type) {
       case MSG_TYPE.TEXT:
-        return renderTextContent(content)
+        return renderTextContent(content, emojiInfoMap)
 
       case MSG_TYPE.IMAGE:
         return renderImageContent(content)
@@ -150,12 +152,70 @@ function extractTextContent(value: unknown): string {
   return ''
 }
 
+// Parse text and replace emoji codes with inline images
+function parseTextWithEmojis(text: string, emojiInfoMap: EmojiInfoMap): React.ReactNode[] {
+  if (!text) return []
+
+  // Match emoji codes like [tv_doge], [口罩], etc.
+  const emojiPattern = /\[([^\]]+)\]/g
+  const parts: React.ReactNode[] = []
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  // biome-ignore lint/suspicious/noAssignInExpressions: regex exec loop pattern
+  while ((match = emojiPattern.exec(text)) !== null) {
+    const emojiCode = match[0] // Full match including brackets, e.g., "[tv_doge]"
+    const startIndex = match.index
+
+    // Add text before this emoji
+    if (startIndex > lastIndex) {
+      parts.push(text.slice(lastIndex, startIndex))
+    }
+
+    // Check if we have info for this emoji
+    const emojiInfo = emojiInfoMap[emojiCode]
+    if (emojiInfo) {
+      // Use gif_url if available, otherwise use regular url
+      const emojiUrl = enforceHttps(emojiInfo.gif_url || emojiInfo.url)
+      // Size 1 = small (inline), Size 2 = large
+      const isLarge = emojiInfo.size === 2
+      parts.push(
+        <img
+          key={`${startIndex}-${emojiCode}`}
+          src={emojiUrl}
+          alt={emojiCode}
+          title={emojiCode}
+          className={isLarge ? 'inline-block h-12 align-text-bottom' : 'inline-block h-5 align-text-bottom'}
+          loading='lazy'
+          referrerPolicy='no-referrer'
+        />
+      )
+    } else {
+      // No emoji info available, keep the text as-is
+      parts.push(emojiCode)
+    }
+
+    lastIndex = startIndex + emojiCode.length
+  }
+
+  // Add remaining text after last emoji
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex))
+  }
+
+  return parts.length > 0 ? parts : [text]
+}
+
 // Text message
-function renderTextContent(content: { content?: unknown }): React.ReactNode {
+function renderTextContent(content: { content?: unknown }, emojiInfoMap: EmojiInfoMap): React.ReactNode {
   const text = extractTextContent(content.content) || extractTextContent(content)
-  return (
-    <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>{text || '[空消息]'}</p>
-  )
+  if (!text) {
+    return <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>[空消息]</p>
+  }
+
+  const parsedContent = parseTextWithEmojis(text, emojiInfoMap)
+
+  return <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>{parsedContent}</p>
 }
 
 // Image message
@@ -531,7 +591,7 @@ function MessageInspector({ message }: { message: BilibiliMessage }) {
   )
 }
 
-export function MessageBubble({ message, isSent, session, userCache, userInfo }: MessageBubbleProps) {
+export function MessageBubble({ message, emojiInfoMap, isSent, session, userCache, userInfo }: MessageBubbleProps) {
   const sourceLabel = getMessageSourceLabel(message.msg_source)
   const isAutoReply = isAutoReplySource(message.msg_source)
 
@@ -539,7 +599,9 @@ export function MessageBubble({ message, isSent, session, userCache, userInfo }:
   if (message.msg_type === MSG_TYPE.SYSTEM_TIP) {
     return (
       <div className='flex justify-center py-1'>
-        <div className='rounded-full bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>{renderMessageContent(message)}</div>
+        <div className='rounded-full bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>
+          {renderMessageContent(message, emojiInfoMap)}
+        </div>
       </div>
     )
   }
@@ -585,7 +647,7 @@ export function MessageBubble({ message, isSent, session, userCache, userInfo }:
             message.msg_status === 1 && 'opacity-50'
           )}
         >
-          {renderMessageContent(message)}
+          {renderMessageContent(message, emojiInfoMap)}
         </div>
         <div className={`flex items-center gap-1.5 ${isSent ? 'flex-row-reverse' : ''}`}>
           <Tooltip>

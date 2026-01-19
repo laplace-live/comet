@@ -9,6 +9,7 @@ export default function App() {
     sessions,
     selectedSession,
     messages,
+    emojiInfoMap,
     loading,
     loadingMore,
     messagesLoading,
@@ -107,6 +108,7 @@ export default function App() {
           <MessagesPanel
             selectedSession={selectedSession}
             messages={messages}
+            emojiInfoMap={emojiInfoMap}
             messagesLoading={messagesLoading}
             sendingMessage={sendingMessage}
             isVisible={!!selectedSession}

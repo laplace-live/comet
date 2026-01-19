@@ -1,6 +1,7 @@
 import { ArrowLeft, Check, Copy, MessageSquare, User, Users } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliMessage, BilibiliSession } from '@/types/bilibili'
 import type { CheckLoginResult } from '@/types/electron'
@@ -24,6 +25,7 @@ import { MessagesList } from './MessagesList'
 interface MessagesPanelProps {
   selectedSession: BilibiliSession | null
   messages: BilibiliMessage[]
+  emojiInfoMap: EmojiInfoMap
   messagesLoading: boolean
   sendingMessage: boolean
   isVisible: boolean
@@ -37,6 +39,7 @@ interface MessagesPanelProps {
 export function MessagesPanel({
   selectedSession,
   messages,
+  emojiInfoMap,
   messagesLoading,
   sendingMessage,
   isVisible,
@@ -54,6 +57,7 @@ export function MessagesPanel({
         <ChatView
           session={selectedSession}
           messages={messages}
+          emojiInfoMap={emojiInfoMap}
           messagesLoading={messagesLoading}
           sendingMessage={sendingMessage}
           userCache={userCache}
@@ -72,6 +76,7 @@ export function MessagesPanel({
 interface ChatViewProps {
   session: BilibiliSession
   messages: BilibiliMessage[]
+  emojiInfoMap: EmojiInfoMap
   messagesLoading: boolean
   sendingMessage: boolean
   userCache: UserCache
@@ -84,6 +89,7 @@ interface ChatViewProps {
 function ChatView({
   session,
   messages,
+  emojiInfoMap,
   messagesLoading,
   sendingMessage,
   userCache,
@@ -192,7 +198,13 @@ function ChatView({
               <p>暂无消息</p>
             </div>
           ) : (
-            <MessagesList messages={messages} session={session} userCache={userCache} userInfo={userInfo} />
+            <MessagesList
+              messages={messages}
+              emojiInfoMap={emojiInfoMap}
+              session={session}
+              userCache={userCache}
+              userInfo={userInfo}
+            />
           )}
           <div ref={messagesEndRef} />
         </div>

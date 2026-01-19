@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { UserCache } from '@/lib/message-utils'
 import type {
+  BilibiliEmojiInfo,
   BilibiliMessage,
   BilibiliMessagesResponse,
   BilibiliSession,
@@ -34,11 +35,15 @@ function isErrorResponse(
   return 'error' in response
 }
 
+// Map of emoji text (e.g., "[tv_doge]") to emoji info
+export type EmojiInfoMap = Record<string, BilibiliEmojiInfo>
+
 export interface UsePrivateMessagesReturn {
   // State
   sessions: BilibiliSession[]
   selectedSession: BilibiliSession | null
   messages: BilibiliMessage[]
+  emojiInfoMap: EmojiInfoMap
   loading: boolean
   loadingMore: boolean
   messagesLoading: boolean
@@ -96,12 +101,29 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const [nextEndTs, setNextEndTs] = useState<number | null>(null)
   const [userInfo, setUserInfo] = useState<CheckLoginResult | null>(null)
   const [wsConnected, setWsConnected] = useState(false)
+  const [emojiInfoMap, setEmojiInfoMap] = useState<EmojiInfoMap>({})
 
   // Multi-account state
   const [accounts, setAccounts] = useState<StoredAccountInfo[]>([])
   const [activeAccountMid, setActiveAccountMid] = useState<number | null>(null)
   const [isAddingAccount, setIsAddingAccount] = useState(false)
   const [reauthAccount, setReauthAccount] = useState<StoredAccountInfo | null>(null)
+
+  // Helper to merge emoji infos into the map
+  const mergeEmojiInfos = useCallback((emojiInfos: BilibiliEmojiInfo[] | undefined) => {
+    if (!emojiInfos || emojiInfos.length === 0) return
+
+    setEmojiInfoMap(prev => {
+      const newMap = { ...prev }
+      for (const emoji of emojiInfos) {
+        // Use the emoji text as the key (e.g., "[tv_doge]")
+        if (emoji.text) {
+          newMap[emoji.text] = emoji
+        }
+      }
+      return newMap
+    })
+  }, [])
 
   // Refs to access latest state in callbacks
   const sessionsRef = useRef<BilibiliSession[]>([])
@@ -365,121 +387,136 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [hasMoreSessions, nextEndTs, loadingMore, fetchUserInfoBatch])
 
-  const fetchMessages = useCallback(async (session: BilibiliSession) => {
-    setMessagesLoading(true)
+  const fetchMessages = useCallback(
+    async (session: BilibiliSession) => {
+      setMessagesLoading(true)
+      // Clear emoji map when switching sessions
+      setEmojiInfoMap({})
 
-    try {
-      const allMessages: BilibiliMessage[] = []
-      let hasMore = true
-      let endSeqno: string | undefined
+      try {
+        const allMessages: BilibiliMessage[] = []
+        let hasMore = true
+        let endSeqno: string | undefined
 
-      // Auto-load all pages
-      while (hasMore) {
+        // Auto-load all pages
+        while (hasMore) {
+          const data = await window.electronAPI.bilibili.fetchMessages({
+            talkerId: String(session.talker_id),
+            sessionType: String(session.session_type),
+            size: '1000', // Use larger page size to reduce number of requests
+            endSeqno,
+          })
+
+          if (isErrorResponse(data)) {
+            throw new Error(data.error || 'Failed to fetch messages')
+          }
+
+          if (data.code !== 0) {
+            throw new Error(data.message || 'Failed to fetch messages')
+          }
+
+          const messages = data.data?.messages || []
+          // Messages are returned newest first, accumulate them in that order
+          allMessages.push(...messages)
+
+          // Merge emoji infos from this response
+          mergeEmojiInfos(data.data?.e_infos)
+
+          hasMore = data.data?.has_more === 1
+          if (hasMore && data.data?.min_seqno !== undefined) {
+            // Use min_seqno as end_seqno to fetch older messages
+            endSeqno = String(data.data.min_seqno)
+          }
+        }
+
+        // Reverse to get chronological order (oldest first)
+        setMessages(allMessages.reverse())
+        setMessagesLoading(false)
+
+        // Mark session as read in the background (doesn't block message display)
+        if (session.max_seqno) {
+          try {
+            await window.electronAPI.bilibili.updateAck({
+              talkerId: String(session.talker_id),
+              sessionType: String(session.session_type),
+              ackSeqno: String(session.max_seqno),
+            })
+
+            // Update local session state to reflect read status
+            setSessions(prev => prev.map(s => (s.talker_id === session.talker_id ? { ...s, unread_count: 0 } : s)))
+          } catch (ackErr) {
+            console.error('Failed to mark session as read:', ackErr)
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch messages:', err)
+        setMessagesLoading(false)
+      }
+    },
+    [mergeEmojiInfos]
+  )
+
+  // Silent fetch of new messages - no loading spinner, merges with existing messages
+  const fetchMessagesQuietly = useCallback(
+    async (session: BilibiliSession) => {
+      try {
+        // Only fetch the first page (newest messages)
         const data = await window.electronAPI.bilibili.fetchMessages({
           talkerId: String(session.talker_id),
           sessionType: String(session.session_type),
-          size: '1000', // Use larger page size to reduce number of requests
-          endSeqno,
+          size: '1000',
         })
 
-        if (isErrorResponse(data)) {
-          throw new Error(data.error || 'Failed to fetch messages')
+        if (isErrorResponse(data) || data.code !== 0) {
+          console.error('[usePrivateMessages] Silent message fetch failed')
+          return
         }
 
-        if (data.code !== 0) {
-          throw new Error(data.message || 'Failed to fetch messages')
-        }
+        const newMessages = data.data?.messages || []
 
-        const messages = data.data?.messages || []
-        // Messages are returned newest first, accumulate them in that order
-        allMessages.push(...messages)
+        // Merge emoji infos from this response
+        mergeEmojiInfos(data.data?.e_infos)
 
-        hasMore = data.data?.has_more === 1
-        if (hasMore && data.data?.min_seqno !== undefined) {
-          // Use min_seqno as end_seqno to fetch older messages
-          endSeqno = String(data.data.min_seqno)
-        }
-      }
+        if (newMessages.length === 0) return
 
-      // Reverse to get chronological order (oldest first)
-      setMessages(allMessages.reverse())
-      setMessagesLoading(false)
+        // Merge new messages with existing ones, avoiding duplicates
+        setMessages(prev => {
+          // Create a Set of existing message keys for fast lookup
+          const existingKeys = new Set(prev.map(m => m.msg_key))
+          const existingSeqnos = new Set(prev.map(m => m.msg_seqno))
 
-      // Mark session as read in the background (doesn't block message display)
-      if (session.max_seqno) {
-        try {
-          await window.electronAPI.bilibili.updateAck({
-            talkerId: String(session.talker_id),
-            sessionType: String(session.session_type),
-            ackSeqno: String(session.max_seqno),
-          })
+          // Filter out messages that already exist
+          const uniqueNewMessages = newMessages.filter(
+            m => !existingKeys.has(m.msg_key) && !existingSeqnos.has(m.msg_seqno)
+          )
 
-          // Update local session state to reflect read status
+          if (uniqueNewMessages.length === 0) return prev
+
+          // Merge and sort by timestamp (oldest first)
+          const merged = [...prev, ...uniqueNewMessages]
+          merged.sort((a, b) => a.timestamp - b.timestamp)
+          return merged
+        })
+
+        // Mark as read since we're viewing this session
+        if (data.data?.max_seqno) {
+          window.electronAPI.bilibili
+            .updateAck({
+              talkerId: String(session.talker_id),
+              sessionType: String(session.session_type),
+              ackSeqno: String(data.data.max_seqno),
+            })
+            .catch(err => console.error('Failed to mark as read:', err))
+
+          // Update session unread count
           setSessions(prev => prev.map(s => (s.talker_id === session.talker_id ? { ...s, unread_count: 0 } : s)))
-        } catch (ackErr) {
-          console.error('Failed to mark session as read:', ackErr)
         }
+      } catch (err) {
+        console.error('[usePrivateMessages] Silent message fetch error:', err)
       }
-    } catch (err) {
-      console.error('Failed to fetch messages:', err)
-      setMessagesLoading(false)
-    }
-  }, [])
-
-  // Silent fetch of new messages - no loading spinner, merges with existing messages
-  const fetchMessagesQuietly = useCallback(async (session: BilibiliSession) => {
-    try {
-      // Only fetch the first page (newest messages)
-      const data = await window.electronAPI.bilibili.fetchMessages({
-        talkerId: String(session.talker_id),
-        sessionType: String(session.session_type),
-        size: '1000',
-      })
-
-      if (isErrorResponse(data) || data.code !== 0) {
-        console.error('[usePrivateMessages] Silent message fetch failed')
-        return
-      }
-
-      const newMessages = data.data?.messages || []
-      if (newMessages.length === 0) return
-
-      // Merge new messages with existing ones, avoiding duplicates
-      setMessages(prev => {
-        // Create a Set of existing message keys for fast lookup
-        const existingKeys = new Set(prev.map(m => m.msg_key))
-        const existingSeqnos = new Set(prev.map(m => m.msg_seqno))
-
-        // Filter out messages that already exist
-        const uniqueNewMessages = newMessages.filter(
-          m => !existingKeys.has(m.msg_key) && !existingSeqnos.has(m.msg_seqno)
-        )
-
-        if (uniqueNewMessages.length === 0) return prev
-
-        // Merge and sort by timestamp (oldest first)
-        const merged = [...prev, ...uniqueNewMessages]
-        merged.sort((a, b) => a.timestamp - b.timestamp)
-        return merged
-      })
-
-      // Mark as read since we're viewing this session
-      if (data.data?.max_seqno) {
-        window.electronAPI.bilibili
-          .updateAck({
-            talkerId: String(session.talker_id),
-            sessionType: String(session.session_type),
-            ackSeqno: String(data.data.max_seqno),
-          })
-          .catch(err => console.error('Failed to mark as read:', err))
-
-        // Update session unread count
-        setSessions(prev => prev.map(s => (s.talker_id === session.talker_id ? { ...s, unread_count: 0 } : s)))
-      }
-    } catch (err) {
-      console.error('[usePrivateMessages] Silent message fetch error:', err)
-    }
-  }, [])
+    },
+    [mergeEmojiInfos]
+  )
 
   const selectSession = useCallback(
     (session: BilibiliSession) => {
@@ -1215,6 +1252,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     sessions,
     selectedSession,
     messages,
+    emojiInfoMap,
     loading,
     loadingMore,
     messagesLoading,
