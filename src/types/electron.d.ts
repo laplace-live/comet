@@ -1,6 +1,5 @@
 import type {
   BilibiliCredentials,
-  BilibiliImageUploadResponse,
   BilibiliMessagesResponse,
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
