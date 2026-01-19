@@ -3,6 +3,7 @@ import { AlertTriangle, Check, Code, LogOut, Plus, RefreshCw, Settings, Trash2 }
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
 
 import { enforceHttps } from '@/utils/enforceHttps'
+import { modifierKey } from '@/utils/platform'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -31,7 +32,6 @@ import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 
 import { useSettings } from '@/stores/useSettings'
-import { modifierKey } from '@/utils/platform'
 
 interface UserMenuProps {
   userInfo?: CheckLoginResult | null

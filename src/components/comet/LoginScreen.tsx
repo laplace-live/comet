@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { QR_CODE_STATUS } from '@/types/bilibili'
 
+import { isMacOS } from '@/utils/platform'
+
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip'
@@ -139,8 +141,6 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
         return ''
     }
   }
-
-  const isMacOS = window.electronAPI?.platform === 'darwin'
 
   return (
     <div className='flex flex-1 flex-col'>

@@ -7,6 +7,8 @@ import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
 
 import { getLastMessagePreview, getSessionName } from '@/lib/message-utils'
 
+import { isMacOS } from '@/utils/platform'
+
 import { Button } from '@/components/ui/button'
 import { InputGroup, InputGroupAddon, InputGroupInput, InputGroupText } from '@/components/ui/input-group'
 import {
@@ -128,8 +130,6 @@ export function SessionList({
   }, [hasMoreSessions, loadingMore, onLoadMore])
 
   const isFiltering = filterText.trim().length > 0 || visibilityFilter !== 'all'
-
-  const isMacOS = window.electronAPI?.platform === 'darwin'
 
   return (
     <div

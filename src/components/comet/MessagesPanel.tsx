@@ -11,6 +11,7 @@ import { SESSION_TYPE } from '@/types/bilibili'
 import { getSessionAvatar, getSessionName } from '@/lib/message-utils'
 
 import { enforceHttps } from '@/utils/enforceHttps'
+import { isMacOS } from '@/utils/platform'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -103,7 +104,6 @@ function ChatView({
   onSendImage,
   onRecall,
 }: ChatViewProps) {
-  const isMacOS = window.electronAPI?.platform === 'darwin'
   const avatar = getSessionAvatar(session, userCache)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [copied, setCopied] = useState(false)
@@ -229,8 +229,6 @@ function ChatView({
 }
 
 function EmptyState() {
-  const isMacOS = window.electronAPI?.platform === 'darwin'
-
   return (
     <>
       {/* Draggable title bar area - only needed on macOS for traffic lights */}
