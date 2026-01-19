@@ -1,4 +1,4 @@
-import { Bot, ChevronRight, Code, Image as ImageIcon, MessageSquareText, User, Users } from 'lucide-react'
+import { Bot, ChevronRight, Code, ExternalLink, Image as ImageIcon, MessageSquareText, User, Users } from 'lucide-react'
 
 import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
 import type { UserCache } from '@/lib/message-utils'
@@ -14,6 +14,7 @@ import { enforceHttps } from '@/utils/enforceHttps'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu'
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from '@/components/ui/popover'
 import { Separator } from '@/components/ui/separator'
 import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip'
@@ -636,20 +637,40 @@ export function MessageBubble({ message, emojiInfoMap, isSent, session, userCach
 
   const isFanGroup = session.session_type === SESSION_TYPE.FAN_GROUP
 
+  // Get the user ID for the Bilibili space link
+  const avatarUserId = isSent ? userInfo?.mid : session.talker_id
+  const bilibiliSpaceUrl = avatarUserId ? `https://space.bilibili.com/${avatarUserId}` : null
+
   return (
     <div className={`flex gap-3 ${isSent ? 'flex-row-reverse' : ''}`}>
-      <Avatar className='size-8 flex-none ring-1 ring-border/50'>
-        {avatarUrl && <AvatarImage src={enforceHttps(avatarUrl)} referrerPolicy='no-referrer' />}
-        <AvatarFallback
-          className={
-            isSent
-              ? 'bg-linear-to-br from-blue-400 to-cyan-300 text-white'
-              : 'bg-linear-to-br from-pink-400 to-orange-300 text-white'
+      <Menu>
+        <MenuTrigger
+          render={
+            <Avatar className='size-8 flex-none cursor-pointer ring-1 ring-border/50 transition-opacity hover:opacity-80'>
+              {avatarUrl && <AvatarImage src={enforceHttps(avatarUrl)} referrerPolicy='no-referrer' />}
+              <AvatarFallback
+                className={
+                  isSent
+                    ? 'bg-linear-to-br from-blue-400 to-cyan-300 text-white'
+                    : 'bg-linear-to-br from-pink-400 to-orange-300 text-white'
+                }
+              >
+                {isFanGroup && !isSent ? <Users className='size-3.5' /> : <User className='size-3.5' />}
+              </AvatarFallback>
+            </Avatar>
           }
-        >
-          {isFanGroup && !isSent ? <Users className='size-3.5' /> : <User className='size-3.5' />}
-        </AvatarFallback>
-      </Avatar>
+        />
+        <MenuPopup side={'bottom'} align='start'>
+          {bilibiliSpaceUrl && (
+            <a href={bilibiliSpaceUrl} target='_blank' rel='noopener noreferrer'>
+              <MenuItem>
+                <ExternalLink />
+                个人空间
+              </MenuItem>
+            </a>
+          )}
+        </MenuPopup>
+      </Menu>
 
       <div className={`flex max-w-[70%] flex-col gap-1 ${isSent ? 'items-end' : ''}`}>
         <div
