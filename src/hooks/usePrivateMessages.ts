@@ -65,6 +65,7 @@ export interface UsePrivateMessagesReturn {
   selectSession: (session: BilibiliSession) => void
   clearSelectedSession: () => void
   sendMessage: (content: string) => Promise<boolean>
+  sendImageMessage: (imageData: string, mimeType: string) => Promise<boolean>
   connectWebSocket: () => Promise<void>
   disconnectWebSocket: () => Promise<void>
 
@@ -576,6 +577,124 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         return true
       } catch (err) {
         console.error('Failed to send message:', err)
+        return false
+      } finally {
+        setSendingMessage(false)
+      }
+    },
+    [selectedSession, userInfo]
+  )
+
+  // Send image message to the current session
+  const sendImageMessage = useCallback(
+    async (imageData: string, mimeType: string): Promise<boolean> => {
+      const senderMid = userInfo?.mid
+      if (!selectedSession || !senderMid || !imageData) {
+        return false
+      }
+
+      setSendingMessage(true)
+
+      try {
+        // First, upload the image to Bilibili CDN
+        const uploadResult = await window.electronAPI.bilibili.uploadImage({
+          imageData,
+          mimeType,
+        })
+
+        if (!uploadResult.success || !uploadResult.url) {
+          console.error('Failed to upload image:', uploadResult.error)
+          return false
+        }
+
+        // Determine image type from mimeType
+        const imageTypeMap: Record<string, string> = {
+          'image/jpeg': 'jpeg',
+          'image/jpg': 'jpeg',
+          'image/png': 'png',
+          'image/gif': 'gif',
+          'image/webp': 'webp',
+        }
+        const imageType = imageTypeMap[mimeType] || 'jpeg'
+
+        // Prepare the image message content
+        const msgContent = JSON.stringify({
+          url: uploadResult.url,
+          height: uploadResult.height || 0,
+          width: uploadResult.width || 0,
+          imageType,
+          original: 1,
+          size: Math.round((imageData.length * 3) / 4 / 1024), // Approximate size in KB from base64
+        })
+
+        const data = await window.electronAPI.bilibili.sendMessage({
+          receiverId: String(selectedSession.talker_id),
+          receiverType: String(selectedSession.session_type),
+          msgType: '2', // Image message
+          content: msgContent,
+        })
+
+        if (isErrorResponse(data)) {
+          console.error('Failed to send image message:', data.error)
+          return false
+        }
+
+        if (data.code !== 0) {
+          console.error('Failed to send image message:', data.message)
+          return false
+        }
+
+        // Create a local message object to add to the messages list immediately
+        const newMessage: BilibiliMessage = {
+          sender_uid: senderMid,
+          receiver_type: selectedSession.session_type,
+          receiver_id: selectedSession.talker_id,
+          msg_type: 2, // Image message
+          content: msgContent,
+          msg_seqno: Date.now(),
+          timestamp: Math.floor(Date.now() / 1000),
+          at_uids: null,
+          msg_key: data.data?.msg_key || Date.now(),
+          msg_status: 0,
+          notify_code: '',
+          new_face_version: 1,
+          msg_source: 7, // Web
+        }
+
+        // Add the new message to the messages list
+        setMessages(prev => [...prev, newMessage])
+
+        // Update the session's last_msg and session_ts
+        setSessions(prev =>
+          prev.map(s => {
+            if (s.talker_id === selectedSession.talker_id) {
+              return {
+                ...s,
+                session_ts: Date.now() * 1000,
+                last_msg: {
+                  sender_uid: senderMid,
+                  receiver_type: selectedSession.session_type,
+                  receiver_id: selectedSession.talker_id,
+                  msg_type: 2,
+                  content: msgContent,
+                  msg_seqno: newMessage.msg_seqno,
+                  timestamp: newMessage.timestamp,
+                  at_uids: null,
+                  msg_key: newMessage.msg_key,
+                  msg_status: 0,
+                  notify_code: '',
+                  new_face_version: 1,
+                  msg_source: 7,
+                },
+              }
+            }
+            return s
+          })
+        )
+
+        return true
+      } catch (err) {
+        console.error('Failed to send image message:', err)
         return false
       } finally {
         setSendingMessage(false)
@@ -1122,6 +1241,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     selectSession,
     clearSelectedSession,
     sendMessage,
+    sendImageMessage,
     connectWebSocket,
     disconnectWebSocket,
 

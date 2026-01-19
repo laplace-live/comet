@@ -49,6 +49,10 @@ export const BILIBILI_ENDPOINTS = {
   /** Fetch user info in batch */
   USER_INFOS: `${BILIBILI_API.VC}/x/im/user_infos`,
 
+  // Image Upload
+  /** Upload image for dynamic/private messages (returns Bilibili CDN URL) */
+  UPLOAD_IMAGE: `${BILIBILI_API.MAIN}/x/dynamic/feed/draw/upload_bfs`,
+
   // WebSocket
   /** Broadcast WebSocket for real-time notifications */
   BROADCAST_WS: `${BILIBILI_API.BROADCAST_WS}/sub`,

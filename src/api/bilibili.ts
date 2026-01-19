@@ -4,6 +4,7 @@ import Store from 'electron-store'
 
 import type {
   BilibiliCredentials,
+  BilibiliImageUploadResponse,
   BilibiliMessagesResponse,
   BilibiliNavResponse,
   BilibiliQRCodeGenerateResponse,
@@ -825,6 +826,83 @@ export function registerBilibiliIpcHandlers() {
       } catch (error) {
         console.error('Failed to update ack:', error)
         return { error: 'Failed to update ack', code: 500 }
+      }
+    }
+  )
+
+  // Upload image to Bilibili CDN
+  ipcMain.handle(
+    'bilibili:upload-image',
+    async (
+      _event,
+      params: {
+        imageData: string
+        mimeType: string
+      }
+    ) => {
+      const { imageData, mimeType } = params
+      const credentials = getCredentials()
+
+      if (!credentials) {
+        return { success: false, error: 'Not logged in. Please scan QR code to login.' }
+      }
+
+      if (!imageData || !mimeType) {
+        return { success: false, error: 'Missing image data or MIME type' }
+      }
+
+      try {
+        const cookieHeader = cookieStringFromCredentials(credentials)
+
+        // Convert base64 to buffer
+        const imageBuffer = Buffer.from(imageData, 'base64')
+
+        // Determine file extension from MIME type
+        const extMap: Record<string, string> = {
+          'image/jpeg': 'jpg',
+          'image/jpg': 'jpg',
+          'image/png': 'png',
+          'image/gif': 'gif',
+          'image/webp': 'webp',
+        }
+        const ext = extMap[mimeType] || 'jpg'
+        const filename = `image.${ext}`
+
+        // Create multipart form data
+        // Using the built-in FormData from Node.js 18+
+        const formData = new FormData()
+        const blob = new Blob([imageBuffer], { type: mimeType })
+        formData.append('file_up', blob, filename)
+        formData.append('category', 'daily')
+        formData.append('csrf', credentials.bili_jct)
+        formData.append('csrf_token', credentials.bili_jct)
+
+        const resp = await fetch(BILIBILI_ENDPOINTS.UPLOAD_IMAGE, {
+          method: 'POST',
+          headers: {
+            Cookie: cookieHeader,
+            'User-Agent': USER_AGENT,
+            Referer: BILIBILI_HEADERS.REFERER,
+            Origin: BILIBILI_HEADERS.ORIGIN,
+          },
+          body: formData,
+        })
+
+        const data: BilibiliImageUploadResponse = await resp.json()
+
+        if (data.code !== 0 || !data.data) {
+          return { success: false, error: data.message || 'Failed to upload image' }
+        }
+
+        return {
+          success: true,
+          url: data.data.image_url,
+          width: data.data.image_width,
+          height: data.data.image_height,
+        }
+      } catch (error) {
+        console.error('Failed to upload image:', error)
+        return { success: false, error: 'Failed to upload image' }
       }
     }
   )

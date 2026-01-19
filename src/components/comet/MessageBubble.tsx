@@ -174,6 +174,9 @@ function renderImageContent(content: {
     )
   }
 
+  // Ensure HTTPS for the image URL
+  const imageUrl = enforceHttps(content.url)
+
   // Calculate display dimensions (max 300px width)
   const maxWidth = 300
   const aspectRatio = content.width && content.height ? content.width / content.height : 1
@@ -181,10 +184,10 @@ function renderImageContent(content: {
   const displayHeight = displayWidth / aspectRatio
 
   return (
-    <a href={content.url} target='_blank' rel='noopener noreferrer' className='block'>
+    <a href={imageUrl} target='_blank' rel='noopener noreferrer' className='block'>
       <picture>
         <img
-          src={content.url}
+          src={imageUrl}
           alt='图片消息'
           className='rounded-lg'
           style={{
@@ -207,10 +210,13 @@ function renderCustomEmojiContent(content: { url?: string; width?: number; heigh
     return <span className='text-sm'>[表情]</span>
   }
 
+  // Ensure HTTPS for the emoji URL
+  const emojiUrl = enforceHttps(content.url)
+
   return (
     <picture>
       <img
-        src={content.url}
+        src={emojiUrl}
         alt='表情'
         className='max-h-32 max-w-32'
         style={{
@@ -313,6 +319,9 @@ function renderVideoPushContent(content: {
       })
     : null
 
+  // Ensure HTTPS for the cover image
+  const coverUrl = enforceHttps(content.cover)
+
   return (
     <div className='w-72 overflow-hidden rounded-lg border border-border/50 bg-white transition-colors dark:bg-zinc-800'>
       <a
@@ -321,11 +330,11 @@ function renderVideoPushContent(content: {
         rel='noopener noreferrer'
         className='flex gap-3 p-3 hover:bg-zinc-50 dark:hover:bg-zinc-700/50'
       >
-        {content.cover && (
+        {coverUrl && (
           <div className='relative size-20 flex-none overflow-hidden rounded-lg'>
             <picture>
               <img
-                src={content.cover}
+                src={coverUrl}
                 alt={title || '视频'}
                 className='size-full object-cover'
                 loading='lazy'
@@ -379,6 +388,9 @@ function renderShareContent(content: {
   const cover = sketch?.cover_url || content.cover
   const url = sketch?.target_url || content.url
 
+  // Ensure HTTPS for the cover image
+  const coverUrl = enforceHttps(cover)
+
   return (
     <a
       href={url || '#'}
@@ -386,11 +398,11 @@ function renderShareContent(content: {
       rel='noopener noreferrer'
       className='block overflow-hidden rounded-lg border border-border/50 bg-zinc-50 transition-colors hover:bg-zinc-100 dark:bg-zinc-800/50 dark:hover:bg-zinc-800'
     >
-      {cover && (
+      {coverUrl && (
         <div className='aspect-video w-48'>
           <picture>
             <img
-              src={cover}
+              src={coverUrl}
               alt={title || '分享'}
               className='size-full object-cover'
               loading='lazy'

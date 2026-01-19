@@ -1,5 +1,6 @@
 import type {
   BilibiliCredentials,
+  BilibiliImageUploadResponse,
   BilibiliMessagesResponse,
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
@@ -43,6 +44,21 @@ export interface SendMessageParams {
   receiverType: string
   msgType: string
   content: string
+}
+
+export interface UploadImageParams {
+  /** Base64 encoded image data (without data:image/... prefix) */
+  imageData: string
+  /** Image MIME type (e.g., 'image/jpeg', 'image/png') */
+  mimeType: string
+}
+
+export interface UploadImageResult {
+  success: boolean
+  url?: string
+  width?: number
+  height?: number
+  error?: string
 }
 
 export interface SendMessageResponse {
@@ -223,6 +239,7 @@ export interface ElectronAPI {
     // Actions
     updateAck: (params: UpdateAckParams) => Promise<UpdateAckResponse | ErrorResponse>
     sendMessage: (params: SendMessageParams) => Promise<BilibiliSendMessageResponse | ErrorResponse>
+    uploadImage: (params: UploadImageParams) => Promise<UploadImageResult>
 
     // WebSocket for real-time notifications
     wsConnect: () => Promise<{ success: boolean }>

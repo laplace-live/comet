@@ -26,6 +26,7 @@ export function VerifiedBadge({ official, size = 'sm', className = '' }: Verifie
   return (
     <Tooltip>
       <TooltipTrigger
+        render={<span />}
         className={`flex cursor-default items-center justify-center rounded-full border border-white dark:border-zinc-900 ${sizeClasses} ${
           isOrganization ? 'bg-sky-500 text-white' : 'bg-amber-500 text-white'
         } ${className}`}

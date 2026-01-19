@@ -368,3 +368,15 @@ export interface BilibiliSendMessageResponse {
     }
   } | null
 }
+
+// Image upload response
+export interface BilibiliImageUploadResponse {
+  code: number
+  message: string
+  ttl?: number
+  data: {
+    image_url: string
+    image_width: number
+    image_height: number
+  } | null
+}

@@ -31,6 +31,7 @@ interface MessagesPanelProps {
   userInfo: CheckLoginResult | null
   onBack: () => void
   onSendMessage: (content: string) => Promise<boolean>
+  onSendImage: (imageData: string, mimeType: string) => Promise<boolean>
 }
 
 export function MessagesPanel({
@@ -43,6 +44,7 @@ export function MessagesPanel({
   userInfo,
   onBack,
   onSendMessage,
+  onSendImage,
 }: MessagesPanelProps) {
   return (
     <div
@@ -58,6 +60,7 @@ export function MessagesPanel({
           userInfo={userInfo}
           onBack={onBack}
           onSendMessage={onSendMessage}
+          onSendImage={onSendImage}
         />
       ) : (
         <EmptyState />
@@ -75,6 +78,7 @@ interface ChatViewProps {
   userInfo: CheckLoginResult | null
   onBack: () => void
   onSendMessage: (content: string) => Promise<boolean>
+  onSendImage: (imageData: string, mimeType: string) => Promise<boolean>
 }
 
 function ChatView({
@@ -86,6 +90,7 @@ function ChatView({
   userInfo,
   onBack,
   onSendMessage,
+  onSendImage,
 }: ChatViewProps) {
   const isMacOS = window.electronAPI?.platform === 'darwin'
   const avatar = getSessionAvatar(session, userCache)
@@ -198,6 +203,7 @@ function ChatView({
         sessionId={session.talker_id}
         sendingMessage={sendingMessage}
         onSendMessage={onSendMessage}
+        onSendImage={onSendImage}
         onMessageSent={scrollToBottom}
       />
     </>

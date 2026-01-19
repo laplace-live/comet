@@ -30,6 +30,7 @@ export default function App() {
     selectSession,
     clearSelectedSession,
     sendMessage,
+    sendImageMessage,
     // Multi-account actions
     switchAccount,
     removeAccount,
@@ -113,6 +114,7 @@ export default function App() {
             userInfo={userInfo}
             onBack={clearSelectedSession}
             onSendMessage={sendMessage}
+            onSendImage={sendImageMessage}
           />
 
           {/* Add Account / Re-auth Dialog */}

@@ -34,6 +34,21 @@ export interface SendMessageParams {
   content: string
 }
 
+export interface UploadImageParams {
+  /** Base64 encoded image data (without data:image/... prefix) */
+  imageData: string
+  /** Image MIME type (e.g., 'image/jpeg', 'image/png') */
+  mimeType: string
+}
+
+export interface UploadImageResult {
+  success: boolean
+  url?: string
+  width?: number
+  height?: number
+  error?: string
+}
+
 export interface QRPollParams {
   qrcodeKey: string
   // When true, don't auto-save the account (used during re-auth to validate first)
@@ -191,6 +206,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // Actions
     updateAck: (params: UpdateAckParams) => ipcRenderer.invoke('bilibili:update-ack', params),
     sendMessage: (params: SendMessageParams) => ipcRenderer.invoke('bilibili:send-message', params),
+    uploadImage: (params: UploadImageParams): Promise<UploadImageResult> =>
+      ipcRenderer.invoke('bilibili:upload-image', params),
 
     // WebSocket for real-time notifications
     wsConnect: (): Promise<{ success: boolean }> => ipcRenderer.invoke('bilibili:ws-connect'),
