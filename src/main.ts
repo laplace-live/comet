@@ -1,6 +1,6 @@
 import path, { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeImage, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeImage, shell } from 'electron'
 import started from 'electron-squirrel-startup'
 
 import { registerBilibiliIpcHandlers } from './api/bilibili'
@@ -182,19 +182,6 @@ const createWindow = () => {
       contextIsolation: true,
       nodeIntegration: false,
     },
-  })
-
-  // Set dark mode based on system preference
-  if (nativeTheme.shouldUseDarkColors) {
-    mainWindow.webContents.executeJavaScript('document.documentElement.classList.add("dark")')
-  }
-
-  // Listen for theme changes
-  nativeTheme.on('updated', () => {
-    const isDark = nativeTheme.shouldUseDarkColors
-    mainWindow.webContents.executeJavaScript(
-      isDark ? 'document.documentElement.classList.add("dark")' : 'document.documentElement.classList.remove("dark")'
-    )
   })
 
   // and load the index.html of the app.
