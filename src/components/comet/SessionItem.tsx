@@ -12,6 +12,8 @@ import { enforceHttps } from '@/utils/enforceHttps'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 
+import { VerifiedBadge } from './VerifiedBadge'
+
 interface SessionItemProps {
   session: BilibiliSession
   isSelected: boolean
@@ -21,6 +23,7 @@ interface SessionItemProps {
 
 export function SessionItem({ session, isSelected, userCache, onClick }: SessionItemProps) {
   const avatar = getSessionAvatar(session, userCache)
+  const cachedUser = userCache[session.talker_id]
 
   return (
     <button
@@ -30,12 +33,19 @@ export function SessionItem({ session, isSelected, userCache, onClick }: Session
       }`}
       onClick={onClick}
     >
-      <Avatar className='size-10 ring-2 ring-border/50'>
-        {avatar && <AvatarImage src={enforceHttps(avatar)} />}
-        <AvatarFallback className='bg-linear-to-br from-pink-400 to-orange-300 text-white'>
-          {session.session_type === SESSION_TYPE.FAN_GROUP ? <Users className='size-5' /> : <User className='size-5' />}
-        </AvatarFallback>
-      </Avatar>
+      <div className='relative'>
+        <Avatar className='size-10 ring-2 ring-border/50'>
+          {avatar && <AvatarImage src={enforceHttps(avatar)} />}
+          <AvatarFallback className='bg-linear-to-br from-pink-400 to-orange-300 text-white'>
+            {session.session_type === SESSION_TYPE.FAN_GROUP ? (
+              <Users className='size-5' />
+            ) : (
+              <User className='size-5' />
+            )}
+          </AvatarFallback>
+        </Avatar>
+        <VerifiedBadge official={cachedUser?.official} className='absolute -top-0.5 -right-0.5' />
+      </div>
 
       <div className='min-w-0 flex-1'>
         <div className='flex items-center justify-between gap-2'>

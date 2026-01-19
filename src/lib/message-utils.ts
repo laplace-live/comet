@@ -5,6 +5,12 @@ import { MSG_TYPE } from '@/types/bilibili'
 export interface UserCacheEntry {
   name: string
   face: string
+  official?: {
+    role: number
+    title: string
+    desc: string
+    type: number
+  }
 }
 
 export interface UserCache {
