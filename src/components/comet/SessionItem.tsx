@@ -5,9 +5,10 @@ import type { BilibiliSession } from '@/types/bilibili'
 
 import { SESSION_TYPE } from '@/types/bilibili'
 
-import { formatTime, getLastMessagePreview, getSessionAvatar, getSessionName } from '@/lib/message-utils'
+import { getLastMessagePreview, getSessionAvatar, getSessionName } from '@/lib/message-utils'
 
 import { enforceHttps } from '@/utils/enforceHttps'
+import { timeFromNow } from '@/utils/timeFromNow'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
@@ -69,7 +70,9 @@ export function SessionItem({ session, isSelected, userCache, onClick }: Session
             {getSessionName(session, userCache)}
           </span>
           {session.last_msg && (
-            <span className='flex-none text-muted-foreground text-xs'>{formatTime(session.last_msg.timestamp)}</span>
+            <span className='flex-none text-muted-foreground text-xs'>
+              {timeFromNow(session.last_msg.timestamp * 1000)}
+            </span>
           )}
         </div>
 
