@@ -16,9 +16,9 @@ import { isMacOS } from '@/utils/platform'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Spinner } from '@/components/ui/spinner'
-import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip'
 
 import { MessageInput } from './MessageInput'
 import { MessagesList } from './MessagesList'
@@ -106,18 +106,26 @@ function ChatView({
 }: ChatViewProps) {
   const avatar = getSessionAvatar(session, userCache)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const [copied, setCopied] = useState(false)
+  const [copiedItem, setCopiedItem] = useState<'username' | 'uid' | null>(null)
+
+  const sessionName = getSessionName(session, userCache)
+
+  const copyUsername = useCallback(() => {
+    navigator.clipboard.writeText(sessionName)
+    setCopiedItem('username')
+    setTimeout(() => setCopiedItem(null), 2000)
+  }, [sessionName])
 
   const copyUid = useCallback(() => {
     navigator.clipboard.writeText(String(session.talker_id))
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    setCopiedItem('uid')
+    setTimeout(() => setCopiedItem(null), 2000)
   }, [session.talker_id])
 
   // Reset copied state when session changes
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally reset state when session changes
   useEffect(() => {
-    setCopied(false)
+    setCopiedItem(null)
   }, [session.talker_id])
 
   // Auto-scroll to bottom when messages load or session changes
@@ -167,17 +175,27 @@ function ChatView({
               rel='noopener noreferrer'
               className='app-region-no-drag'
             >
-              {getSessionName(session, userCache)}
+              {sessionName}
             </a>
-            <Tooltip>
-              <TooltipTrigger
-                onClick={copyUid}
-                className='app-region-no-drag inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-foreground dark:hover:bg-zinc-800'
-              >
-                {copied ? <Check className='size-3.5 text-emerald-500' /> : <Copy className='size-3.5' />}
-              </TooltipTrigger>
-              <TooltipPopup>{copied ? '已复制' : `复制 UID: ${session.talker_id}`}</TooltipPopup>
-            </Tooltip>
+            <Menu>
+              <MenuTrigger className='app-region-no-drag inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-foreground dark:hover:bg-zinc-800'>
+                {copiedItem ? <Check className='size-3.5 text-emerald-500' /> : <Copy className='size-3.5' />}
+              </MenuTrigger>
+              <MenuPopup align='start'>
+                <MenuItem onClick={copyUsername}>
+                  {copiedItem === 'username' ? (
+                    <Check className='size-4 text-emerald-500' />
+                  ) : (
+                    <Copy className='size-4' />
+                  )}
+                  复制用户名
+                </MenuItem>
+                <MenuItem onClick={copyUid}>
+                  {copiedItem === 'uid' ? <Check className='size-4 text-emerald-500' /> : <Copy className='size-4' />}
+                  {`复制 UID:${session.talker_id}`}
+                </MenuItem>
+              </MenuPopup>
+            </Menu>
           </h3>
           <div className='flex items-center gap-2'>
             {session.live_status === 1 && (
