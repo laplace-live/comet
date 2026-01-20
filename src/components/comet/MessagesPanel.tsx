@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Copy, MessageSquare, User, Users } from 'lucide-react'
+import { ArrowLeft, Check, Copy, ImagePlus, MessageSquare, User, Users } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
@@ -107,6 +107,9 @@ function ChatView({
   const avatar = getSessionAvatar(session, userCache)
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const [copiedItem, setCopiedItem] = useState<'username' | 'uid' | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [droppedFile, setDroppedFile] = useState<File | null>(null)
+  const dragCounterRef = useRef(0)
 
   const sessionName = getSessionName(session, userCache)
 
@@ -122,10 +125,12 @@ function ChatView({
     setTimeout(() => setCopiedItem(null), 2000)
   }, [session.talker_id])
 
-  // Reset copied state when session changes
+  // Reset state when session changes
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally reset state when session changes
   useEffect(() => {
     setCopiedItem(null)
+    setDroppedFile(null)
+    dragCounterRef.current = 0
   }, [session.talker_id])
 
   // Auto-scroll to bottom when messages load or session changes
@@ -146,8 +151,69 @@ function ChatView({
     })
   }, [])
 
+  // Drag and drop handlers for image upload
+  const handleDragEnter = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current++
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDragging(true)
+    }
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounterRef.current--
+    if (dragCounterRef.current === 0) {
+      setIsDragging(false)
+    }
+  }, [])
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+  }, [])
+
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(false)
+    dragCounterRef.current = 0
+
+    const files = e.dataTransfer.files
+    if (files.length > 0) {
+      const file = files[0]
+      // Check if it's an image
+      if (file.type.startsWith('image/')) {
+        setDroppedFile(file)
+      }
+    }
+  }, [])
+
+  const handleDroppedFileProcessed = useCallback(() => {
+    setDroppedFile(null)
+  }, [])
+
   return (
-    <>
+    // biome-ignore lint/a11y/noStaticElementInteractions: drag and drop container for image upload
+    <div
+      className='relative flex min-h-0 flex-1 flex-col overflow-hidden'
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {/* Drag overlay indicator */}
+      {isDragging && (
+        <div className='pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-primary/10'>
+          <div className='flex flex-col items-center gap-3 rounded-2xl border-2 border-primary border-dashed bg-background/80 px-12 py-8'>
+            <ImagePlus className='size-12 text-primary' />
+            <span className='font-medium text-lg text-primary'>松开以发送图片</span>
+          </div>
+        </div>
+      )}
+
       {/* Chat Header */}
       <div
         className={`app-region-drag flex flex-none select-none items-center gap-3 border-border/50 border-b bg-white/80 px-4 py-3 backdrop-blur-xl dark:bg-zinc-900/80 ${isMacOS ? 'pt-11' : ''}`}
@@ -238,11 +304,13 @@ function ChatView({
       <MessageInput
         sessionId={session.talker_id}
         sendingMessage={sendingMessage}
+        droppedFile={droppedFile}
         onSendMessage={onSendMessage}
         onSendImage={onSendImage}
         onMessageSent={scrollToBottom}
+        onDroppedFileProcessed={handleDroppedFileProcessed}
       />
-    </>
+    </div>
   )
 }
 

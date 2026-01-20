@@ -20,17 +20,21 @@ export interface ImageToSend {
 export interface MessageInputProps {
   sessionId: number
   sendingMessage: boolean
+  droppedFile?: File | null
   onSendMessage: (content: string) => Promise<boolean>
   onSendImage: (imageData: string, mimeType: string) => Promise<boolean>
   onMessageSent: () => void
+  onDroppedFileProcessed?: () => void
 }
 
 export function MessageInput({
   sessionId,
   sendingMessage,
+  droppedFile,
   onSendMessage,
   onSendImage,
   onMessageSent,
+  onDroppedFileProcessed,
 }: MessageInputProps) {
   const [inputValue, setInputValue] = useState('')
   const [pendingImage, setPendingImage] = useState<ImageToSend | null>(null)
@@ -47,9 +51,9 @@ export function MessageInput({
     isProcessingImageRef.current = false
   }, [])
 
-  const processImageFile = useCallback((file: File) => {
+  const processImageFile = useCallback((file: File): boolean => {
     // Prevent concurrent processing (synchronous check via ref)
-    if (isProcessingImageRef.current) return
+    if (isProcessingImageRef.current) return false
     isProcessingImageRef.current = true
 
     // Validate file type
@@ -57,7 +61,7 @@ export function MessageInput({
     if (!validTypes.includes(file.type)) {
       console.error('Invalid image type:', file.type)
       isProcessingImageRef.current = false
-      return
+      return false
     }
 
     // Validate file size (max 20MB)
@@ -65,7 +69,7 @@ export function MessageInput({
     if (file.size > maxSize) {
       console.error('Image too large:', file.size)
       isProcessingImageRef.current = false
-      return
+      return false
     }
 
     // Read file as data URL (base64)
@@ -90,6 +94,7 @@ export function MessageInput({
       isProcessingImageRef.current = false
     }
     reader.readAsDataURL(file)
+    return true
   }, [])
 
   // Clear input when session changes
@@ -98,6 +103,17 @@ export function MessageInput({
     setInputValue('')
     clearPendingImage()
   }, [sessionId])
+
+  // Handle externally dropped file (from drag and drop on chat area)
+  useEffect(() => {
+    if (droppedFile && !isPreviewOpen && !isSendingImage) {
+      const processed = processImageFile(droppedFile)
+      // Only clear the dropped file if processing actually started
+      if (processed) {
+        onDroppedFileProcessed?.()
+      }
+    }
+  }, [droppedFile, isPreviewOpen, isSendingImage, processImageFile, onDroppedFileProcessed])
 
   // Global paste listener - works even when textarea is not focused
   useEffect(() => {
