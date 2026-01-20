@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 
-import appIcon from '@/assets/icon.png'
+import appLogo from '@/assets/logo.svg'
 import { useSettings } from '@/stores/useSettings'
 
 export function AboutDialog() {
@@ -24,7 +24,7 @@ export function AboutDialog() {
         <DialogPanel>
           <div className='mt-10 select-none space-y-4'>
             <div className='flex flex-col items-center gap-2'>
-              <img src={appIcon} alt='LAPLACE Comet' className='size-16' />
+              <img src={appLogo} alt='LAPLACE Comet' className='size-16' />
               <div className='space-y-1 text-center'>
                 <h3 className='font-bold font-logo text-3xl'>LAPLACE Comet</h3>
                 <p className='text-muted-foreground'>Privacy-first Bilibili PM Manager</p>

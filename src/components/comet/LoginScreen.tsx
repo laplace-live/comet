@@ -9,7 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipPopup, TooltipTrigger } from '@/components/ui/tooltip'
 
-import appIcon from '@/assets/icon.png'
+import appLogo from '@/assets/logo.svg'
 
 interface LoginScreenProps {
   onLoginSuccess: () => void
@@ -150,7 +150,7 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       <div className='flex flex-1 items-center justify-center p-8'>
         <div className='w-full max-w-md space-y-3'>
           <div className='select-none text-center'>
-            <img src={appIcon} alt='LAPLACE Comet' className='mx-auto mb-2 size-20' />
+            <img src={appLogo} alt='LAPLACE Comet' className='mx-auto mb-2 size-20' />
             <h1 className='font-bold font-logo text-3xl tracking-tight'>LAPLACE Comet</h1>
             <Tooltip>
               <TooltipTrigger className='mx-auto flex cursor-help items-center gap-1 text-base text-muted-foreground tracking-tight'>
