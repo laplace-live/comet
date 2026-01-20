@@ -131,6 +131,7 @@ function ChatView({
   useEffect(() => {
     setCopiedItem(null)
     setDroppedFile(null)
+    setIsDragging(false)
     dragCounterRef.current = 0
   }, [session.talker_id])
 
