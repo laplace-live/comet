@@ -7,6 +7,8 @@ import { BrowserWindow, ipcMain } from 'electron'
 import type protobuf from 'protobufjs'
 import { WebSocket } from 'ws'
 
+import { IGNORED_WS_MSG_TYPES } from '@/types/bilibili'
+
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, USER_AGENT, WEBSOCKET_CONFIG } from '@/lib/const'
 
 import { cookieStringFromCredentials, getCredentials } from '@/api/bilibili'
@@ -438,6 +440,14 @@ export class BroadcastWebSocketManager {
       if (payload.instantMsg || payload.notifyInfo) {
         const notifyInfo = payload.notifyInfo
         const instantMsg = payload.instantMsg
+
+        // Skip notifications with ignored message types (e.g., like notifications)
+        // These are platform-wide events, not private messages
+        const msgType = Number(instantMsg?.msgType || notifyInfo?.msgType || 0)
+        if (IGNORED_WS_MSG_TYPES.has(msgType)) {
+          console.log(`[BroadcastWS] Ignoring non-PM notification with msgType: ${msgType}`)
+          return
+        }
 
         const notification: NewMessageNotification = {
           talkerId: Number(notifyInfo?.talkerId || instantMsg?.senderUid || 0),
