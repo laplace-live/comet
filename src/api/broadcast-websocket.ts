@@ -443,7 +443,7 @@ export class BroadcastWebSocketManager {
 
         // Skip notifications with ignored message types (e.g., like notifications)
         // These are platform-wide events, not private messages
-        const msgType = Number(instantMsg?.msgType || notifyInfo?.msgType || 0)
+        const msgType = Number(notifyInfo?.msgType || instantMsg?.msgType || 0)
         if (IGNORED_WS_MSG_TYPES.has(msgType)) {
           console.log(`[BroadcastWS] Ignoring non-PM notification with msgType: ${msgType}`)
           return
