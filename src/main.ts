@@ -375,6 +375,38 @@ app.on('web-contents-created', (_event, contents) => {
     }
     return { action: 'deny' }
   })
+
+  // Add context menu for editable elements (text inputs, textareas)
+  contents.on('context-menu', (_e, params) => {
+    // Only show context menu for editable elements
+    if (!params.isEditable) return
+
+    const hasSelection = params.selectionText.length > 0
+
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: '剪切',
+        role: 'cut',
+        enabled: hasSelection,
+      },
+      {
+        label: '复制',
+        role: 'copy',
+        enabled: hasSelection,
+      },
+      {
+        label: '粘贴',
+        role: 'paste',
+      },
+      { type: 'separator' },
+      {
+        label: '全选',
+        role: 'selectAll',
+      },
+    ])
+
+    contextMenu.popup()
+  })
 })
 
 // This method will be called when Electron has finished
