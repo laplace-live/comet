@@ -2,6 +2,7 @@ import path, { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeImage, shell } from 'electron'
 import started from 'electron-squirrel-startup'
+import { updateElectronApp } from 'update-electron-app'
 
 import { registerBilibiliIpcHandlers } from './api/bilibili'
 import { cleanupBroadcastWebSocket, initBroadcastWebSocket } from './api/broadcast-websocket'
@@ -23,6 +24,12 @@ const __dirname = dirname(__filename)
 if (started) {
   app.quit()
 }
+
+// Configure auto-updates
+updateElectronApp({
+  notifyUser: false,
+  logger: console,
+})
 
 // Set AppUserModelId for Windows - required for proper notification behavior
 // This must match the Squirrel installer name for notifications to work correctly
