@@ -1,3 +1,4 @@
+import { IconBrandDiscordFilled } from '@tabler/icons-react'
 import { Check, Info, LogOut, Plus, RefreshCw, Settings, Trash2 } from 'lucide-react'
 
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
@@ -157,6 +158,10 @@ export function UserMenu({
             <Settings className='size-4' aria-hidden='true' />
             设置
             <MenuShortcut>{modifierKey}+,</MenuShortcut>
+          </MenuItem>
+          <MenuItem onClick={() => window.open('https://discord.gg/hDc6jfmr7c', '_blank')}>
+            <IconBrandDiscordFilled />
+            问题反馈
           </MenuItem>
           <MenuItem onClick={openAbout}>
             <Info className='size-4' aria-hidden='true' />
