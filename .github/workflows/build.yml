@@ -147,26 +147,40 @@ jobs:
       - name: Upload Windows Release to S3
         if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/v')
         run: |
-          # Upload Windows binaries to S3
-          # Structure: s3://bucket/releases/win32/x64/
-          aws s3 cp out/make/squirrel.windows/x64/ s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/win32/x64/ --recursive --exclude "*" --include "*.exe" --include "*.nupkg" --include "RELEASES"
+          # Upload RELEASES manifest with no-cache header (checked frequently for updates)
+          aws s3 cp out/make/squirrel.windows/x64/RELEASES "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/win32/x64/RELEASES" \
+            --cache-control "no-cache, no-store, must-revalidate"
 
-          # Also upload to a versioned path for archival
-          aws s3 cp out/make/squirrel.windows/x64/ s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/win32/x64/${{ steps.version.outputs.VERSION }}/ --recursive --exclude "*" --include "*.exe" --include "*.nupkg" --include "RELEASES"
+          # Upload binaries with standard cache (filenames include version)
+          aws s3 cp out/make/squirrel.windows/x64/ "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/win32/x64/" \
+            --recursive --exclude "*" --include "*.exe" --include "*.nupkg" \
+            --cache-control "public, max-age=31536000, immutable"
+
+          # Upload to versioned path for archival (can be cached indefinitely)
+          aws s3 cp out/make/squirrel.windows/x64/ "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/win32/x64/${{ steps.version.outputs.VERSION }}/" \
+            --recursive --exclude "*" --include "*.exe" --include "*.nupkg" --include "RELEASES" \
+            --cache-control "public, max-age=31536000, immutable"
         shell: bash
 
       - name: Upload macOS Release to S3
         if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/v')
         run: |
-          # Find architecture-specific directories and upload
           for arch_dir in out/make/zip/darwin/*/; do
             arch=$(basename "$arch_dir")
 
-            # Upload to latest path (for auto-updates)
-            aws s3 cp "$arch_dir" "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/darwin/${arch}/" --recursive
+            # Upload RELEASES.json manifest with no-cache header (checked frequently for updates)
+            aws s3 cp "${arch_dir}RELEASES.json" "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/darwin/${arch}/RELEASES.json" \
+              --cache-control "no-cache, no-store, must-revalidate"
 
-            # Also upload to versioned path for archival
-            aws s3 cp "$arch_dir" "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/darwin/${arch}/${{ steps.version.outputs.VERSION }}/" --recursive
+            # Upload zip with standard cache (filename includes version)
+            aws s3 cp "$arch_dir" "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/darwin/${arch}/" \
+              --recursive --exclude "*" --include "*.zip" \
+              --cache-control "public, max-age=31536000, immutable"
+
+            # Upload to versioned path for archival (can be cached indefinitely)
+            aws s3 cp "$arch_dir" "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/darwin/${arch}/${{ steps.version.outputs.VERSION }}/" \
+              --recursive \
+              --cache-control "public, max-age=31536000, immutable"
           done
         shell: bash
 
