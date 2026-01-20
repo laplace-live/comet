@@ -6,6 +6,7 @@ import type { BilibiliSession } from '@/types/bilibili'
 import { SESSION_TYPE } from '@/types/bilibili'
 
 import { getLastMessagePreview, getSessionAvatar, getSessionName } from '@/lib/message-utils'
+import { cn } from '@/lib/utils'
 
 import { enforceHttps } from '@/utils/enforceHttps'
 import { timeFromNow } from '@/utils/timeFromNow'
@@ -45,9 +46,12 @@ export function SessionItem({ session, isSelected, userCache, onClick }: Session
   return (
     <button
       type='button'
-      className={`flex w-full items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-accent/50 ${
-        isSelected ? 'bg-accent' : ''
-      }`}
+      className={cn(
+        'flex w-full select-none items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-accent/50',
+        {
+          'bg-accent': isSelected,
+        }
+      )}
       onClick={onClick}
     >
       <div className='relative'>

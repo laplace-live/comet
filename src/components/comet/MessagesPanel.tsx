@@ -142,7 +142,7 @@ function ChatView({
     <>
       {/* Chat Header */}
       <div
-        className={`app-region-drag flex flex-none items-center gap-3 border-border/50 border-b bg-white/80 px-4 py-3 backdrop-blur-xl dark:bg-zinc-900/80 ${isMacOS ? 'pt-11' : ''}`}
+        className={`app-region-drag flex flex-none select-none items-center gap-3 border-border/50 border-b bg-white/80 px-4 py-3 backdrop-blur-xl dark:bg-zinc-900/80 ${isMacOS ? 'pt-11' : ''}`}
       >
         <Button variant='ghost' size='icon' className='app-region-no-drag md:hidden' onClick={onBack}>
           <ArrowLeft />
@@ -172,7 +172,7 @@ function ChatView({
             <Tooltip>
               <TooltipTrigger
                 onClick={copyUid}
-                className='app-region-no-drag inline-flex size-5 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-foreground dark:hover:bg-zinc-800'
+                className='app-region-no-drag inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-foreground dark:hover:bg-zinc-800'
               >
                 {copied ? <Check className='size-3.5 text-emerald-500' /> : <Copy className='size-3.5' />}
               </TooltipTrigger>

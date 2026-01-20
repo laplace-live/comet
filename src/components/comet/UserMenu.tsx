@@ -55,7 +55,7 @@ export function UserMenu({
   return (
     <div className='flex-none border-border/50 border-t p-3'>
       <Menu>
-        <MenuTrigger className='flex w-full cursor-pointer items-center gap-3 rounded-lg p-2 outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring'>
+        <MenuTrigger className='flex w-full select-none items-center gap-3 rounded-lg p-2 outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring'>
           <Avatar className='size-8'>
             {userInfo.face && <AvatarImage src={enforceHttps(userInfo.face)} alt={userInfo.uname} />}
             <AvatarFallback className='text-sm'>{userInfo.uname.charAt(0)}</AvatarFallback>
@@ -87,7 +87,7 @@ export function UserMenu({
             <>
               <MenuSeparator />
               <MenuGroup>
-                <MenuGroupLabel>切换账号</MenuGroupLabel>
+                <MenuGroupLabel className='select-none'>切换账号</MenuGroupLabel>
                 {accounts.map((account, index) => {
                   const isActive = account.mid === activeAccountMid
                   const isExpired = account.isExpired
@@ -197,7 +197,7 @@ export function UserMenu({
                 <Separator />
                 <div className='flex items-center justify-between gap-4'>
                   <div className='space-y-0.5'>
-                    <label htmlFor='developer-mode' className='cursor-pointer font-medium text-sm'>
+                    <label htmlFor='developer-mode' className='font-medium text-sm'>
                       开发者模式
                     </label>
                     <p className='text-muted-foreground text-xs'>显示消息事件的原始内容，便于调试消息列表</p>

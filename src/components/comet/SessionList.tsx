@@ -139,11 +139,11 @@ export function SessionList({
       {isMacOS && <div className='app-region-drag h-8 flex-none' />}
 
       <div className='flex-none space-y-3 border-border/50 border-b p-4'>
-        <div className='sr-only'>
+        <div className='sr-only select-none'>
           <h2 className='font-semibold text-lg'>会话列表</h2>
         </div>
         <div className='app-region-no-drag flex items-center gap-2'>
-          <InputGroup className='flex-1'>
+          <InputGroup className='flex-1 select-none'>
             <InputGroupInput
               type='search'
               placeholder='搜索用户名、UID 或内容...'

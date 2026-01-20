@@ -250,7 +250,7 @@ export function MessageInput({
             className='hidden'
           />
 
-          <InputGroup>
+          <InputGroup className='select-none'>
             <InputGroupTextarea
               ref={textareaRef}
               value={inputValue}
