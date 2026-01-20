@@ -28,10 +28,12 @@ if (started) {
 
 // Configure auto-updates with S3/CloudFront as the update source
 // Update the UPDATE_BASE_URL in src/lib/const.ts to point to your S3 bucket or CloudFront distribution
+// The baseUrl must include platform and arch as per update-electron-app docs:
+// https://github.com/electron/update-electron-app#with-static-file-storage
 updateElectronApp({
   updateSource: {
     type: UpdateSourceType.StaticStorage,
-    baseUrl: UPDATE_BASE_URL,
+    baseUrl: `${UPDATE_BASE_URL}/${process.platform}/${process.arch}`,
   },
   notifyUser: false,
   logger: console,
