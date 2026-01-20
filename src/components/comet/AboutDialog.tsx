@@ -29,7 +29,10 @@ export function AboutDialog() {
                 <h3 className='font-bold font-logo text-3xl'>LAPLACE Comet</h3>
                 <p className='text-muted-foreground'>Privacy-first Bilibili PM Manager</p>
                 <p className='text-muted-foreground text-sm'>
-                  Version <span className='select-text'>{version}</span>
+                  Version <span className='select-text'>{version}</span> ·{' '}
+                  <a href='https://github.com/laplace-live/comet' target='_blank' rel='noopener noreferrer'>
+                    Source
+                  </a>
                 </p>
               </div>
             </div>
