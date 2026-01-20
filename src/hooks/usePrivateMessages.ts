@@ -23,6 +23,8 @@ import { SESSION_TYPE } from '@/types/bilibili'
 
 import { parseMessageContent } from '@/lib/message-utils'
 
+import { toastManager } from '@/components/ui/toast'
+
 // Helper to check if response is an error
 function isErrorResponse(
   response:
@@ -693,6 +695,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         if (!uploadResult.success || !uploadResult.url) {
           console.error('Failed to upload image:', uploadResult.error)
+          toastManager.add({
+            type: 'error',
+            title: '图片上传失败',
+            description: uploadResult.error || '请检查图片格式和尺寸是否符合要求',
+          })
           return false
         }
 
@@ -725,11 +732,21 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         if (isErrorResponse(data)) {
           console.error('Failed to send image message:', data.error)
+          toastManager.add({
+            type: 'error',
+            title: '图片发送失败',
+            description: data.error,
+          })
           return false
         }
 
         if (data.code !== 0) {
           console.error('Failed to send image message:', data.message)
+          toastManager.add({
+            type: 'error',
+            title: '图片发送失败',
+            description: data.message || '请稍后重试',
+          })
           return false
         }
 
