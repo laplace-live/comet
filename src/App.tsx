@@ -7,6 +7,7 @@ import { AddAccountDialog } from '@/components/comet/AddAccountDialog'
 import { LoginScreen } from '@/components/comet/LoginScreen'
 import { MessagesPanel } from '@/components/comet/MessagesPanel'
 import { SessionList } from '@/components/comet/SessionList'
+import { SettingsDialog } from '@/components/comet/SettingsDialog'
 import { ToastProvider } from '@/components/ui/toast'
 
 import { useSettings } from '@/stores/useSettings'
@@ -179,6 +180,12 @@ export default function App() {
               onAddAccount={startAddingAccount}
               onRemoveAccount={removeAccount}
               onReauthAccount={startReauthAccount}
+            />
+
+            {/* Settings Dialog */}
+            <SettingsDialog
+              accounts={accounts}
+              activeAccountMid={activeAccountMid}
               onReorderAccounts={reorderAccounts}
             />
 

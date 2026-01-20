@@ -50,7 +50,6 @@ interface SessionListProps {
   onAddAccount?: () => void
   onRemoveAccount?: (mid: number) => void
   onReauthAccount?: (mid: number) => void
-  onReorderAccounts?: (mids: number[]) => Promise<boolean>
 }
 
 export function SessionList({
@@ -73,7 +72,6 @@ export function SessionList({
   onAddAccount,
   onRemoveAccount,
   onReauthAccount,
-  onReorderAccounts,
 }: SessionListProps) {
   const sentinelRef = useRef<HTMLDivElement>(null)
   const [filterText, setFilterText] = useState('')
@@ -237,7 +235,6 @@ export function SessionList({
         onAddAccount={onAddAccount}
         onRemoveAccount={onRemoveAccount}
         onReauthAccount={onReauthAccount}
-        onReorderAccounts={onReorderAccounts}
       />
     </div>
   )
