@@ -8,6 +8,7 @@ import type { CheckLoginResult } from '@/types/electron'
 
 import { SESSION_TYPE } from '@/types/bilibili'
 
+import { SUPPORTED_IMAGE_MIME_TYPES } from '@/lib/const'
 import { getSessionAvatar, getSessionName } from '@/lib/message-utils'
 
 import { enforceHttps } from '@/utils/enforceHttps'
@@ -184,8 +185,8 @@ function ChatView({
     const files = e.dataTransfer.files
     if (files.length > 0) {
       const file = files[0]
-      // Check if it's an image
-      if (file.type.startsWith('image/')) {
+      // Only accept image types that are supported by the backend
+      if (SUPPORTED_IMAGE_MIME_TYPES.includes(file.type)) {
         setDroppedFile(file)
       }
     }

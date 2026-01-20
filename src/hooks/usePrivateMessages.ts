@@ -21,6 +21,7 @@ import type {
 
 import { SESSION_TYPE } from '@/types/bilibili'
 
+import { getImageType } from '@/lib/const'
 import { parseMessageContent } from '@/lib/message-utils'
 
 import { toastManager } from '@/components/ui/toast'
@@ -704,14 +705,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         }
 
         // Determine image type from mimeType
-        const imageTypeMap: Record<string, string> = {
-          'image/jpeg': 'jpeg',
-          'image/jpg': 'jpeg',
-          'image/png': 'png',
-          'image/gif': 'gif',
-          'image/webp': 'webp',
-        }
-        const imageType = imageTypeMap[mimeType] || 'jpeg'
+        const imageType = getImageType(mimeType)
 
         // Prepare the image message content
         const msgContent = JSON.stringify({

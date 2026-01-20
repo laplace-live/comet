@@ -14,7 +14,7 @@ import type {
   BilibiliUserCardsResponse,
 } from '@/types/bilibili'
 
-import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, USER_AGENT } from '@/lib/const'
+import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, getImageExtension, USER_AGENT } from '@/lib/const'
 
 /**
  * Preserve large integer fields as strings in JSON response text.
@@ -883,14 +883,7 @@ export function registerBilibiliIpcHandlers() {
         const imageBuffer = Buffer.from(imageData, 'base64')
 
         // Determine file extension from MIME type
-        const extMap: Record<string, string> = {
-          'image/jpeg': 'jpg',
-          'image/jpg': 'jpg',
-          'image/png': 'png',
-          'image/gif': 'gif',
-          'image/webp': 'webp',
-        }
-        const ext = extMap[mimeType] || 'jpg'
+        const ext = getImageExtension(mimeType)
         const filename = `image.${ext}`
 
         // Create multipart form data

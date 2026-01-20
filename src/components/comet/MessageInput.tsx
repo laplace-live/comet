@@ -1,6 +1,7 @@
 import { ImagePlus, Send } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MIME_TYPES } from '@/lib/const'
 import { cn } from '@/lib/utils'
 
 import { Button } from '@/components/ui/button'
@@ -57,16 +58,14 @@ export function MessageInput({
     isProcessingImageRef.current = true
 
     // Validate file type
-    const validTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp']
-    if (!validTypes.includes(file.type)) {
+    if (!SUPPORTED_IMAGE_MIME_TYPES.includes(file.type)) {
       console.error('Invalid image type:', file.type)
       isProcessingImageRef.current = false
       return false
     }
 
-    // Validate file size (max 20MB)
-    const maxSize = 20 * 1024 * 1024
-    if (file.size > maxSize) {
+    // Validate file size
+    if (file.size > MAX_IMAGE_SIZE) {
       console.error('Image too large:', file.size)
       isProcessingImageRef.current = false
       return false
@@ -261,7 +260,7 @@ export function MessageInput({
           <input
             ref={fileInputRef}
             type='file'
-            accept='image/jpeg,image/jpg,image/png,image/gif,image/webp'
+            accept={SUPPORTED_IMAGE_MIME_TYPES.join(',')}
             onChange={handleFileChange}
             className='hidden'
           />

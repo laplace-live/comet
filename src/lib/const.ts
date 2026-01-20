@@ -79,3 +79,28 @@ export const WEBSOCKET_CONFIG = {
   /** Reconnect delay in milliseconds (5 seconds) */
   RECONNECT_DELAY: 5000,
 } as const
+
+// ============================================================================
+// Image Upload Configuration
+// ============================================================================
+
+/** Image format configuration - single source of truth */
+export const IMAGE_FORMATS: Record<string, { extension: string; type: string }> = {
+  'image/jpeg': { extension: 'jpg', type: 'jpeg' },
+  'image/jpg': { extension: 'jpg', type: 'jpeg' },
+  'image/png': { extension: 'png', type: 'png' },
+  'image/gif': { extension: 'gif', type: 'gif' },
+  'image/webp': { extension: 'webp', type: 'webp' },
+}
+
+/** Supported image MIME types for upload */
+export const SUPPORTED_IMAGE_MIME_TYPES = Object.keys(IMAGE_FORMATS)
+
+/** Get file extension for a MIME type */
+export const getImageExtension = (mimeType: string): string => IMAGE_FORMATS[mimeType]?.extension ?? 'jpg'
+
+/** Get image type name for a MIME type */
+export const getImageType = (mimeType: string): string => IMAGE_FORMATS[mimeType]?.type ?? 'jpeg'
+
+/** Maximum image file size in bytes (20MB) */
+export const MAX_IMAGE_SIZE = 20 * 1024 * 1024
