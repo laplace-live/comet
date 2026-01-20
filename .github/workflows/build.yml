@@ -14,7 +14,7 @@ env:
   S3_BUCKET: laplace-releases
   S3_REGION: us-east-1
   # S3 path prefix for releases (e.g., "releases" or "downloads/comet")
-  S3_PREFIX: releases
+  S3_PREFIX: comet
 
 jobs:
   build:
