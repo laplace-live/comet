@@ -11,11 +11,22 @@ import { Spinner } from '@/components/ui/spinner'
 
 const MAX_MESSAGE_LENGTH = 1000
 
+/** Format file size in bytes to human readable string */
+function formatFileSize(bytes: number): string {
+  if (bytes === 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const k = 1024
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  const size = bytes / k ** i
+  return `${size.toFixed(i > 0 ? 1 : 0)} ${units[i]}`
+}
+
 export interface ImageToSend {
   file: File
   dataUrl: string // Full data URL for preview (data:image/...;base64,...)
   base64Data: string // Just the base64 part for uploading
   mimeType: string
+  dimensions?: { width: number; height: number } // Image dimensions
 }
 
 export interface MessageInputProps {
@@ -78,15 +89,31 @@ export function MessageInput({
       // Extract just the base64 part for uploading
       const base64Data = dataUrl.split(',')[1]
 
-      setPendingImage({
-        file,
-        dataUrl, // Use data URL directly for preview (works in Electron)
-        base64Data,
-        mimeType: file.type,
-      })
-      // Open the preview dialog
-      setIsPreviewOpen(true)
-      // Keep processing flag true until dialog is closed
+      // Create an Image to get dimensions
+      const img = new Image()
+      img.onload = () => {
+        setPendingImage({
+          file,
+          dataUrl, // Use data URL directly for preview (works in Electron)
+          base64Data,
+          mimeType: file.type,
+          dimensions: { width: img.naturalWidth, height: img.naturalHeight },
+        })
+        // Open the preview dialog
+        setIsPreviewOpen(true)
+        // Keep processing flag true until dialog is closed
+      }
+      img.onerror = () => {
+        // Still set the image even if we can't get dimensions
+        setPendingImage({
+          file,
+          dataUrl,
+          base64Data,
+          mimeType: file.type,
+        })
+        setIsPreviewOpen(true)
+      }
+      img.src = dataUrl
     }
     reader.onerror = () => {
       console.error('Failed to read image file')
@@ -225,13 +252,28 @@ export function MessageInput({
           <DialogHeader>
             <DialogTitle>即将发送图片</DialogTitle>
           </DialogHeader>
-          <div className='flex items-center justify-center px-6 py-4'>
+          <div className='flex flex-col gap-3 px-6 py-4'>
             {pendingImage && (
-              <img
-                src={pendingImage.dataUrl}
-                alt='待发送图片预览'
-                className='max-h-80 max-w-full rounded-lg object-contain'
-              />
+              <>
+                <div className='flex items-center justify-center'>
+                  <img
+                    src={pendingImage.dataUrl}
+                    alt='待发送图片预览'
+                    className='max-h-80 max-w-full rounded-lg object-contain'
+                  />
+                </div>
+                <div className='flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-muted-foreground text-sm'>
+                  <span className='max-w-48 truncate' title={pendingImage.file.name}>
+                    {pendingImage.file.name}
+                  </span>
+                  <span>{formatFileSize(pendingImage.file.size)}</span>
+                  {pendingImage.dimensions && (
+                    <span>
+                      {pendingImage.dimensions.width} × {pendingImage.dimensions.height}
+                    </span>
+                  )}
+                </div>
+              </>
             )}
           </div>
           <DialogFooter>
@@ -303,8 +345,17 @@ export function MessageInput({
               >
                 {inputValue.length}/{MAX_MESSAGE_LENGTH}
               </span>
-              <Button size='icon' onClick={handleSendText} disabled={!inputValue.trim() || sendingMessage} aria-label='发送消息'>
-                {sendingMessage ? <Spinner className='size-4' aria-hidden='true' /> : <Send className='size-4' aria-hidden='true' />}
+              <Button
+                size='icon'
+                onClick={handleSendText}
+                disabled={!inputValue.trim() || sendingMessage}
+                aria-label='发送消息'
+              >
+                {sendingMessage ? (
+                  <Spinner className='size-4' aria-hidden='true' />
+                ) : (
+                  <Send className='size-4' aria-hidden='true' />
+                )}
               </Button>
             </InputGroupAddon>
           </InputGroup>
