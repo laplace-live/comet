@@ -189,6 +189,32 @@ function removeAccount(mid: number): boolean {
   return true
 }
 
+// Reorder accounts by an array of mids
+function reorderAccounts(mids: number[]): boolean {
+  const accounts = getAccounts()
+
+  // Create a map for quick lookup
+  const accountMap = new Map(accounts.map(a => [a.userInfo.mid, a]))
+
+  // Build reordered list
+  const reordered: StoredAccount[] = []
+  for (const mid of mids) {
+    const account = accountMap.get(mid)
+    if (account) {
+      reordered.push(account)
+      accountMap.delete(mid) // Remove to track any missing
+    }
+  }
+
+  // Add any remaining accounts that weren't in the mids list (shouldn't happen, but safety)
+  for (const account of accountMap.values()) {
+    reordered.push(account)
+  }
+
+  saveAccounts(reordered)
+  return true
+}
+
 // Mark an account as expired
 function markAccountExpired(mid: number): boolean {
   const accounts = getAccounts()
@@ -478,6 +504,25 @@ export function registerBilibiliIpcHandlers() {
     return {
       success,
       remainingAccounts: accounts.map(a => ({
+        mid: a.userInfo.mid,
+        uname: a.userInfo.uname,
+        face: a.userInfo.face,
+        isExpired: a.isExpired || false,
+      })),
+      activeAccountMid,
+    }
+  })
+
+  // Reorder accounts (for keyboard shortcut ordering)
+  ipcMain.handle('bilibili:reorder-accounts', (_event, params: { mids: number[] }) => {
+    const { mids } = params
+    const success = reorderAccounts(mids)
+    const accounts = getAccounts()
+    const activeAccountMid = getActiveAccountMid()
+
+    return {
+      success,
+      accounts: accounts.map(a => ({
         mid: a.userInfo.mid,
         uname: a.userInfo.uname,
         face: a.userInfo.face,

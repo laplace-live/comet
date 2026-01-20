@@ -43,6 +43,7 @@ export default function App() {
     // Multi-account actions
     switchAccount,
     removeAccount,
+    reorderAccounts,
     startAddingAccount,
     cancelAddingAccount,
     onAccountAdded,
@@ -178,6 +179,7 @@ export default function App() {
               onAddAccount={startAddingAccount}
               onRemoveAccount={removeAccount}
               onReauthAccount={startReauthAccount}
+              onReorderAccounts={reorderAccounts}
             />
 
             <MessagesPanel

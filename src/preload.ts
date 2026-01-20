@@ -123,6 +123,16 @@ export interface ReauthAccountResult {
   userInfo?: StoredAccountInfo
 }
 
+export interface ReorderAccountsParams {
+  mids: number[]
+}
+
+export interface ReorderAccountsResult {
+  success: boolean
+  accounts: StoredAccountInfo[]
+  activeAccountMid: number | null
+}
+
 export interface CheckLoginResult {
   isLogin: boolean
   mid?: number
@@ -213,6 +223,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('bilibili:remove-account', params),
     reauthAccount: (params: ReauthAccountParams): Promise<ReauthAccountResult> =>
       ipcRenderer.invoke('bilibili:reauth-account', params),
+    reorderAccounts: (params: ReorderAccountsParams): Promise<ReorderAccountsResult> =>
+      ipcRenderer.invoke('bilibili:reorder-accounts', params),
 
     // Data fetching
     fetchSessions: (params: FetchSessionsParams) => ipcRenderer.invoke('bilibili:fetch-sessions', params),

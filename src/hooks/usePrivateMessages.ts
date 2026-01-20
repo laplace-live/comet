@@ -82,6 +82,7 @@ export interface UsePrivateMessagesReturn {
   fetchAccounts: () => Promise<void>
   switchAccount: (mid: number) => Promise<void>
   removeAccount: (mid: number) => Promise<void>
+  reorderAccounts: (mids: number[]) => Promise<boolean>
   startAddingAccount: () => void
   cancelAddingAccount: () => void
   onAccountAdded: () => Promise<void>
@@ -1010,6 +1011,24 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [reauthAccount, activeAccountMid, fetchAccounts, checkLogin, fetchSessions])
 
+  // Reorder accounts (for keyboard shortcut ordering)
+  // Returns true on success, false on failure (for rollback support)
+  const reorderAccountsFn = useCallback(async (mids: number[]): Promise<boolean> => {
+    try {
+      const result = await window.electronAPI.bilibili.reorderAccounts({ mids })
+      if (result.success) {
+        setAccounts(result.accounts)
+        setActiveAccountMid(result.activeAccountMid)
+        return true
+      }
+      console.error('[usePrivateMessages] Reorder accounts failed: success=false')
+      return false
+    } catch (err) {
+      console.error('[usePrivateMessages] Failed to reorder accounts:', err)
+      return false
+    }
+  }, [])
+
   // Silent background refresh of sessions - no loading spinner
   // Returns the fetched sessions for immediate use (avoids race condition with ref sync)
   const refreshSessionsQuietly = useCallback(async (): Promise<BilibiliSession[]> => {
@@ -1359,6 +1378,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     fetchAccounts,
     switchAccount,
     removeAccount: removeAccountFn,
+    reorderAccounts: reorderAccountsFn,
     startAddingAccount,
     cancelAddingAccount,
     onAccountAdded,

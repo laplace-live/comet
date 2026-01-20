@@ -161,6 +161,16 @@ export interface ReauthAccountResult {
   userInfo?: StoredAccountInfo
 }
 
+export interface ReorderAccountsParams {
+  mids: number[]
+}
+
+export interface ReorderAccountsResult {
+  success: boolean
+  accounts: StoredAccountInfo[]
+  activeAccountMid: number | null
+}
+
 export interface CheckLoginResult {
   isLogin: boolean
   mid?: number
@@ -246,6 +256,7 @@ export interface ElectronAPI {
     setActiveAccount: (params: SetActiveAccountParams) => Promise<SetActiveAccountResult>
     removeAccount: (params: RemoveAccountParams) => Promise<RemoveAccountResult>
     reauthAccount: (params: ReauthAccountParams) => Promise<ReauthAccountResult>
+    reorderAccounts: (params: ReorderAccountsParams) => Promise<ReorderAccountsResult>
 
     // Data fetching
     fetchSessions: (params: FetchSessionsParams) => Promise<BilibiliSessionsResponse | ErrorResponse>
