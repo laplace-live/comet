@@ -8,7 +8,7 @@ import type { CheckLoginResult } from '@/types/electron'
 
 import { SESSION_TYPE } from '@/types/bilibili'
 
-import { SUPPORTED_IMAGE_MIME_TYPES } from '@/lib/const'
+import { MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MIME_TYPES } from '@/lib/const'
 import { getSessionAvatar, getSessionName } from '@/lib/message-utils'
 
 import { enforceHttps } from '@/utils/enforceHttps'
@@ -20,6 +20,7 @@ import { Button } from '@/components/ui/button'
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Spinner } from '@/components/ui/spinner'
+import { toastManager } from '@/components/ui/toast'
 
 import { MessageInput } from './MessageInput'
 import { MessagesList } from './MessagesList'
@@ -187,9 +188,19 @@ function ChatView({
     if (files.length > 0) {
       const file = files[0]
       // Only accept image types that are supported by the backend
-      if (SUPPORTED_IMAGE_MIME_TYPES.includes(file.type)) {
-        setDroppedFile(file)
+      if (!SUPPORTED_IMAGE_MIME_TYPES.includes(file.type)) {
+        return
       }
+      // Check file size
+      if (file.size > MAX_IMAGE_SIZE) {
+        toastManager.add({
+          type: 'error',
+          title: '图片太大',
+          description: `图片大小不能超过 ${MAX_IMAGE_SIZE / 1024 / 1024}MB`,
+        })
+        return
+      }
+      setDroppedFile(file)
     }
   }, [])
 
