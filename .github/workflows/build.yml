@@ -9,6 +9,13 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+env:
+  # S3 bucket configuration - update these to match your bucket
+  S3_BUCKET: laplace-releases
+  S3_REGION: us-east-1
+  # S3 path prefix for releases (e.g., "releases" or "downloads/comet")
+  S3_PREFIX: releases
+
 jobs:
   build:
     strategy:
@@ -123,7 +130,48 @@ jobs:
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
 
-      - name: Upload Windows Release Assets
+      - name: Configure AWS Credentials
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.S3_REGION }}
+
+      - name: Extract version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        shell: bash
+
+      - name: Upload Windows Release to S3
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # Upload Windows binaries to S3
+          # Structure: s3://bucket/releases/win32/x64/
+          aws s3 cp out/make/squirrel.windows/x64/ s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/win32/x64/ --recursive --exclude "*" --include "*.exe" --include "*.nupkg" --include "RELEASES"
+
+          # Also upload to a versioned path for archival
+          aws s3 cp out/make/squirrel.windows/x64/ s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/win32/x64/${{ steps.version.outputs.VERSION }}/ --recursive --exclude "*" --include "*.exe" --include "*.nupkg" --include "RELEASES"
+        shell: bash
+
+      - name: Upload macOS Release to S3
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/v')
+        run: |
+          # Find architecture-specific directories and upload
+          for arch_dir in out/make/zip/darwin/*/; do
+            arch=$(basename "$arch_dir")
+
+            # Upload to latest path (for auto-updates)
+            aws s3 cp "$arch_dir" "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/darwin/${arch}/" --recursive
+
+            # Also upload to versioned path for archival
+            aws s3 cp "$arch_dir" "s3://${{ env.S3_BUCKET }}/${{ env.S3_PREFIX }}/darwin/${arch}/${{ steps.version.outputs.VERSION }}/" --recursive
+          done
+        shell: bash
+
+      # GitHub Releases
+      - name: Upload Windows Release to GitHub
         if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
@@ -136,7 +184,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload macOS Release Assets
+      - name: Upload macOS Release to GitHub
         if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:

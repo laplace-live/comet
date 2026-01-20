@@ -104,3 +104,20 @@ export const getImageType = (mimeType: string): string => IMAGE_FORMATS[mimeType
 
 /** Maximum image file size in bytes (20MB) */
 export const MAX_IMAGE_SIZE = 20 * 1024 * 1024
+
+// ============================================================================
+// Auto-Update Configuration
+// ============================================================================
+
+/**
+ * Base URL for auto-updates served from S3 or CloudFront.
+ *
+ * The update server should serve files in this structure:
+ * - Windows: {baseUrl}/win32/x64/RELEASES, *.nupkg, *.exe
+ * - macOS:   {baseUrl}/darwin/{arch}/RELEASES.json, *.zip
+ *
+ * Update this URL to your S3 bucket or CloudFront distribution URL.
+ * Example: 'https://your-bucket.s3.your-region.amazonaws.com/releases'
+ * Or with CloudFront: 'https://d1234567890.cloudfront.net/releases'
+ */
+export const UPDATE_BASE_URL = 'https://laplace-releases.s3.us-east-1.amazonaws.com/releases'

@@ -2,10 +2,11 @@ import path, { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeImage, shell } from 'electron'
 import started from 'electron-squirrel-startup'
-import { updateElectronApp } from 'update-electron-app'
+import { UpdateSourceType, updateElectronApp } from 'update-electron-app'
 
 import { registerBilibiliIpcHandlers } from './api/bilibili'
 import { cleanupBroadcastWebSocket, initBroadcastWebSocket } from './api/broadcast-websocket'
+import { UPDATE_BASE_URL } from './lib/const'
 
 // Notification params interface
 interface ShowNotificationParams {
@@ -25,8 +26,13 @@ if (started) {
   app.quit()
 }
 
-// Configure auto-updates
+// Configure auto-updates with S3/CloudFront as the update source
+// Update the UPDATE_BASE_URL in src/lib/const.ts to point to your S3 bucket or CloudFront distribution
 updateElectronApp({
+  updateSource: {
+    type: UpdateSourceType.StaticStorage,
+    baseUrl: UPDATE_BASE_URL,
+  },
   notifyUser: false,
   logger: console,
 })
