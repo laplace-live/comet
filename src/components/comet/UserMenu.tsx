@@ -3,6 +3,8 @@ import { Check, Info, LogOut, Plus, RefreshCw, Settings, Trash2 } from 'lucide-r
 
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
 
+import { cn } from '@/lib/utils'
+
 import { enforceHttps } from '@/utils/enforceHttps'
 import { modifierKey } from '@/utils/platform'
 
@@ -106,13 +108,11 @@ export function UserMenu({
                       onClick={handleClick}
                       className={isActive && !isExpired ? 'bg-accent/50' : ''}
                     >
-                      <div className='flex w-full items-center gap-1'>
-                        <div className='relative'>
-                          <Avatar className={`size-6 ${isExpired ? 'opacity-50' : ''}`}>
-                            {account.face && <AvatarImage src={enforceHttps(account.face)} alt={account.uname} />}
-                            <AvatarFallback className='text-xs'>{account.uname.charAt(0)}</AvatarFallback>
-                          </Avatar>
-                        </div>
+                      <div className='flex w-full items-center gap-2'>
+                        <Avatar className={cn('-mx-0.5 size-4', isExpired && 'opacity-50')}>
+                          {account.face && <AvatarImage src={enforceHttps(account.face)} alt={account.uname} />}
+                          <AvatarFallback className='text-xs'>{account.uname.charAt(0)}</AvatarFallback>
+                        </Avatar>
                         <div className='flex flex-1 flex-col items-start overflow-hidden'>
                           <span className={`w-full truncate text-sm ${isExpired ? 'text-muted-foreground' : ''}`}>
                             {account.uname}
@@ -140,13 +140,10 @@ export function UserMenu({
 
           {/* Add account */}
           {onAddAccount && (
-            <>
-              <MenuSeparator />
-              <MenuItem onClick={onAddAccount}>
-                <Plus className='size-4' aria-hidden='true' />
-                添加账号
-              </MenuItem>
-            </>
+            <MenuItem onClick={onAddAccount}>
+              <Plus className='size-4' aria-hidden='true' />
+              添加账号
+            </MenuItem>
           )}
 
           {/* Settings */}
