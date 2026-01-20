@@ -254,11 +254,9 @@ function renderImageContent(content: {
   // Ensure HTTPS for the image URL
   const imageUrl = enforceHttps(content.url)
 
-  // Calculate display dimensions (max 300px width)
+  // Calculate display dimensions (max 300px width, but also responsive to container)
   const maxWidth = 300
-  const aspectRatio = content.width && content.height ? content.width / content.height : 1
   const displayWidth = Math.min(content.width || maxWidth, maxWidth)
-  const displayHeight = displayWidth / aspectRatio
 
   return (
     <a href={imageUrl} target='_blank' rel='noopener noreferrer' className='block'>
@@ -266,11 +264,9 @@ function renderImageContent(content: {
         <img
           src={imageUrl}
           alt='图片消息'
-          className='rounded-lg'
+          className='max-w-full rounded-lg'
           style={{
-            maxWidth: `${displayWidth}px`,
-            maxHeight: `${displayHeight}px`,
-            width: 'auto',
+            width: `${displayWidth}px`,
             height: 'auto',
           }}
           loading='lazy'
