@@ -93,6 +93,10 @@ Contributions are welcome! Please feel free to submit issues and pull requests.
 
 This is an unofficial third-party application and is not affiliated with, endorsed by, or sponsored by Bilibili. Use at your own risk and in accordance with Bilibili's terms of service.
 
+## Hall of Shame
+
+See [Hall of Shame - Subspace Institute](https://subspace.institute/docs/shame)
+
 ## License
 
 AGPL-3.0
