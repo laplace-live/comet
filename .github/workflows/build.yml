@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, master]
     tags:
-      - 'v*'
+      - "v*"
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -13,10 +13,8 @@ jobs:
   build:
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest, macos-latest]
         include:
-          - os: ubuntu-latest
-            platform: linux
           - os: windows-latest
             platform: win
           - os: macos-latest
@@ -40,7 +38,7 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version: 20
-          cache: 'pnpm'
+          cache: "pnpm"
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -150,18 +148,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Upload Linux Release Assets
-        if: matrix.os == 'ubuntu-latest' && startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          draft: false
-          generate_release_notes: true
-          files: |
-            out/make/deb/x64/*.deb
-            out/make/rpm/x64/*.rpm
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Upload artifacts for debugging (Windows)
         if: matrix.os == 'windows-latest' && !startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-artifact@v6
@@ -179,14 +165,4 @@ jobs:
         with:
           name: build-darwin-${{ github.sha }}
           path: out/make/zip/darwin/**/*.zip
-          retention-days: 7
-
-      - name: Upload artifacts for debugging (Linux)
-        if: matrix.os == 'ubuntu-latest' && !startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v6
-        with:
-          name: build-linux-${{ github.sha }}
-          path: |
-            out/make/deb/x64/*.deb
-            out/make/rpm/x64/*.rpm
           retention-days: 7
