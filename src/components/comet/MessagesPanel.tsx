@@ -221,7 +221,7 @@ function ChatView({
       {isDragging && (
         <div className='pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-primary/10'>
           <div className='flex flex-col items-center gap-3 rounded-2xl border-2 border-primary border-dashed bg-background/80 px-12 py-8'>
-            <ImagePlus className='size-12 text-primary' />
+            <ImagePlus className='size-12 text-primary' aria-hidden='true' />
             <span className='font-medium text-lg text-primary'>松开以发送图片</span>
           </div>
         </div>
@@ -231,17 +231,17 @@ function ChatView({
       <div
         className={`app-region-drag flex flex-none select-none items-center gap-3 border-border/50 border-b bg-white/80 px-4 py-3 backdrop-blur-xl dark:bg-zinc-900/80 ${isMacOS ? 'pt-11' : ''}`}
       >
-        <Button variant='ghost' size='icon' className='app-region-no-drag md:hidden' onClick={onBack}>
-          <ArrowLeft />
+        <Button variant='ghost' size='icon' className='app-region-no-drag md:hidden' onClick={onBack} aria-label='返回'>
+          <ArrowLeft aria-hidden='true' />
         </Button>
 
         <Avatar className='size-10 ring-2 ring-border/50'>
           {avatar && <AvatarImage src={enforceHttps(avatar)} />}
           <AvatarFallback className='bg-linear-to-br from-pink-400 to-orange-300 text-white'>
             {session.session_type === SESSION_TYPE.FAN_GROUP ? (
-              <Users className='size-4' />
+              <Users className='size-4' aria-hidden='true' />
             ) : (
-              <User className='size-4' />
+              <User className='size-4' aria-hidden='true' />
             )}
           </AvatarFallback>
         </Avatar>
@@ -257,20 +257,20 @@ function ChatView({
               {sessionName}
             </a>
             <Menu>
-              <MenuTrigger className='app-region-no-drag inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-foreground dark:hover:bg-zinc-800'>
-                {copiedItem ? <Check className='size-3.5 text-emerald-500' /> : <Copy className='size-3.5' />}
+              <MenuTrigger className='app-region-no-drag inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-foreground dark:hover:bg-zinc-800' aria-label='复制菜单'>
+                {copiedItem ? <Check className='size-3.5 text-emerald-500' aria-hidden='true' /> : <Copy className='size-3.5' aria-hidden='true' />}
               </MenuTrigger>
               <MenuPopup align='start'>
                 <MenuItem onClick={copyUsername}>
                   {copiedItem === 'username' ? (
-                    <Check className='size-4 text-emerald-500' />
+                    <Check className='size-4 text-emerald-500' aria-hidden='true' />
                   ) : (
-                    <Copy className='size-4' />
+                    <Copy className='size-4' aria-hidden='true' />
                   )}
                   复制用户名
                 </MenuItem>
                 <MenuItem onClick={copyUid}>
-                  {copiedItem === 'uid' ? <Check className='size-4 text-emerald-500' /> : <Copy className='size-4' />}
+                  {copiedItem === 'uid' ? <Check className='size-4 text-emerald-500' aria-hidden='true' /> : <Copy className='size-4' aria-hidden='true' />}
                   {`复制 UID:${session.talker_id}`}
                 </MenuItem>
               </MenuPopup>
@@ -292,11 +292,11 @@ function ChatView({
         <div className='p-4'>
           {messagesLoading ? (
             <div className='flex items-center justify-center py-16'>
-              <Spinner className='size-8 text-muted-foreground' />
+              <Spinner className='size-8 text-muted-foreground' aria-hidden='true' />
             </div>
           ) : messages.length === 0 ? (
             <div className='flex flex-col items-center justify-center py-16 text-muted-foreground'>
-              <MessageSquare className='mb-4 size-12 opacity-50' />
+              <MessageSquare className='mb-4 size-12 opacity-50' aria-hidden='true' />
               <p>暂无消息</p>
             </div>
           ) : (
@@ -334,7 +334,7 @@ function EmptyState() {
       {isMacOS && <div className='app-region-drag h-8 flex-none' />}
       <div className='flex flex-1 flex-col items-center justify-center text-muted-foreground'>
         <div className='mb-6 flex size-24 items-center justify-center rounded-3xl bg-linear-to-br from-zinc-100 to-zinc-200 dark:from-zinc-800 dark:to-zinc-900'>
-          <MessageSquare className='size-12 opacity-50' />
+          <MessageSquare className='size-12 opacity-50' aria-hidden='true' />
         </div>
         <p className='font-medium text-lg'>选择一个会话开始聊天</p>
         <p className='text-sm'>从左侧列表中选择一个会话查看消息</p>

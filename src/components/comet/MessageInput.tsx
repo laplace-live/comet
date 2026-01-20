@@ -273,6 +273,7 @@ export function MessageInput({
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder='输入消息…'
+              aria-label='消息内容'
               maxLength={MAX_MESSAGE_LENGTH}
               className='field-sizing-content max-h-32 min-h-0 flex-1 resize-none break-all'
             />
@@ -283,9 +284,9 @@ export function MessageInput({
                 variant='ghost'
                 onClick={handleImageSelect}
                 disabled={sendingMessage}
-                title='发送图片'
+                aria-label='发送图片'
               >
-                <ImagePlus className='size-4' />
+                <ImagePlus className='size-4' aria-hidden='true' />
               </Button>
               {/* Character counter */}
               <span
@@ -302,8 +303,8 @@ export function MessageInput({
               >
                 {inputValue.length}/{MAX_MESSAGE_LENGTH}
               </span>
-              <Button size='icon' onClick={handleSendText} disabled={!inputValue.trim() || sendingMessage}>
-                {sendingMessage ? <Spinner className='size-4' /> : <Send className='size-4' />}
+              <Button size='icon' onClick={handleSendText} disabled={!inputValue.trim() || sendingMessage} aria-label='发送消息'>
+                {sendingMessage ? <Spinner className='size-4' aria-hidden='true' /> : <Send className='size-4' aria-hidden='true' />}
               </Button>
             </InputGroupAddon>
           </InputGroup>

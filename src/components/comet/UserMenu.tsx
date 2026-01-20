@@ -122,9 +122,9 @@ export function UserMenu({
                           {isExpired && <span className='text-amber-500 text-xs'>需重新登录</span>}
                         </div>
                         {isExpired ? (
-                          <RefreshCw className='size-4 text-amber-500' />
+                          <RefreshCw className='size-4 text-amber-500' aria-hidden='true' />
                         ) : isActive ? (
-                          <Check className='size-4 text-primary' />
+                          <Check className='size-4 text-primary' aria-hidden='true' />
                         ) : (
                           shortcutKey !== null && (
                             <MenuShortcut>
@@ -145,7 +145,7 @@ export function UserMenu({
             <>
               <MenuSeparator />
               <MenuItem onClick={onAddAccount}>
-                <Plus className='size-4' />
+                <Plus className='size-4' aria-hidden='true' />
                 添加账号
               </MenuItem>
             </>
@@ -154,12 +154,12 @@ export function UserMenu({
           {/* Settings */}
           <MenuSeparator />
           <MenuItem onClick={openSettings}>
-            <Settings className='size-4' />
+            <Settings className='size-4' aria-hidden='true' />
             设置
             <MenuShortcut>{modifierKey}+,</MenuShortcut>
           </MenuItem>
           <MenuItem onClick={openAbout}>
-            <Info className='size-4' />
+            <Info className='size-4' aria-hidden='true' />
             关于
           </MenuItem>
 
@@ -170,13 +170,13 @@ export function UserMenu({
               onClick={() => onRemoveAccount(userInfo.mid as number)}
               className='text-destructive focus:text-destructive'
             >
-              <Trash2 className='size-4' />
+              <Trash2 className='size-4' aria-hidden='true' />
               移除当前账号
             </MenuItem>
           )}
           {onLogout && (
             <MenuItem onClick={onLogout}>
-              <LogOut className='size-4' />
+              <LogOut className='size-4' aria-hidden='true' />
               退出登录
             </MenuItem>
           )}

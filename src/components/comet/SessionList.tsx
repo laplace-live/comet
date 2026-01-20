@@ -146,7 +146,8 @@ export function SessionList({
           <InputGroup className='flex-1 select-none'>
             <InputGroupInput
               type='search'
-              placeholder='搜索用户名、UID 或内容...'
+              placeholder='搜索用户名、UID 或内容…'
+              aria-label='搜索会话'
               value={filterText}
               onChange={e => setFilterText(e.target.value)}
             />
@@ -156,8 +157,8 @@ export function SessionList({
               </InputGroupText>
 
               {filterText && (
-                <Button variant='ghost' size='icon-xs' onClick={() => setFilterText('')}>
-                  <X />
+                <Button variant='ghost' size='icon-xs' onClick={() => setFilterText('')} aria-label='清除搜索'>
+                  <X aria-hidden='true' />
                 </Button>
               )}
             </InputGroupAddon>
@@ -165,14 +166,14 @@ export function SessionList({
           <Menu>
             <MenuTrigger
               render={
-                <Button variant='ghost' size='icon' disabled={!isConnected}>
-                  <Settings className='size-4' />
+                <Button variant='ghost' size='icon' disabled={!isConnected} aria-label='会话设置'>
+                  <Settings className='size-4' aria-hidden='true' />
                 </Button>
               }
             />
             <MenuPopup align='end'>
               <MenuItem onClick={onRefresh} disabled={loading}>
-                <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} aria-hidden='true' />
                 刷新会话
               </MenuItem>
               <MenuSeparator />
@@ -216,7 +217,7 @@ export function SessionList({
               {/* Sentinel element for infinite scroll - only show when not filtering */}
               {hasMoreSessions && !isFiltering && (
                 <div ref={sentinelRef} className='flex items-center justify-center p-4'>
-                  <Loader2 className='size-5 animate-spin text-muted-foreground' />
+                  <Loader2 className='size-5 animate-spin text-muted-foreground' aria-hidden='true' />
                 </div>
               )}
             </>
@@ -259,7 +260,7 @@ function SessionListSkeleton() {
 function SessionListEmpty() {
   return (
     <div className='flex flex-col items-center justify-center py-16 text-muted-foreground'>
-      <MessageSquare className='mb-4 size-12 opacity-50' />
+      <MessageSquare className='mb-4 size-12 opacity-50' aria-hidden='true' />
       <p>暂无会话</p>
     </div>
   )
@@ -268,7 +269,7 @@ function SessionListEmpty() {
 function SessionListNoResults() {
   return (
     <div className='flex flex-col items-center justify-center py-16 text-muted-foreground'>
-      <Search className='mb-4 size-12 opacity-50' />
+      <Search className='mb-4 size-12 opacity-50' aria-hidden='true' />
       <p>没有找到匹配的会话</p>
     </div>
   )

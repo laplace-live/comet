@@ -59,9 +59,9 @@ export function SessionItem({ session, isSelected, userCache, onClick }: Session
           {avatar && <AvatarImage src={enforceHttps(avatar)} />}
           <AvatarFallback className='bg-linear-to-br from-pink-400 to-orange-300 text-white'>
             {session.session_type === SESSION_TYPE.FAN_GROUP ? (
-              <Users className='size-5' />
+              <Users className='size-5' aria-hidden='true' />
             ) : (
-              <User className='size-5' />
+              <User className='size-5' aria-hidden='true' />
             )}
           </AvatarFallback>
         </Avatar>

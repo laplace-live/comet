@@ -205,7 +205,7 @@ export function AddAccountDialog({ open, onOpenChange, onSuccess, reauthAccount 
           <h2 className='select-none font-semibold text-lg'>{isReauthMode ? '重新登录' : '添加新账号'}</h2>
           {isReauthMode && reauthAccount && (
             <div className='flex items-center gap-2 text-amber-600'>
-              <AlertTriangle className='size-4' />
+              <AlertTriangle className='size-4' aria-hidden='true' />
               <span className='text-sm'>账号「{reauthAccount.uname}」需要重新登录</span>
             </div>
           )}
@@ -213,12 +213,14 @@ export function AddAccountDialog({ open, onOpenChange, onSuccess, reauthAccount 
           {/* QR Code Display */}
           <div className='relative flex size-48 items-center justify-center rounded-xl bg-white p-2 shadow-lg'>
             {status === 'loading' ? (
-              <Spinner className='size-8' />
+              <Spinner className='size-8' aria-hidden='true' />
             ) : qrImageUrl ? (
               <>
                 <img
                   src={qrImageUrl}
                   alt='Login QR Code'
+                  width={176}
+                  height={176}
                   className={`size-full ${status === 'expired' ? 'opacity-30 blur-sm' : ''}`}
                 />
                 {status === 'expired' && (
@@ -232,7 +234,7 @@ export function AddAccountDialog({ open, onOpenChange, onSuccess, reauthAccount 
                 {status === 'waiting_confirm' && (
                   <div className='absolute inset-0 flex items-center justify-center bg-white/80'>
                     <div className='text-center'>
-                      <Spinner className='mx-auto size-8' />
+                      <Spinner className='mx-auto size-8' aria-hidden='true' />
                       <p className='mt-2 text-sm'>等待确认…</p>
                     </div>
                   </div>

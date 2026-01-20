@@ -31,7 +31,7 @@ export function VerifiedBadge({ official, size = 'sm', className = '' }: Verifie
           isOrganization ? 'bg-sky-500 text-white' : 'bg-amber-500 text-white'
         } ${className}`}
       >
-        <BadgeCheck className={iconClasses} />
+        <BadgeCheck className={iconClasses} aria-hidden='true' />
       </TooltipTrigger>
       <TooltipPopup side='right' className='max-w-48'>
         <p className='font-medium'>{isOrganization ? '机构认证' : '个人认证'}</p>

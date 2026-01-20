@@ -150,12 +150,12 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
       <div className='flex flex-1 items-center justify-center p-8'>
         <div className='w-full max-w-md space-y-3'>
           <div className='select-none text-center'>
-            <img src={appLogo} alt='LAPLACE Comet' className='mx-auto mb-2 size-20' />
+            <img src={appLogo} alt='LAPLACE Comet' width={80} height={80} className='mx-auto mb-2 size-20' />
             <h1 className='font-bold font-logo text-3xl tracking-tight'>LAPLACE Comet</h1>
             <Tooltip>
               <TooltipTrigger className='mx-auto flex cursor-help items-center gap-1 text-base text-muted-foreground tracking-tight'>
                 隐私优先的哔哩哔哩私信管理器
-                <HelpCircle className='size-4' />
+                <HelpCircle className='size-4' aria-hidden='true' />
               </TooltipTrigger>
               <TooltipPopup className='max-w-xs'>
                 <ul className='space-y-1 text-left'>
@@ -180,12 +180,14 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
             {/* QR Code Display */}
             <div className='relative flex size-48 items-center justify-center rounded-xl bg-white p-2 shadow-lg'>
               {status === 'loading' ? (
-                <Spinner className='size-8' />
+                <Spinner className='size-8' aria-hidden='true' />
               ) : qrImageUrl ? (
                 <>
                   <img
                     src={qrImageUrl}
                     alt='Login QR Code'
+                    width={176}
+                    height={176}
                     className={`size-full ${status === 'expired' ? 'opacity-30 blur-sm' : ''}`}
                   />
                   {status === 'expired' && (
@@ -199,7 +201,7 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
                   {status === 'waiting_confirm' && (
                     <div className='absolute inset-0 flex items-center justify-center bg-white/80'>
                       <div className='text-center'>
-                        <Spinner className='mx-auto size-8' />
+                        <Spinner className='mx-auto size-8' aria-hidden='true' />
                         <p className='mt-2 text-sm'>等待确认…</p>
                       </div>
                     </div>

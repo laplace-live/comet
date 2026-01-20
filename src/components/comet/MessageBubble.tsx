@@ -582,8 +582,8 @@ function MessageInspector({ message, emojiInfoMap }: { message: BilibiliMessage;
     <Popover>
       <PopoverTrigger
         render={
-          <Button variant='ghost' size='icon-xs'>
-            <Code />
+          <Button variant='ghost' size='icon-xs' aria-label='查看消息源'>
+            <Code aria-hidden='true' />
           </Button>
         }
       />
@@ -747,7 +747,7 @@ export function MessageBubble({
     return (
       <div className='flex justify-center py-1'>
         <div className='flex items-center gap-2 rounded-full border border-amber-500/50 border-dashed bg-amber-50 px-3 py-1 text-amber-700 text-xs dark:bg-amber-950/30 dark:text-amber-400'>
-          <Code className='size-3' />
+          <Code className='size-3' aria-hidden='true' />
           <span>撤回事件 (msg_type: {MSG_TYPE.REVOKE})</span>
         </div>
       </div>
@@ -801,6 +801,7 @@ export function MessageBubble({
       <Menu>
         <MenuTrigger
           nativeButton={false}
+          aria-label='用户菜单'
           render={
             <Avatar className='size-8 flex-none cursor-pointer ring-1 ring-border/50 transition-opacity hover:opacity-80'>
               {avatarUrl && <AvatarImage src={enforceHttps(avatarUrl)} referrerPolicy='no-referrer' />}
@@ -811,7 +812,7 @@ export function MessageBubble({
                     : 'bg-linear-to-br from-pink-400 to-orange-300 text-white'
                 }
               >
-                {isFanGroup && !isSent ? <Users className='size-3.5' /> : <User className='size-3.5' />}
+                {isFanGroup && !isSent ? <Users className='size-3.5' aria-hidden='true' /> : <User className='size-3.5' aria-hidden='true' />}
               </AvatarFallback>
             </Avatar>
           }
@@ -820,7 +821,7 @@ export function MessageBubble({
           {bilibiliSpaceUrl && (
             <a href={bilibiliSpaceUrl} target='_blank' rel='noopener noreferrer'>
               <MenuItem>
-                <ExternalLink />
+                <ExternalLink aria-hidden='true' />
                 个人空间
               </MenuItem>
             </a>
@@ -828,14 +829,14 @@ export function MessageBubble({
           {laplaceUrl && (
             <a href={laplaceUrl} target='_blank' rel='noopener noreferrer'>
               <MenuItem>
-                <ExternalLink />
+                <ExternalLink aria-hidden='true' />
                 LAPLACE Live!
               </MenuItem>
             </a>
           )}
           {isRecallable && onRecall && (
             <MenuItem onClick={handleRecall}>
-              <Undo2 />
+              <Undo2 aria-hidden='true' />
               撤回
             </MenuItem>
           )}
@@ -846,7 +847,7 @@ export function MessageBubble({
         {/* Developer mode indicator for recalled messages */}
         {isRecalledInDevMode && (
           <div className='flex items-center gap-1 text-amber-600 text-xs dark:text-amber-400'>
-            <Undo2 className='size-3' />
+            <Undo2 className='size-3' aria-hidden='true' />
             <span>已撤回</span>
           </div>
         )}
@@ -874,12 +875,12 @@ export function MessageBubble({
           />
           <ContextMenuPopup>
             <ContextMenuItem onClick={handleCopy}>
-              <Copy />
+              <Copy aria-hidden='true' />
               复制
             </ContextMenuItem>
             {isRecallable && onRecall && (
               <ContextMenuItem onClick={handleRecall}>
-                <Undo2 />
+                <Undo2 aria-hidden='true' />
                 撤回
               </ContextMenuItem>
             )}
@@ -900,7 +901,7 @@ export function MessageBubble({
                   : 'bg-zinc-200/50 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400'
               }`}
             >
-              {isAutoReply && <Bot className='size-3' />}
+              {isAutoReply && <Bot className='size-3' aria-hidden='true' />}
               {sourceLabel}
             </span>
           )}
