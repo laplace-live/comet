@@ -14,7 +14,7 @@ A privacy-first desktop application for managing Bilibili private messages. Buil
 
 ## Screenshots
 
-*Coming soon*
+<img width="559" height="791" alt="Screenshot 2026-01-20 at 6 36 40 PM" src="https://github.com/user-attachments/assets/71dc4035-8583-4e61-b438-27cdb89c86a4" />
 
 ## Installation
 
