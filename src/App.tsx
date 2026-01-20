@@ -2,7 +2,11 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { usePrivateMessages } from '@/hooks/usePrivateMessages'
 
-import { AboutDialog, AddAccountDialog, LoginScreen, MessagesPanel, SessionList } from '@/components/comet'
+import { AboutDialog } from '@/components/comet/AboutDialog'
+import { AddAccountDialog } from '@/components/comet/AddAccountDialog'
+import { LoginScreen } from '@/components/comet/LoginScreen'
+import { MessagesPanel } from '@/components/comet/MessagesPanel'
+import { SessionList } from '@/components/comet/SessionList'
 import { ToastProvider } from '@/components/ui/toast'
 
 import { useSettings } from '@/stores/useSettings'
@@ -130,7 +134,7 @@ export default function App() {
 
   const handleLoginSuccess = useCallback(async () => {
     await checkLogin()
-    fetchSessions()
+    await fetchSessions()
   }, [checkLogin, fetchSessions])
 
   // Show loading state while checking initial login
