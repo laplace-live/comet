@@ -5,6 +5,8 @@ import { FusesPlugin } from '@electron-forge/plugin-fuses'
 import { VitePlugin } from '@electron-forge/plugin-vite'
 import type { ForgeConfig } from '@electron-forge/shared-types'
 
+import { UPDATE_BASE_URL } from './src/lib/const'
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
@@ -40,7 +42,12 @@ const config: ForgeConfig = {
       description: 'Privacy-first Bilibili Private Message Manager',
       setupIcon: 'src/assets/icons/installer/icon.ico',
     }),
-    new MakerZIP({}, ['darwin']),
+    new MakerZIP(
+      {
+        macUpdateManifestBaseUrl: UPDATE_BASE_URL,
+      },
+      ['darwin']
+    ),
   ],
   plugins: [
     new VitePlugin({

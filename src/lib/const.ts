@@ -120,4 +120,5 @@ export const MAX_IMAGE_SIZE = 20 * 1024 * 1024
  * Example: 'https://your-bucket.s3.your-region.amazonaws.com/releases'
  * Or with CloudFront: 'https://d1234567890.cloudfront.net/releases'
  */
-export const UPDATE_BASE_URL = 'https://laplace-releases.s3.us-east-1.amazonaws.com/comet'
+// export const UPDATE_BASE_URL = 'https://laplace-releases.s3.us-east-1.amazonaws.com/comet'
+export const UPDATE_BASE_URL = 'https://d1l87ufj4v55s1.cloudfront.net/comet'
