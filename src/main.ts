@@ -98,15 +98,8 @@ ipcMain.handle(IpcChannel.APP_CHECK_FOR_UPDATES, () => {
   }
 
   try {
-    // Check if feed URL is configured
-    const feedUrl = autoUpdater.getFeedURL()
-    if (!feedUrl) {
-      console.error('[AutoUpdater] No feed URL configured')
-      broadcastUpdateStatus({ status: 'error', error: '更新服务未配置' })
-      return { success: false, error: 'No feed URL configured' }
-    }
-
     // Note: autoUpdater.checkForUpdates() will trigger the event listeners above
+    // Feed URL is already configured by updateElectronApp() during initialization
     autoUpdater.checkForUpdates()
     return { success: true }
   } catch (error) {
