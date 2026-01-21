@@ -3,196 +3,35 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 import type { BilibiliCredentials } from './types/bilibili'
-
-// Bilibili API types for the bridge
-export interface FetchSessionsParams {
-  sessionType?: string
-  size?: string
-  endTs?: string
-}
-
-export interface FetchMessagesParams {
-  talkerId: string
-  sessionType?: string
-  size?: string
-}
-
-export interface FetchUsersParams {
-  uids: string
-}
-
-export interface UpdateAckParams {
-  talkerId: string
-  sessionType: string
-  ackSeqno: string
-}
-
-export interface SendMessageParams {
-  receiverId: string
-  receiverType: string
-  msgType: string
-  content: string
-}
-
-export interface UploadImageParams {
-  /** Base64 encoded image data (without data:image/... prefix) */
-  imageData: string
-  /** Image MIME type (e.g., 'image/jpeg', 'image/png') */
-  mimeType: string
-}
-
-export interface UploadImageResult {
-  success: boolean
-  url?: string
-  width?: number
-  height?: number
-  error?: string
-}
-
-export interface QRPollParams {
-  qrcodeKey: string
-  // When true, don't auto-save the account (used during re-auth to validate first)
-  skipSave?: boolean
-}
-
-export interface QRGenerateResult {
-  code: number
-  message?: string
-  data?: {
-    url: string
-    qrcode_key: string
-  }
-  qrImageUrl?: string
-  error?: string
-}
-
-export interface StoredAccountInfo {
-  mid: number
-  uname: string
-  face?: string
-  isExpired?: boolean
-}
-
-export interface QRPollResult {
-  code: number
-  message?: string
-  data?: {
-    url: string
-    refresh_token: string
-    timestamp: number
-    code: number
-    message: string
-  }
-  credentials?: BilibiliCredentials
-  userInfo?: StoredAccountInfo
-  error?: string
-}
-
-export interface GetAccountsResult {
-  accounts: StoredAccountInfo[]
-  activeAccountMid: number | null
-}
-
-export interface SetActiveAccountParams {
-  mid: number
-}
-
-export interface SetActiveAccountResult {
-  success: boolean
-}
-
-export interface RemoveAccountParams {
-  mid: number
-}
-
-export interface RemoveAccountResult {
-  success: boolean
-  remainingAccounts: StoredAccountInfo[]
-  activeAccountMid: number | null
-}
-
-export interface ReauthAccountParams {
-  mid: number
-  credentials: BilibiliCredentials
-}
-
-export interface ReauthAccountResult {
-  success: boolean
-  error?: string
-  actualMid?: number
-  userInfo?: StoredAccountInfo
-}
-
-export interface ReorderAccountsParams {
-  mids: number[]
-}
-
-export interface ReorderAccountsResult {
-  success: boolean
-  accounts: StoredAccountInfo[]
-  activeAccountMid: number | null
-}
-
-export interface CheckLoginResult {
-  isLogin: boolean
-  mid?: number
-  uname?: string
-  face?: string
-  expiredAccountMid?: number
-}
-
-export interface WSStatusResult {
-  connected: boolean
-  authenticated: boolean
-}
-
-export interface NewMessageNotification {
-  talkerId: number
-  sessionType: number
-  msgType?: number
-  latestSeqno?: number
-  instantMsg?: {
-    senderUid: number
-    receiverType: number
-    receiverId: number
-    msgType: number
-    content: string
-    msgSeqno: number
-    timestamp: number
-    msgKey: number
-  }
-}
-
-export interface SessionUpdateNotification {
-  type: 'session_list' | 'total_unread' | 'quick_link' | 'fetch_message'
-  sessionId?: {
-    privateId?: { uid: number }
-    groupId?: { groupId: number }
-    systemId?: { systemMsgType: number }
-  }
-}
-
-export interface ShowNotificationParams {
-  title: string
-  body: string
-  icon?: string
-  talkerId: number
-  sessionType: number
-}
-
-export interface NavigateToSessionParams {
-  talkerId: number
-  sessionType: number
-}
-
-export interface CopyImageParams {
-  imageUrl: string
-}
-
-export interface CopyImageResult {
-  success: boolean
-  error?: string
-}
+import type {
+  CheckLoginResult,
+  CopyImageParams,
+  CopyImageResult,
+  FetchMessagesParams,
+  FetchSessionsParams,
+  FetchUsersParams,
+  GetAccountsResult,
+  NavigateToSessionParams,
+  NewMessageNotification,
+  QRGenerateResult,
+  QRPollParams,
+  QRPollResult,
+  ReauthAccountParams,
+  ReauthAccountResult,
+  RemoveAccountParams,
+  RemoveAccountResult,
+  ReorderAccountsParams,
+  ReorderAccountsResult,
+  SendMessageParams,
+  SessionUpdateNotification,
+  SetActiveAccountParams,
+  SetActiveAccountResult,
+  ShowNotificationParams,
+  UpdateAckParams,
+  UploadImageParams,
+  UploadImageResult,
+  WSStatusResult,
+} from './types/electron'
 
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object

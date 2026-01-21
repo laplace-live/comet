@@ -4,18 +4,11 @@ import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeImage
 import started from 'electron-squirrel-startup'
 import { UpdateSourceType, updateElectronApp } from 'update-electron-app'
 
+import type { ShowNotificationParams } from './types/electron'
+
 import { registerBilibiliIpcHandlers } from './api/bilibili'
 import { cleanupBroadcastWebSocket, initBroadcastWebSocket } from './api/broadcast-websocket'
 import { UPDATE_BASE_URL } from './lib/const'
-
-// Notification params interface
-interface ShowNotificationParams {
-  title: string
-  body: string
-  icon?: string
-  talkerId: number
-  sessionType: number
-}
 
 // https://github.com/electron/forge/issues/3439#issuecomment-3197027877
 const __filename = fileURLToPath(import.meta.url)

@@ -7,6 +7,8 @@ import { BrowserWindow, ipcMain } from 'electron'
 import type protobuf from 'protobufjs'
 import { WebSocket } from 'ws'
 
+import type { NewMessageNotification, SessionUpdateNotification } from '@/types/electron'
+
 import { IGNORED_WS_MSG_TYPES } from '@/types/bilibili'
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, USER_AGENT, WEBSOCKET_CONFIG } from '@/lib/const'
@@ -33,33 +35,6 @@ export interface BroadcastWebSocketConfig {
   onConnected?: () => void
   onDisconnected?: () => void
   onError?: (error: Error) => void
-}
-
-export interface NewMessageNotification {
-  talkerId: number
-  sessionType: number
-  msgType?: number
-  latestSeqno?: number
-  instantMsg?: {
-    senderUid: number
-    receiverType: number
-    receiverId: number
-    msgType: number
-    content: string
-    msgSeqno: number
-    timestamp: number
-    // msgKey is stored as string to preserve precision for large integers
-    msgKey: string
-  }
-}
-
-export interface SessionUpdateNotification {
-  type: 'session_list' | 'total_unread' | 'quick_link' | 'fetch_message'
-  sessionId?: {
-    privateId?: { uid: number }
-    groupId?: { groupId: number }
-    systemId?: { systemMsgType: number }
-  }
 }
 
 export class BroadcastWebSocketManager {
