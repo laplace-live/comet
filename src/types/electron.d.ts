@@ -234,14 +234,7 @@ export interface CopyImageResult {
 }
 
 // Update status types
-export type UpdateStatus =
-  | 'idle'
-  | 'checking'
-  | 'available'
-  | 'not-available'
-  | 'downloading'
-  | 'downloaded'
-  | 'error'
+export type UpdateStatus = 'idle' | 'checking' | 'available' | 'not-available' | 'downloaded' | 'error'
 
 export interface UpdateStatusInfo {
   status: UpdateStatus

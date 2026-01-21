@@ -40,8 +40,6 @@ export function AboutDialog() {
         return '正在检查更新...'
       case 'available':
         return '有新版本可用，正在下载...'
-      case 'downloading':
-        return '正在下载更新...'
       case 'downloaded':
         return updateStatus.version ? `新版本 ${updateStatus.version} 已下载，重启后生效` : '更新已下载，重启后生效'
       case 'not-available':
