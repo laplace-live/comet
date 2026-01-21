@@ -15,6 +15,7 @@ import type {
 } from '@/types/bilibili'
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, getImageExtension, USER_AGENT } from '@/lib/const'
+import { IpcChannel } from '@/lib/ipc'
 
 /**
  * Preserve large integer fields as strings in JSON response text.
@@ -261,7 +262,7 @@ export function cookieStringFromCredentials(credentials: BilibiliCredentials): s
 
 export function registerBilibiliIpcHandlers() {
   // Generate QR code for login
-  ipcMain.handle('bilibili:qr-generate', async () => {
+  ipcMain.handle(IpcChannel.BILIBILI_QR_GENERATE, async () => {
     try {
       const resp = await fetch(BILIBILI_ENDPOINTS.QR_GENERATE, {
         headers: {
@@ -292,7 +293,7 @@ export function registerBilibiliIpcHandlers() {
 
   // Poll QR code login status
   // skipSave: when true, don't auto-save the account (used during re-auth to validate first)
-  ipcMain.handle('bilibili:qr-poll', async (_event, params: { qrcodeKey: string; skipSave?: boolean }) => {
+  ipcMain.handle(IpcChannel.BILIBILI_QR_POLL, async (_event, params: { qrcodeKey: string; skipSave?: boolean }) => {
     const { qrcodeKey, skipSave } = params
 
     if (!qrcodeKey) {
@@ -377,12 +378,12 @@ export function registerBilibiliIpcHandlers() {
   })
 
   // Get stored credentials
-  ipcMain.handle('bilibili:get-credentials', () => {
+  ipcMain.handle(IpcChannel.BILIBILI_GET_CREDENTIALS, () => {
     return getCredentials()
   })
 
   // Logout current account (removes only the active account)
-  ipcMain.handle('bilibili:logout', () => {
+  ipcMain.handle(IpcChannel.BILIBILI_LOGOUT, () => {
     const activeAccountMid = getActiveAccountMid()
     if (activeAccountMid) {
       removeAccount(activeAccountMid)
@@ -392,7 +393,7 @@ export function registerBilibiliIpcHandlers() {
 
   // Check if credentials are valid
   // This function validates the active account and automatically tries the next account if expired
-  ipcMain.handle('bilibili:check-login', async () => {
+  ipcMain.handle(IpcChannel.BILIBILI_CHECK_LOGIN, async () => {
     // Helper function to check a specific account's credentials
     const checkAccountCredentials = async (
       credentials: BilibiliCredentials
@@ -471,7 +472,7 @@ export function registerBilibiliIpcHandlers() {
   })
 
   // Get all stored accounts (for account switcher UI)
-  ipcMain.handle('bilibili:get-accounts', () => {
+  ipcMain.handle(IpcChannel.BILIBILI_GET_ACCOUNTS, () => {
     const accounts = getAccounts()
     const activeAccountMid = getActiveAccountMid()
 
@@ -488,14 +489,14 @@ export function registerBilibiliIpcHandlers() {
   })
 
   // Switch to a different account
-  ipcMain.handle('bilibili:set-active-account', (_event, params: { mid: number }) => {
+  ipcMain.handle(IpcChannel.BILIBILI_SET_ACTIVE_ACCOUNT, (_event, params: { mid: number }) => {
     const { mid } = params
     const success = setActiveAccount(mid)
     return { success }
   })
 
   // Remove an account
-  ipcMain.handle('bilibili:remove-account', (_event, params: { mid: number }) => {
+  ipcMain.handle(IpcChannel.BILIBILI_REMOVE_ACCOUNT, (_event, params: { mid: number }) => {
     const { mid } = params
     const success = removeAccount(mid)
     const accounts = getAccounts()
@@ -514,7 +515,7 @@ export function registerBilibiliIpcHandlers() {
   })
 
   // Reorder accounts (for keyboard shortcut ordering)
-  ipcMain.handle('bilibili:reorder-accounts', (_event, params: { mids: number[] }) => {
+  ipcMain.handle(IpcChannel.BILIBILI_REORDER_ACCOUNTS, (_event, params: { mids: number[] }) => {
     const { mids } = params
     const success = reorderAccounts(mids)
     const accounts = getAccounts()
@@ -534,7 +535,7 @@ export function registerBilibiliIpcHandlers() {
 
   // Re-authenticate an expired account (update credentials for existing account)
   ipcMain.handle(
-    'bilibili:reauth-account',
+    IpcChannel.BILIBILI_REAUTH_ACCOUNT,
     async (_event, params: { mid: number; credentials: BilibiliCredentials }) => {
       const { mid, credentials } = params
       const accounts = getAccounts()
@@ -586,7 +587,7 @@ export function registerBilibiliIpcHandlers() {
   // Note: msg_key values in last_msg are large integers that exceed JavaScript's Number.MAX_SAFE_INTEGER
   // We preserve them as strings by using a custom JSON parsing approach
   ipcMain.handle(
-    'bilibili:fetch-sessions',
+    IpcChannel.BILIBILI_FETCH_SESSIONS,
     async (
       _event,
       params: {
@@ -646,7 +647,7 @@ export function registerBilibiliIpcHandlers() {
   // Note: msg_key values are large integers that exceed JavaScript's Number.MAX_SAFE_INTEGER
   // We preserve them as strings by using a custom JSON parsing approach
   ipcMain.handle(
-    'bilibili:fetch-messages',
+    IpcChannel.BILIBILI_FETCH_MESSAGES,
     async (
       _event,
       params: {
@@ -714,7 +715,7 @@ export function registerBilibiliIpcHandlers() {
 
   // Fetch user info batch
   ipcMain.handle(
-    'bilibili:fetch-users',
+    IpcChannel.BILIBILI_FETCH_USERS,
     async (
       _event,
       params: {
@@ -763,7 +764,7 @@ export function registerBilibiliIpcHandlers() {
 
   // Send message
   ipcMain.handle(
-    'bilibili:send-message',
+    IpcChannel.BILIBILI_SEND_MESSAGE,
     async (
       _event,
       params: {
@@ -842,7 +843,7 @@ export function registerBilibiliIpcHandlers() {
 
   // Mark session as read
   ipcMain.handle(
-    'bilibili:update-ack',
+    IpcChannel.BILIBILI_UPDATE_ACK,
     async (
       _event,
       params: {
@@ -902,7 +903,7 @@ export function registerBilibiliIpcHandlers() {
 
   // Upload image to Bilibili CDN
   ipcMain.handle(
-    'bilibili:upload-image',
+    IpcChannel.BILIBILI_UPLOAD_IMAGE,
     async (
       _event,
       params: {

@@ -12,6 +12,7 @@ import type { NewMessageNotification, SessionUpdateNotification } from '@/types/
 import { IGNORED_WS_MSG_TYPES } from '@/types/bilibili'
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, USER_AGENT, WEBSOCKET_CONFIG } from '@/lib/const'
+import { IpcChannel, IpcEvent } from '@/lib/ipc'
 
 import { cookieStringFromCredentials, getCredentials } from '@/api/bilibili'
 import { getMessageType, MessageTypes, TargetPaths } from '@/proto/broadcast'
@@ -492,32 +493,32 @@ export function getBroadcastWebSocketManager(): BroadcastWebSocketManager | null
  */
 export function initBroadcastWebSocket(): void {
   // Handler to connect WebSocket
-  ipcMain.handle('bilibili:ws-connect', () => {
+  ipcMain.handle(IpcChannel.BILIBILI_WS_CONNECT, () => {
     if (!wsManager) {
       wsManager = new BroadcastWebSocketManager({
         onNewMessage: notification => {
           // Send notification to all renderer windows
           const windows = BrowserWindow.getAllWindows()
           for (const win of windows) {
-            win.webContents.send('bilibili:new-message', notification)
+            win.webContents.send(IpcEvent.BILIBILI_NEW_MESSAGE, notification)
           }
         },
         onSessionUpdate: notification => {
           const windows = BrowserWindow.getAllWindows()
           for (const win of windows) {
-            win.webContents.send('bilibili:session-update', notification)
+            win.webContents.send(IpcEvent.BILIBILI_SESSION_UPDATE, notification)
           }
         },
         onConnected: () => {
           const windows = BrowserWindow.getAllWindows()
           for (const win of windows) {
-            win.webContents.send('bilibili:ws-connected')
+            win.webContents.send(IpcEvent.BILIBILI_WS_CONNECTED)
           }
         },
         onDisconnected: () => {
           const windows = BrowserWindow.getAllWindows()
           for (const win of windows) {
-            win.webContents.send('bilibili:ws-disconnected')
+            win.webContents.send(IpcEvent.BILIBILI_WS_DISCONNECTED)
           }
         },
         onError: error => {
@@ -531,7 +532,7 @@ export function initBroadcastWebSocket(): void {
   })
 
   // Handler to disconnect WebSocket
-  ipcMain.handle('bilibili:ws-disconnect', () => {
+  ipcMain.handle(IpcChannel.BILIBILI_WS_DISCONNECT, () => {
     if (wsManager) {
       wsManager.disconnect()
     }
@@ -539,7 +540,7 @@ export function initBroadcastWebSocket(): void {
   })
 
   // Handler to get WebSocket status
-  ipcMain.handle('bilibili:ws-status', () => {
+  ipcMain.handle(IpcChannel.BILIBILI_WS_STATUS, () => {
     if (!wsManager) {
       return { connected: false, authenticated: false }
     }

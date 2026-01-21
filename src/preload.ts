@@ -33,6 +33,8 @@ import type {
   WSStatusResult,
 } from './types/electron'
 
+import { IpcChannel, IpcEvent } from './lib/ipc'
+
 // Expose protected methods that allow the renderer process to use
 // the ipcRenderer without exposing the entire object
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -40,85 +42,85 @@ contextBridge.exposeInMainWorld('electronAPI', {
   platform: process.platform,
 
   // App info
-  getVersion: (): Promise<string> => ipcRenderer.invoke('app:get-version'),
+  getVersion: (): Promise<string> => ipcRenderer.invoke(IpcChannel.APP_GET_VERSION),
 
   // Badge count (macOS dock badge / Windows taskbar overlay)
   setBadgeCount: (count: number): Promise<{ success: boolean; reason?: string }> =>
-    ipcRenderer.invoke('app:set-badge-count', count),
+    ipcRenderer.invoke(IpcChannel.APP_SET_BADGE_COUNT, count),
 
   bilibili: {
     // QR Code Login
-    qrGenerate: (): Promise<QRGenerateResult> => ipcRenderer.invoke('bilibili:qr-generate'),
-    qrPoll: (params: QRPollParams): Promise<QRPollResult> => ipcRenderer.invoke('bilibili:qr-poll', params),
-    getCredentials: (): Promise<BilibiliCredentials | null> => ipcRenderer.invoke('bilibili:get-credentials'),
-    logout: (): Promise<{ success: boolean }> => ipcRenderer.invoke('bilibili:logout'),
-    checkLogin: (): Promise<CheckLoginResult> => ipcRenderer.invoke('bilibili:check-login'),
+    qrGenerate: (): Promise<QRGenerateResult> => ipcRenderer.invoke(IpcChannel.BILIBILI_QR_GENERATE),
+    qrPoll: (params: QRPollParams): Promise<QRPollResult> => ipcRenderer.invoke(IpcChannel.BILIBILI_QR_POLL, params),
+    getCredentials: (): Promise<BilibiliCredentials | null> => ipcRenderer.invoke(IpcChannel.BILIBILI_GET_CREDENTIALS),
+    logout: (): Promise<{ success: boolean }> => ipcRenderer.invoke(IpcChannel.BILIBILI_LOGOUT),
+    checkLogin: (): Promise<CheckLoginResult> => ipcRenderer.invoke(IpcChannel.BILIBILI_CHECK_LOGIN),
 
     // Multi-account management
-    getAccounts: (): Promise<GetAccountsResult> => ipcRenderer.invoke('bilibili:get-accounts'),
+    getAccounts: (): Promise<GetAccountsResult> => ipcRenderer.invoke(IpcChannel.BILIBILI_GET_ACCOUNTS),
     setActiveAccount: (params: SetActiveAccountParams): Promise<SetActiveAccountResult> =>
-      ipcRenderer.invoke('bilibili:set-active-account', params),
+      ipcRenderer.invoke(IpcChannel.BILIBILI_SET_ACTIVE_ACCOUNT, params),
     removeAccount: (params: RemoveAccountParams): Promise<RemoveAccountResult> =>
-      ipcRenderer.invoke('bilibili:remove-account', params),
+      ipcRenderer.invoke(IpcChannel.BILIBILI_REMOVE_ACCOUNT, params),
     reauthAccount: (params: ReauthAccountParams): Promise<ReauthAccountResult> =>
-      ipcRenderer.invoke('bilibili:reauth-account', params),
+      ipcRenderer.invoke(IpcChannel.BILIBILI_REAUTH_ACCOUNT, params),
     reorderAccounts: (params: ReorderAccountsParams): Promise<ReorderAccountsResult> =>
-      ipcRenderer.invoke('bilibili:reorder-accounts', params),
+      ipcRenderer.invoke(IpcChannel.BILIBILI_REORDER_ACCOUNTS, params),
 
     // Data fetching
-    fetchSessions: (params: FetchSessionsParams) => ipcRenderer.invoke('bilibili:fetch-sessions', params),
-    fetchMessages: (params: FetchMessagesParams) => ipcRenderer.invoke('bilibili:fetch-messages', params),
-    fetchUsers: (params: FetchUsersParams) => ipcRenderer.invoke('bilibili:fetch-users', params),
+    fetchSessions: (params: FetchSessionsParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_SESSIONS, params),
+    fetchMessages: (params: FetchMessagesParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_MESSAGES, params),
+    fetchUsers: (params: FetchUsersParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_USERS, params),
 
     // Actions
-    updateAck: (params: UpdateAckParams) => ipcRenderer.invoke('bilibili:update-ack', params),
-    sendMessage: (params: SendMessageParams) => ipcRenderer.invoke('bilibili:send-message', params),
+    updateAck: (params: UpdateAckParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_UPDATE_ACK, params),
+    sendMessage: (params: SendMessageParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_SEND_MESSAGE, params),
     uploadImage: (params: UploadImageParams): Promise<UploadImageResult> =>
-      ipcRenderer.invoke('bilibili:upload-image', params),
+      ipcRenderer.invoke(IpcChannel.BILIBILI_UPLOAD_IMAGE, params),
 
     // WebSocket for real-time notifications
-    wsConnect: (): Promise<{ success: boolean }> => ipcRenderer.invoke('bilibili:ws-connect'),
-    wsDisconnect: (): Promise<{ success: boolean }> => ipcRenderer.invoke('bilibili:ws-disconnect'),
-    wsStatus: (): Promise<WSStatusResult> => ipcRenderer.invoke('bilibili:ws-status'),
+    wsConnect: (): Promise<{ success: boolean }> => ipcRenderer.invoke(IpcChannel.BILIBILI_WS_CONNECT),
+    wsDisconnect: (): Promise<{ success: boolean }> => ipcRenderer.invoke(IpcChannel.BILIBILI_WS_DISCONNECT),
+    wsStatus: (): Promise<WSStatusResult> => ipcRenderer.invoke(IpcChannel.BILIBILI_WS_STATUS),
 
     // Event listeners for real-time notifications
     onNewMessage: (callback: (notification: NewMessageNotification) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, notification: NewMessageNotification) => {
         callback(notification)
       }
-      ipcRenderer.on('bilibili:new-message', listener)
+      ipcRenderer.on(IpcEvent.BILIBILI_NEW_MESSAGE, listener)
       // Return cleanup function
       return () => {
-        ipcRenderer.removeListener('bilibili:new-message', listener)
+        ipcRenderer.removeListener(IpcEvent.BILIBILI_NEW_MESSAGE, listener)
       }
     },
     onSessionUpdate: (callback: (notification: SessionUpdateNotification) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, notification: SessionUpdateNotification) => {
         callback(notification)
       }
-      ipcRenderer.on('bilibili:session-update', listener)
+      ipcRenderer.on(IpcEvent.BILIBILI_SESSION_UPDATE, listener)
       return () => {
-        ipcRenderer.removeListener('bilibili:session-update', listener)
+        ipcRenderer.removeListener(IpcEvent.BILIBILI_SESSION_UPDATE, listener)
       }
     },
     onWsConnected: (callback: () => void) => {
       const listener = () => callback()
-      ipcRenderer.on('bilibili:ws-connected', listener)
+      ipcRenderer.on(IpcEvent.BILIBILI_WS_CONNECTED, listener)
       return () => {
-        ipcRenderer.removeListener('bilibili:ws-connected', listener)
+        ipcRenderer.removeListener(IpcEvent.BILIBILI_WS_CONNECTED, listener)
       }
     },
     onWsDisconnected: (callback: () => void) => {
       const listener = () => callback()
-      ipcRenderer.on('bilibili:ws-disconnected', listener)
+      ipcRenderer.on(IpcEvent.BILIBILI_WS_DISCONNECTED, listener)
       return () => {
-        ipcRenderer.removeListener('bilibili:ws-disconnected', listener)
+        ipcRenderer.removeListener(IpcEvent.BILIBILI_WS_DISCONNECTED, listener)
       }
     },
 
     // System notifications
     showNotification: (params: ShowNotificationParams): Promise<{ shown: boolean; reason?: string }> =>
-      ipcRenderer.invoke('show-notification', params),
+      ipcRenderer.invoke(IpcChannel.SHOW_NOTIFICATION, params),
 
     // Navigation event listener (for notification clicks)
     onNavigateToSession: (callback: (params: NavigateToSessionParams) => void) => {
@@ -126,10 +128,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
         console.log('[Preload] Navigate to session event received:', params)
         callback(params)
       }
-      ipcRenderer.on('bilibili:navigate-to-session', listener)
+      ipcRenderer.on(IpcEvent.BILIBILI_NAVIGATE_TO_SESSION, listener)
       console.log('[Preload] Navigation listener registered')
       return () => {
-        ipcRenderer.removeListener('bilibili:navigate-to-session', listener)
+        ipcRenderer.removeListener(IpcEvent.BILIBILI_NAVIGATE_TO_SESSION, listener)
       }
     },
   },
@@ -137,22 +139,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Clipboard utilities
   clipboard: {
     copyImage: (params: CopyImageParams): Promise<CopyImageResult> =>
-      ipcRenderer.invoke('clipboard:copy-image', params),
+      ipcRenderer.invoke(IpcChannel.CLIPBOARD_COPY_IMAGE, params),
   },
 
   // App menu event listeners
   onOpenAbout: (callback: () => void) => {
     const listener = () => callback()
-    ipcRenderer.on('app:open-about', listener)
+    ipcRenderer.on(IpcEvent.APP_OPEN_ABOUT, listener)
     return () => {
-      ipcRenderer.removeListener('app:open-about', listener)
+      ipcRenderer.removeListener(IpcEvent.APP_OPEN_ABOUT, listener)
     }
   },
   onOpenSettings: (callback: () => void) => {
     const listener = () => callback()
-    ipcRenderer.on('app:open-settings', listener)
+    ipcRenderer.on(IpcEvent.APP_OPEN_SETTINGS, listener)
     return () => {
-      ipcRenderer.removeListener('app:open-settings', listener)
+      ipcRenderer.removeListener(IpcEvent.APP_OPEN_SETTINGS, listener)
     }
   },
 })

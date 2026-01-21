@@ -9,6 +9,7 @@ import type { ShowNotificationParams } from './types/electron'
 import { registerBilibiliIpcHandlers } from './api/bilibili'
 import { cleanupBroadcastWebSocket, initBroadcastWebSocket } from './api/broadcast-websocket'
 import { UPDATE_BASE_URL } from './lib/const'
+import { IpcChannel, IpcEvent } from './lib/ipc'
 
 // https://github.com/electron/forge/issues/3439#issuecomment-3197027877
 const __filename = fileURLToPath(import.meta.url)
@@ -55,7 +56,7 @@ registerBilibiliIpcHandlers()
 initBroadcastWebSocket()
 
 // App info IPC handler
-ipcMain.handle('app:get-version', () => app.getVersion())
+ipcMain.handle(IpcChannel.APP_GET_VERSION, () => app.getVersion())
 
 // Helper to fetch image from URL and convert to NativeImage
 async function fetchImageAsNativeImage(url: string): Promise<Electron.NativeImage | undefined> {
@@ -76,7 +77,7 @@ async function fetchImageAsNativeImage(url: string): Promise<Electron.NativeImag
 const activeNotifications = new Set<Notification>()
 
 // Register notification IPC handler
-ipcMain.handle('show-notification', async (_event, params: ShowNotificationParams) => {
+ipcMain.handle(IpcChannel.SHOW_NOTIFICATION, async (_event, params: ShowNotificationParams) => {
   // Check if any window is focused - only show notification if window is not focused
   const windows = BrowserWindow.getAllWindows()
   const anyWindowFocused = windows.some(win => win.isFocused())
@@ -139,7 +140,7 @@ ipcMain.handle('show-notification', async (_event, params: ShowNotificationParam
       }
 
       // Send event to renderer to navigate to the session
-      mainWindow.webContents.send('bilibili:navigate-to-session', {
+      mainWindow.webContents.send(IpcEvent.BILIBILI_NAVIGATE_TO_SESSION, {
         talkerId: params.talkerId,
         sessionType: params.sessionType,
       })
@@ -183,7 +184,7 @@ function createBadgeIcon(count: number): Electron.NativeImage {
 }
 
 // Badge count IPC handler (macOS dock badge / Windows taskbar overlay)
-ipcMain.handle('app:set-badge-count', (_event, count: number) => {
+ipcMain.handle(IpcChannel.APP_SET_BADGE_COUNT, (_event, count: number) => {
   if (process.platform === 'darwin') {
     // On macOS, setBadge takes a string - empty string clears the badge
     app.dock?.setBadge(count > 0 ? String(count) : '')
@@ -217,7 +218,7 @@ interface CopyImageParams {
   imageUrl: string
 }
 
-ipcMain.handle('clipboard:copy-image', async (_event, params: CopyImageParams) => {
+ipcMain.handle(IpcChannel.CLIPBOARD_COPY_IMAGE, async (_event, params: CopyImageParams) => {
   try {
     const response = await fetch(params.imageUrl)
     if (!response.ok) {
@@ -286,7 +287,7 @@ const createApplicationMenu = () => {
                 click: () => {
                   const focusedWindow = BrowserWindow.getFocusedWindow()
                   if (focusedWindow) {
-                    focusedWindow.webContents.send('app:open-about')
+                    focusedWindow.webContents.send(IpcEvent.APP_OPEN_ABOUT)
                   }
                 },
               },
@@ -297,7 +298,7 @@ const createApplicationMenu = () => {
                 click: () => {
                   const focusedWindow = BrowserWindow.getFocusedWindow()
                   if (focusedWindow) {
-                    focusedWindow.webContents.send('app:open-settings')
+                    focusedWindow.webContents.send(IpcEvent.APP_OPEN_SETTINGS)
                   }
                 },
               },
