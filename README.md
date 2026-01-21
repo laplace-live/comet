@@ -18,13 +18,36 @@ A privacy-first desktop application for managing Bilibili private messages. Buil
 
 ## Installation
 
-### Pre-built Releases
+### Stable Releases
 
-Download the latest release for your platform from the [Releases](https://github.com/laplace/laplace-comet/releases) page:
+> [!IMPORTANT]
+> All stable releases are signed and notarized. Do not download or run these from untrusted sources. If your system prompts that the app is from unknown sources without a signature, remove it immediately and report in our Discord.
+>
+> 所有稳定版本均已签名和公证。请勿从不受信任的来源下载或安装。如果系统提示该应用来自未知来源且未签名，请立即删除并在我们的 Discord 中报告。
 
-- **Windows**: `.exe` installer (Squirrel)
-- **macOS**: `.zip` (signed and notarized)
-- **Linux**: `.deb` or `.rpm` packages
+Download the latest stable version from our GitHub releases:
+
+[📦 Download Latest Release](https://github.com/laplace-live/comet/releases/latest)
+
+Available for:
+
+- **macOS**: `*.darwin-arm64-*.zip` package for Apple Silicon Macs
+- **Windows**: `*.Setup.exe` installer for 64-bit systems
+
+### Nightly Builds
+
+Get the latest development builds with cutting-edge features:
+
+[🌙 Download Nightly Builds](https://github.com/laplace-live/comet/actions)
+
+1. Click on the latest workflow run with a ✅ status
+2. Scroll down to "Artifacts" section
+3. Download the build for your platform
+
+> [!CAUTION]
+> Nightly builds are automatically generated from the latest code and may contain experimental features or bugs. Use stable releases for production streaming.
+>
+> All nightly builds are not signed or notarized.
 
 ### Build from Source
 
@@ -37,7 +60,7 @@ Download the latest release for your platform from the [Releases](https://github
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/laplace/laplace-comet.git
+   git clone https://github.com/laplace/laplace-comet
    cd laplace-comet
    ```
 
