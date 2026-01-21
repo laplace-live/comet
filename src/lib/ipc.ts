@@ -13,6 +13,7 @@ import type {
   BilibiliUserCardsResponse,
 } from '@/types/bilibili'
 import type {
+  CheckForUpdatesResult,
   CheckLoginResult,
   CopyImageParams,
   CopyImageResult,
@@ -39,6 +40,7 @@ import type {
   ShowNotificationParams,
   UpdateAckParams,
   UpdateAckResponse,
+  UpdateStatusInfo,
   UploadImageParams,
   UploadImageResult,
   WSStatusResult,
@@ -52,6 +54,7 @@ export const IpcChannel = {
   // App
   APP_GET_VERSION: 'app:get-version',
   APP_SET_BADGE_COUNT: 'app:set-badge-count',
+  APP_CHECK_FOR_UPDATES: 'app:check-for-updates',
 
   // Notifications
   SHOW_NOTIFICATION: 'show-notification',
@@ -97,6 +100,7 @@ export const IpcEvent = {
   // App menu events
   APP_OPEN_ABOUT: 'app:open-about',
   APP_OPEN_SETTINGS: 'app:open-settings',
+  APP_UPDATE_STATUS: 'app:update-status',
 
   // Bilibili real-time events
   BILIBILI_NEW_MESSAGE: 'bilibili:new-message',
@@ -123,6 +127,10 @@ export interface IpcInvokeContract {
   [IpcChannel.APP_SET_BADGE_COUNT]: {
     params: number
     result: { success: boolean; reason?: string }
+  }
+  [IpcChannel.APP_CHECK_FOR_UPDATES]: {
+    params: undefined
+    result: CheckForUpdatesResult
   }
 
   // Notifications
@@ -231,6 +239,7 @@ export interface IpcInvokeContract {
 export interface IpcEventContract {
   [IpcEvent.APP_OPEN_ABOUT]: undefined
   [IpcEvent.APP_OPEN_SETTINGS]: undefined
+  [IpcEvent.APP_UPDATE_STATUS]: UpdateStatusInfo
   [IpcEvent.BILIBILI_NEW_MESSAGE]: NewMessageNotification
   [IpcEvent.BILIBILI_SESSION_UPDATE]: SessionUpdateNotification
   [IpcEvent.BILIBILI_WS_CONNECTED]: undefined

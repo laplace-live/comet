@@ -233,6 +233,27 @@ export interface CopyImageResult {
   error?: string
 }
 
+// Update status types
+export type UpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'not-available'
+  | 'downloading'
+  | 'downloaded'
+  | 'error'
+
+export interface UpdateStatusInfo {
+  status: UpdateStatus
+  version?: string
+  error?: string
+}
+
+export interface CheckForUpdatesResult {
+  success: boolean
+  error?: string
+}
+
 export interface ElectronAPI {
   // Platform detection for OS-specific UI adjustments (e.g., 'darwin', 'win32', 'linux')
   platform: NodeJS.Platform
@@ -292,6 +313,10 @@ export interface ElectronAPI {
   // App menu event listeners (return cleanup function)
   onOpenAbout: (callback: () => void) => () => void
   onOpenSettings: (callback: () => void) => () => void
+
+  // Update management
+  checkForUpdates: () => Promise<CheckForUpdatesResult>
+  onUpdateStatus: (callback: (status: UpdateStatusInfo) => void) => () => void
 }
 
 declare global {
