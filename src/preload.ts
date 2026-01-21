@@ -4,6 +4,7 @@ import { contextBridge, ipcRenderer } from 'electron'
 
 import type { BilibiliCredentials } from './types/bilibili'
 import type {
+  CheckForUpdatesResult,
   CheckLoginResult,
   CopyImageParams,
   CopyImageResult,
@@ -28,6 +29,7 @@ import type {
   SetActiveAccountResult,
   ShowNotificationParams,
   UpdateAckParams,
+  UpdateStatusInfo,
   UploadImageParams,
   UploadImageResult,
   WSStatusResult,
@@ -155,6 +157,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on(IpcEvent.APP_OPEN_SETTINGS, listener)
     return () => {
       ipcRenderer.removeListener(IpcEvent.APP_OPEN_SETTINGS, listener)
+    }
+  },
+
+  // Update management
+  checkForUpdates: (): Promise<CheckForUpdatesResult> => ipcRenderer.invoke(IpcChannel.APP_CHECK_FOR_UPDATES),
+  onUpdateStatus: (callback: (status: UpdateStatusInfo) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, status: UpdateStatusInfo) => {
+      callback(status)
+    }
+    ipcRenderer.on(IpcEvent.APP_UPDATE_STATUS, listener)
+    return () => {
+      ipcRenderer.removeListener(IpcEvent.APP_UPDATE_STATUS, listener)
     }
   },
 })

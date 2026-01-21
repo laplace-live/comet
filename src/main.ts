@@ -1,10 +1,10 @@
 import path, { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { app, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeImage, shell } from 'electron'
+import { app, autoUpdater, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeImage, shell } from 'electron'
 import started from 'electron-squirrel-startup'
 import { UpdateSourceType, updateElectronApp } from 'update-electron-app'
 
-import type { ShowNotificationParams } from './types/electron'
+import type { ShowNotificationParams, UpdateStatusInfo } from './types/electron'
 
 import { registerBilibiliIpcHandlers } from './api/bilibili'
 import { cleanupBroadcastWebSocket, initBroadcastWebSocket } from './api/broadcast-websocket'
@@ -33,6 +33,36 @@ updateElectronApp({
   logger: console,
 })
 
+// Helper to broadcast update status to all windows
+function broadcastUpdateStatus(status: UpdateStatusInfo) {
+  const windows = BrowserWindow.getAllWindows()
+  for (const win of windows) {
+    win.webContents.send(IpcEvent.APP_UPDATE_STATUS, status)
+  }
+  console.log('[AutoUpdater] Status:', status.status, status.version || '', status.error || '')
+}
+
+// Set up autoUpdater event listeners for tracking update status
+autoUpdater.on('checking-for-update', () => {
+  broadcastUpdateStatus({ status: 'checking' })
+})
+
+autoUpdater.on('update-available', () => {
+  broadcastUpdateStatus({ status: 'available' })
+})
+
+autoUpdater.on('update-not-available', () => {
+  broadcastUpdateStatus({ status: 'not-available' })
+})
+
+autoUpdater.on('error', (error: Error) => {
+  broadcastUpdateStatus({ status: 'error', error: error.message })
+})
+
+autoUpdater.on('update-downloaded', (_event, _releaseNotes, releaseName) => {
+  broadcastUpdateStatus({ status: 'downloaded', version: releaseName || undefined })
+})
+
 // Set AppUserModelId for Windows - required for proper notification behavior
 // This must match the Squirrel installer name for notifications to work correctly
 if (process.platform === 'win32') {
@@ -57,6 +87,28 @@ initBroadcastWebSocket()
 
 // App info IPC handler
 ipcMain.handle(IpcChannel.APP_GET_VERSION, () => app.getVersion())
+
+// Check for updates IPC handler
+ipcMain.handle(IpcChannel.APP_CHECK_FOR_UPDATES, () => {
+  // In development mode, autoUpdater doesn't work
+  if (!app.isPackaged) {
+    console.log('[AutoUpdater] Skipping update check in development mode')
+    broadcastUpdateStatus({ status: 'error', error: '开发模式下无法检查更新' })
+    return { success: false, error: 'Development mode' }
+  }
+
+  try {
+    // Note: autoUpdater.checkForUpdates() will trigger the event listeners above
+    // Feed URL is already configured by updateElectronApp() during initialization
+    autoUpdater.checkForUpdates()
+    return { success: true }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error'
+    console.error('[AutoUpdater] Check for updates failed:', message)
+    broadcastUpdateStatus({ status: 'error', error: message })
+    return { success: false, error: message }
+  }
+})
 
 // Helper to fetch image from URL and convert to NativeImage
 async function fetchImageAsNativeImage(url: string): Promise<Electron.NativeImage | undefined> {
