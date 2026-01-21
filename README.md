@@ -45,7 +45,7 @@ Get the latest development builds with cutting-edge features:
 3. Download the build for your platform
 
 > [!CAUTION]
-> Nightly builds are automatically generated from the latest code and may contain experimental features or bugs. Use stable releases for production streaming.
+> Nightly builds are automatically generated from the latest code and may contain experimental features or bugs. Use stable releases for production.
 >
 > All nightly builds are not signed or notarized.
 
