@@ -31,8 +31,8 @@ pnpm generate-icons # Generate app icons (uses bun)
 - `src/components/ui/` - Base UI components (headless, Tailwind-styled)
 - `src/hooks/` - React hooks, notably `usePrivateMessages.ts` (main state management)
 - `src/stores/` - Zustand stores for settings
-- `src/lib/const.ts` - API endpoints, headers, image MIME types
-- `src/types/bilibili.ts` - Comprehensive Bilibili API type definitions
+- `src/lib/` - Shared utilities (`const.ts` for API constants, `ipc.ts` for IPC contract)
+- `src/types/` - Type definitions (`bilibili.ts` for API types, `electron.d.ts` for IPC types)
 
 ### State Management
 
@@ -42,14 +42,21 @@ pnpm generate-icons # Generate app icons (uses bun)
 
 ### API Pattern
 
-Renderer calls main process via IPC:
+Renderer calls main process via IPC using a centralized contract:
 ```typescript
-// Renderer
-const result = await window.electronAPI.someApiCall(params)
+// Renderer (via preload bridge)
+const result = await window.electronAPI.bilibili.fetchSessions(params)
 
-// Main (src/api/bilibili.ts)
-ipcMain.handle('some-api-call', async (event, params) => { ... })
+// Main process handler (src/api/bilibili.ts)
+ipcMain.handle(IpcChannel.BILIBILI_FETCH_SESSIONS, async (event, params) => { ... })
+
+// IPC channels and types defined in src/lib/ipc.ts
 ```
+
+The IPC system uses:
+- `IpcChannel` - Constants for invoke channels (renderer → main → response)
+- `IpcEvent` - Constants for event channels (main → renderer, one-way)
+- `IpcInvokeContract` / `IpcEventContract` - Type mappings for all channels
 
 ## Code Conventions
 
@@ -63,4 +70,6 @@ ipcMain.handle('some-api-call', async (event, params) => { ... })
 - `forge.config.ts` - Electron Forge build configuration
 - `vite.main.config.ts` / `vite.renderer.config.ts` - Vite configs for each process
 - `src/lib/const.ts` - Centralized constants (MSG_TYPE, SESSION_TYPE, allowed image formats)
+- `src/lib/ipc.ts` - IPC contract (channel names and type definitions for all IPC communication)
 - `src/types/bilibili.ts` - API response types (reference when working with Bilibili data)
+- `src/types/electron.d.ts` - ElectronAPI interface and IPC parameter/result types
