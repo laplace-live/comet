@@ -197,6 +197,34 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         if (session?.account_info) {
           senderName = session.account_info.name
           senderAvatar = session.account_info.pic_url
+        } else {
+          // User not in cache or sessions (first-ever message from this user)
+          // Fetch user info before showing notification
+          try {
+            const data = await window.electronAPI.bilibili.fetchUsers({
+              uids: String(senderUid),
+            })
+
+            if (!isErrorResponse(data) && data.code === 0 && data.data?.[0]) {
+              const user = data.data[0]
+              senderName = user.name
+              senderAvatar = user.face
+
+              // Also update cache for future use
+              setUserCache(prev => ({
+                ...prev,
+                [user.mid]: {
+                  name: user.name,
+                  face: user.face,
+                  official: user.official,
+                  vip: user.vip,
+                },
+              }))
+            }
+          } catch (err) {
+            console.error('[usePrivateMessages] Failed to fetch user info for notification:', err)
+            // Continue with fallback name
+          }
         }
       }
 
