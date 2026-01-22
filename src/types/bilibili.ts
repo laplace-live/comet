@@ -276,8 +276,9 @@ export const MSG_TYPE = {
 // Message types that are NOT private messages and should be ignored by the WebSocket handler
 // These are platform-wide notifications (likes, follows, etc.) that are not relevant to PM
 export const IGNORED_WS_MSG_TYPES: ReadonlySet<number> = new Set([
-  113, // 评论通知 (Comment notification)
-  115, // 点赞通知 (Like notification)
+  108, // 关注事件 (Follow event)
+  113, // 被评论通知 (Comment notification)
+  115, // 被点赞通知 (Like notification)
 ])
 
 // Message source constants
