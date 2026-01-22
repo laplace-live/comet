@@ -2,7 +2,7 @@
   "name": "laplace-comet",
   "productName": "LAPLACE Comet",
   "type": "module",
-  "version": "1.0.11",
+  "version": "1.0.12",
   "description": "Privacy-first Bilibili Private Message Manager",
   "main": ".vite/build/main.js",
   "scripts": {
