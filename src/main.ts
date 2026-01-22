@@ -20,18 +20,56 @@ if (started) {
   app.quit()
 }
 
+// Single instance lock - prevent multiple windows on Windows and Linux
+// macOS handles this natively (dock clicks trigger 'activate' event, relaunching focuses existing window)
+// For macOS, we skip the lock entirely; for other platforms, we request it
+const isSingleInstance = process.platform === 'darwin' || app.requestSingleInstanceLock()
+
+if (!isSingleInstance) {
+  // Another instance is already running, exit immediately
+  app.exit(0)
+}
+
+// Handle when a second instance is launched - focus the existing window (non-macOS only)
+if (process.platform !== 'darwin') {
+  app.on('second-instance', () => {
+    const windows = BrowserWindow.getAllWindows()
+    const mainWindow = windows[0]
+
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore()
+      }
+
+      mainWindow.show()
+      mainWindow.focus()
+
+      // On Windows, use setAlwaysOnTop workaround to force window to foreground
+      // Windows has ForegroundLockTimeout that prevents apps from stealing focus
+      if (process.platform === 'win32') {
+        mainWindow.setAlwaysOnTop(true)
+        mainWindow.focus()
+        mainWindow.setAlwaysOnTop(false)
+      }
+    }
+  })
+}
+
 // Configure auto-updates with S3/CloudFront as the update source
 // Update the UPDATE_BASE_URL in src/lib/const.ts to point to your S3 bucket or CloudFront distribution
 // The baseUrl must include platform and arch as per update-electron-app docs:
 // https://github.com/electron/update-electron-app#with-static-file-storage
-updateElectronApp({
-  updateSource: {
-    type: UpdateSourceType.StaticStorage,
-    baseUrl: `${UPDATE_BASE_URL}/${process.platform}/${process.arch}`,
-  },
-  notifyUser: false,
-  logger: console,
-})
+// Skip if this is a secondary instance (will exit shortly)
+if (isSingleInstance) {
+  updateElectronApp({
+    updateSource: {
+      type: UpdateSourceType.StaticStorage,
+      baseUrl: `${UPDATE_BASE_URL}/${process.platform}/${process.arch}`,
+    },
+    notifyUser: false,
+    logger: console,
+  })
+}
 
 // Helper to broadcast update status to all windows
 function broadcastUpdateStatus(status: UpdateStatusInfo) {
@@ -79,11 +117,14 @@ const isSafeForExternalOpen = (url: string): boolean => {
   }
 }
 
-// Register IPC handlers
-registerBilibiliIpcHandlers()
+// Skip initialization if this is a secondary instance (will exit shortly)
+if (isSingleInstance) {
+  // Register IPC handlers
+  registerBilibiliIpcHandlers()
 
-// Initialize WebSocket for real-time notifications
-initBroadcastWebSocket()
+  // Initialize WebSocket for real-time notifications
+  initBroadcastWebSocket()
+}
 
 // App info IPC handler
 ipcMain.handle(IpcChannel.APP_GET_VERSION, () => app.getVersion())
