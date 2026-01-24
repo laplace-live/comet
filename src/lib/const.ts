@@ -44,6 +44,8 @@ export const BILIBILI_ENDPOINTS = {
   SEND_MESSAGE: `${BILIBILI_API.VC}/web_im/v1/web_im/send_msg`,
   /** Mark session as read (update acknowledgment) */
   UPDATE_ACK: `${BILIBILI_API.VC}/session_svr/v1/session_svr/update_ack`,
+  /** Set Do Not Disturb status for a session */
+  SET_DND: `${BILIBILI_API.VC}/link_setting/v1/link_setting/set_msg_dnd`,
 
   // User Info
   /** Fetch user info in batch */

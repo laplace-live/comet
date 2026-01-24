@@ -75,6 +75,7 @@ export interface UsePrivateMessagesReturn {
   sendMessage: (content: string) => Promise<boolean>
   sendImageMessage: (imageData: string, mimeType: string) => Promise<boolean>
   recallMessage: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
+  toggleDnd: (session: BilibiliSession, enabled: boolean) => Promise<boolean>
   connectWebSocket: () => Promise<void>
   disconnectWebSocket: () => Promise<void>
 
@@ -181,6 +182,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     async (message: BilibiliMessage, senderUid: number, talkerId: number, sessionType: number) => {
       // Don't notify for our own messages
       if (userInfo?.mid && senderUid === userInfo.mid) return
+
+      // Check if session is in DND mode - suppress notifications
+      const session = sessionsRef.current.find(s => s.talker_id === talkerId && s.session_type === sessionType)
+      if (session?.is_dnd === 1) {
+        console.log('[usePrivateMessages] Notification suppressed for DND session:', talkerId)
+        return
+      }
 
       // Get sender info from cache or sessions
       let senderName = `用户 ${senderUid}`
@@ -705,6 +713,59 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       }
     },
     [selectedSession, userInfo]
+  )
+
+  // Toggle Do Not Disturb for a session
+  const toggleDnd = useCallback(
+    async (session: BilibiliSession, enabled: boolean): Promise<boolean> => {
+      try {
+        const result = await window.electronAPI.bilibili.setDnd({
+          dndUid: session.session_type === SESSION_TYPE.USER ? session.talker_id : undefined,
+          dndGroupId: session.session_type === SESSION_TYPE.FAN_GROUP ? session.talker_id : undefined,
+          sessionType: session.session_type,
+          enabled,
+        })
+
+        if (!result.success) {
+          console.error('Failed to toggle DND:', result.error)
+          toastManager.add({
+            type: 'error',
+            title: '操作失败',
+            description: result.error || '无法更改免打扰设置',
+          })
+          return false
+        }
+
+        // Update the session in the sessions list
+        setSessions(prev =>
+          prev.map(s => {
+            if (s.talker_id === session.talker_id && s.session_type === session.session_type) {
+              return { ...s, is_dnd: enabled ? 1 : 0 }
+            }
+            return s
+          })
+        )
+
+        // Also update the selected session if it matches
+        setSelectedSession(prev => {
+          if (prev?.talker_id === session.talker_id && prev?.session_type === session.session_type) {
+            return { ...prev, is_dnd: enabled ? 1 : 0 }
+          }
+          return prev
+        })
+
+        return true
+      } catch (err) {
+        console.error('Failed to toggle DND:', err)
+        toastManager.add({
+          type: 'error',
+          title: '操作失败',
+          description: '无法更改免打扰设置',
+        })
+        return false
+      }
+    },
+    []
   )
 
   // Send image message to the current session
@@ -1404,6 +1465,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     sendMessage,
     sendImageMessage,
     recallMessage,
+    toggleDnd,
     connectWebSocket,
     disconnectWebSocket,
 

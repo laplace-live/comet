@@ -1,4 +1,4 @@
-import { ArrowLeft, Copy, EllipsisVertical, ImagePlus, MessageSquare, User, Users } from 'lucide-react'
+import { ArrowLeft, Bell, BellOff, Copy, EllipsisVertical, ImagePlus, MessageSquare, User, Users } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
@@ -17,7 +17,7 @@ import { isMacOS } from '@/utils/platform'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from '@/components/ui/menu'
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Spinner } from '@/components/ui/spinner'
 import { toastManager } from '@/components/ui/toast'
@@ -38,6 +38,7 @@ interface MessagesPanelProps {
   onSendMessage: (content: string) => Promise<boolean>
   onSendImage: (imageData: string, mimeType: string) => Promise<boolean>
   onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
+  onToggleDnd: (session: BilibiliSession, enabled: boolean) => Promise<boolean>
 }
 
 export function MessagesPanel({
@@ -53,6 +54,7 @@ export function MessagesPanel({
   onSendMessage,
   onSendImage,
   onRecall,
+  onToggleDnd,
 }: MessagesPanelProps) {
   return (
     <div
@@ -71,6 +73,7 @@ export function MessagesPanel({
           onSendMessage={onSendMessage}
           onSendImage={onSendImage}
           onRecall={onRecall}
+          onToggleDnd={onToggleDnd}
         />
       ) : (
         <EmptyState />
@@ -91,6 +94,7 @@ interface ChatViewProps {
   onSendMessage: (content: string) => Promise<boolean>
   onSendImage: (imageData: string, mimeType: string) => Promise<boolean>
   onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
+  onToggleDnd: (session: BilibiliSession, enabled: boolean) => Promise<boolean>
 }
 
 function ChatView({
@@ -105,6 +109,7 @@ function ChatView({
   onSendMessage,
   onSendImage,
   onRecall,
+  onToggleDnd,
 }: ChatViewProps) {
   const avatar = getSessionAvatar(session, userCache)
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -113,6 +118,7 @@ function ChatView({
   const dragCounterRef = useRef(0)
 
   const sessionName = getSessionName(session, userCache)
+  const isDnd = session.is_dnd === 1
 
   const copyUsername = useCallback(() => {
     navigator.clipboard.writeText(sessionName)
@@ -121,6 +127,10 @@ function ChatView({
   const copyUid = useCallback(() => {
     navigator.clipboard.writeText(String(session.talker_id))
   }, [session.talker_id])
+
+  const handleToggleDnd = useCallback(() => {
+    onToggleDnd(session, !isDnd)
+  }, [session, isDnd, onToggleDnd])
 
   // Reset state when session changes
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally reset state when session changes
@@ -270,6 +280,15 @@ function ChatView({
             <EllipsisVertical className='size-5' aria-hidden='true' />
           </MenuTrigger>
           <MenuPopup align='end'>
+            <MenuItem onClick={handleToggleDnd}>
+              {isDnd ? (
+                <Bell className='size-4' aria-hidden='true' />
+              ) : (
+                <BellOff className='size-4' aria-hidden='true' />
+              )}
+              {isDnd ? '开启通知' : '免打扰'}
+            </MenuItem>
+            <MenuSeparator />
             <MenuItem onClick={copyUsername}>
               <Copy className='size-4' aria-hidden='true' />
               复制用户名
