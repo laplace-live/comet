@@ -172,10 +172,11 @@ const activeNotifications = new Set<Notification>()
 // Register notification IPC handler
 ipcMain.handle(IpcChannel.SHOW_NOTIFICATION, async (_event, params: ShowNotificationParams) => {
   // Check if any window is focused - only show notification if window is not focused
-  const windows = BrowserWindow.getAllWindows()
-  const anyWindowFocused = windows.some(win => win.isFocused())
+  // Use getFocusedWindow() which is more reliable than iterating windows
+  const focusedWindow = BrowserWindow.getFocusedWindow()
 
-  if (anyWindowFocused) {
+  if (focusedWindow) {
+    console.log('[Notification] Suppressed - window is focused')
     return { shown: false, reason: 'window_focused' }
   }
 
