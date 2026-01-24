@@ -254,9 +254,14 @@ function renderImageContent(content: {
   // Ensure HTTPS for the image URL
   const imageUrl = enforceHttps(content.url)
 
-  // Calculate display dimensions (max 300px width, but also responsive to container)
+  // Calculate display dimensions (max 300px width, maintain aspect ratio)
   const maxWidth = 300
-  const displayWidth = Math.min(content.width || maxWidth, maxWidth)
+  const originalWidth = content.width || 0
+  const originalHeight = content.height || 0
+  const displayWidth = originalWidth > 0 ? Math.min(originalWidth, maxWidth) : maxWidth
+
+  // Calculate display height based on aspect ratio if both dimensions are available
+  const displayHeight = originalWidth > 0 && originalHeight > 0 ? (displayWidth / originalWidth) * originalHeight : null
 
   return (
     <a href={imageUrl} target='_blank' rel='noopener noreferrer' className='block'>
@@ -267,7 +272,7 @@ function renderImageContent(content: {
           className='max-w-full rounded-lg'
           style={{
             width: `${displayWidth}px`,
-            height: 'auto',
+            height: displayHeight ? `${displayHeight}px` : 'auto',
           }}
           loading='lazy'
           referrerPolicy='no-referrer'
