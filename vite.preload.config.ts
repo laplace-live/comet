@@ -5,11 +5,16 @@ import { defineConfig } from 'vite'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // https://vitejs.dev/config
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
+  },
+  esbuild: {
+    // Strip console.log and debugger statements in production
+    drop: mode === 'production' ? ['debugger'] : [],
+    pure: mode === 'production' ? ['console.log'] : [],
   },
   build: {
     lib: {
@@ -18,4 +23,4 @@ export default defineConfig({
       fileName: 'preload',
     },
   },
-})
+}))
