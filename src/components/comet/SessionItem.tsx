@@ -70,9 +70,16 @@ export function SessionItem({ session, isSelected, userCache, onClick }: Session
 
       <div className='min-w-0 flex-1'>
         <div className='flex items-center justify-between gap-2'>
-          <span className='truncate font-medium' style={vipNicknameColor ? { color: vipNicknameColor } : undefined}>
-            {getSessionName(session, userCache)}
-          </span>
+          <div className='flex min-w-0 items-center gap-1.5'>
+            <span className='truncate font-medium' style={vipNicknameColor ? { color: vipNicknameColor } : undefined}>
+              {getSessionName(session, userCache)}
+            </span>
+            {session.is_follow === 1 && (
+              <Badge variant='outline' size='sm'>
+                已关注
+              </Badge>
+            )}
+          </div>
           {session.last_msg && (
             <span className='flex-none text-muted-foreground text-xs'>
               {timeFromNow(session.last_msg.timestamp * 1000)}
