@@ -13,6 +13,7 @@ import type {
   BilibiliSessionsResponse,
   BilibiliUserCardsResponse,
 } from '@/types/bilibili'
+import { SESSION_TYPE } from '@/types/bilibili'
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, getImageExtension, USER_AGENT } from '@/lib/const'
 import { IpcChannel } from '@/lib/ipc'
@@ -921,10 +922,10 @@ export function registerBilibiliIpcHandlers() {
       }
 
       // Validate parameters based on session type
-      if (sessionType === 1 && !dndUid) {
+      if (sessionType === SESSION_TYPE.USER && !dndUid) {
         return { success: false, error: 'Missing dndUid for user session' }
       }
-      if (sessionType === 2 && !dndGroupId) {
+      if (sessionType === SESSION_TYPE.FAN_GROUP && !dndGroupId) {
         return { success: false, error: 'Missing dndGroupId for fan group session' }
       }
 
