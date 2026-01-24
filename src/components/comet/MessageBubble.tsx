@@ -256,9 +256,9 @@ function renderImageContent(content: {
 
   // Calculate display dimensions (max 300px width, maintain aspect ratio)
   const maxWidth = 300
-  const originalWidth = content.width || maxWidth
+  const originalWidth = content.width || 0
   const originalHeight = content.height || 0
-  const displayWidth = Math.min(originalWidth, maxWidth)
+  const displayWidth = originalWidth > 0 ? Math.min(originalWidth, maxWidth) : maxWidth
 
   // Calculate display height based on aspect ratio if both dimensions are available
   const displayHeight = originalWidth > 0 && originalHeight > 0 ? (displayWidth / originalWidth) * originalHeight : null
