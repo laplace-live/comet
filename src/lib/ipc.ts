@@ -37,6 +37,8 @@ import type {
   SessionUpdateNotification,
   SetActiveAccountParams,
   SetActiveAccountResult,
+  SetDndParams,
+  SetDndResult,
   ShowNotificationParams,
   UpdateAckParams,
   UpdateAckResponse,
@@ -85,6 +87,7 @@ export const IpcChannel = {
   BILIBILI_UPDATE_ACK: 'bilibili:update-ack',
   BILIBILI_SEND_MESSAGE: 'bilibili:send-message',
   BILIBILI_UPLOAD_IMAGE: 'bilibili:upload-image',
+  BILIBILI_SET_DND: 'bilibili:set-dnd',
 
   // Bilibili WebSocket
   BILIBILI_WS_CONNECT: 'bilibili:ws-connect',
@@ -215,6 +218,10 @@ export interface IpcInvokeContract {
   [IpcChannel.BILIBILI_UPLOAD_IMAGE]: {
     params: UploadImageParams
     result: UploadImageResult
+  }
+  [IpcChannel.BILIBILI_SET_DND]: {
+    params: SetDndParams
+    result: SetDndResult
   }
 
   // Bilibili WebSocket

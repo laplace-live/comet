@@ -13,6 +13,7 @@ import type {
   BilibiliSessionsResponse,
   BilibiliUserCardsResponse,
 } from '@/types/bilibili'
+import { SESSION_TYPE } from '@/types/bilibili'
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, getImageExtension, USER_AGENT } from '@/lib/const'
 import { IpcChannel } from '@/lib/ipc'
@@ -897,6 +898,76 @@ export function registerBilibiliIpcHandlers() {
       } catch (error) {
         console.error('Failed to update ack:', error)
         return { error: 'Failed to update ack', code: 500 }
+      }
+    }
+  )
+
+  // Set Do Not Disturb status for a session
+  ipcMain.handle(
+    IpcChannel.BILIBILI_SET_DND,
+    async (
+      _event,
+      params: {
+        dndUid?: number
+        dndGroupId?: number
+        sessionType: number
+        enabled: boolean
+      }
+    ) => {
+      const { dndUid, dndGroupId, sessionType, enabled } = params
+      const credentials = getCredentials()
+
+      if (!credentials) {
+        return { success: false, error: 'Not logged in. Please scan QR code to login.' }
+      }
+
+      // Validate parameters based on session type
+      if (sessionType === SESSION_TYPE.USER && !dndUid) {
+        return { success: false, error: 'Missing dndUid for user session' }
+      }
+      if (sessionType === SESSION_TYPE.FAN_GROUP && !dndGroupId) {
+        return { success: false, error: 'Missing dndGroupId for fan group session' }
+      }
+
+      try {
+        const cookieHeader = cookieStringFromCredentials(credentials)
+
+        const formData = new URLSearchParams()
+        formData.append('uid', String(credentials.DedeUserID))
+        formData.append('setting', enabled ? '1' : '0')
+        if (dndUid) {
+          formData.append('dnd_uid', String(dndUid))
+        }
+        if (dndGroupId) {
+          formData.append('dnd_group_id', String(dndGroupId))
+        }
+        formData.append('csrf', credentials.bili_jct)
+        formData.append('csrf_token', credentials.bili_jct)
+        formData.append('build', '0')
+        formData.append('mobi_app', 'web')
+
+        const resp = await fetch(BILIBILI_ENDPOINTS.SET_DND, {
+          method: 'POST',
+          headers: {
+            Cookie: cookieHeader,
+            'User-Agent': USER_AGENT,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Referer: BILIBILI_HEADERS.REFERER,
+            Origin: BILIBILI_HEADERS.ORIGIN,
+          },
+          body: formData.toString(),
+        })
+
+        const data = await resp.json()
+
+        if (data.code !== 0) {
+          return { success: false, error: data.message || 'Failed to set DND status' }
+        }
+
+        return { success: true }
+      } catch (error) {
+        console.error('Failed to set DND status:', error)
+        return { success: false, error: 'Failed to set DND status' }
       }
     }
   )

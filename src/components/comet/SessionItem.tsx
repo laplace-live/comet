@@ -1,4 +1,4 @@
-import { User, Users } from 'lucide-react'
+import { BellOff, User, Users } from 'lucide-react'
 
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliSession } from '@/types/bilibili'
@@ -74,6 +74,9 @@ export function SessionItem({ session, isSelected, userCache, onClick }: Session
             <span className='truncate font-medium' style={vipNicknameColor ? { color: vipNicknameColor } : undefined}>
               {getSessionName(session, userCache)}
             </span>
+            {session.is_dnd === 1 && (
+              <BellOff className='size-3.5 flex-none text-muted-foreground' aria-label='免打扰' />
+            )}
             {session.is_follow === 1 && (
               <Badge variant='outline' size='sm'>
                 关注中

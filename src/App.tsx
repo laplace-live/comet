@@ -41,6 +41,7 @@ export default function App() {
     sendMessage,
     sendImageMessage,
     recallMessage,
+    toggleDnd,
     // Multi-account actions
     switchAccount,
     removeAccount,
@@ -202,6 +203,7 @@ export default function App() {
               onSendMessage={sendMessage}
               onSendImage={sendImageMessage}
               onRecall={recallMessage}
+              onToggleDnd={toggleDnd}
             />
 
             {/* Add Account / Re-auth Dialog */}

@@ -60,6 +60,22 @@ export interface UploadImageResult {
   error?: string
 }
 
+export interface SetDndParams {
+  /** User UID (for user sessions) */
+  dndUid?: number
+  /** Group ID (for fan group sessions) */
+  dndGroupId?: number
+  /** Session type (1 for user, 2 for fan group) */
+  sessionType: number
+  /** DND setting: true to enable, false to disable */
+  enabled: boolean
+}
+
+export interface SetDndResult {
+  success: boolean
+  error?: string
+}
+
 export interface SendMessageResponse {
   code: number
   message?: string
@@ -281,6 +297,7 @@ export interface ElectronAPI {
     updateAck: (params: UpdateAckParams) => Promise<UpdateAckResponse | ErrorResponse>
     sendMessage: (params: SendMessageParams) => Promise<BilibiliSendMessageResponse | ErrorResponse>
     uploadImage: (params: UploadImageParams) => Promise<UploadImageResult>
+    setDnd: (params: SetDndParams) => Promise<SetDndResult>
 
     // WebSocket for real-time notifications
     wsConnect: () => Promise<{ success: boolean }>
