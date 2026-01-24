@@ -76,7 +76,7 @@ export function SessionItem({ session, isSelected, userCache, onClick }: Session
             </span>
             {session.is_follow === 1 && (
               <Badge variant='outline' size='sm'>
-                已关注
+                关注中
               </Badge>
             )}
           </div>
