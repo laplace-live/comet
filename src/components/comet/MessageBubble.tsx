@@ -812,7 +812,11 @@ export function MessageBubble({
                     : 'bg-linear-to-br from-pink-400 to-orange-300 text-white'
                 }
               >
-                {isFanGroup && !isSent ? <Users className='size-3.5' aria-hidden='true' /> : <User className='size-3.5' aria-hidden='true' />}
+                {isFanGroup && !isSent ? (
+                  <Users className='size-3.5' aria-hidden='true' />
+                ) : (
+                  <User className='size-3.5' aria-hidden='true' />
+                )}
               </AvatarFallback>
             </Avatar>
           }

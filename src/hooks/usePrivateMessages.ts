@@ -232,13 +232,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       const messageText = parseMessageContent(message)
 
       try {
-        await window.electronAPI.bilibili.showNotification({
+        const result = await window.electronAPI.bilibili.showNotification({
           title: senderName,
           body: messageText || '[新消息]',
           icon: senderAvatar,
           talkerId,
           sessionType,
         })
+        console.log('[usePrivateMessages] Notification result:', result)
       } catch (err) {
         console.error('[usePrivateMessages] Failed to show notification:', err)
       }
@@ -1164,6 +1165,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
               })
               .catch(err => console.error('Failed to mark as read:', err))
           }
+
+          // Show notification if window is not focused (main process will check focus state)
+          console.log('[usePrivateMessages] Current session message - attempting notification')
+          showNotificationForMessage(newMessage, instantMsg.senderUid, notification.talkerId, notification.sessionType)
         } else {
           // No instant message data available - do a silent fetch to get new messages
           fetchMessagesQuietly(selectedSession)
