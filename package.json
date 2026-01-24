@@ -34,7 +34,7 @@
     "dayjs": "^1.11.19",
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^11.0.2",
-    "lucide-react": "^0.562.0",
+    "lucide-react": "^0.563.0",
     "protobufjs": "^8.0.0",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
@@ -45,7 +45,7 @@
     "zustand": "^5.0.10"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.3.11",
+    "@biomejs/biome": "^2.3.12",
     "@electron-forge/cli": "^7.11.1",
     "@electron-forge/maker-squirrel": "^7.11.1",
     "@electron-forge/maker-zip": "^7.11.1",
