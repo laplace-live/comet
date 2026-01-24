@@ -1,4 +1,4 @@
-import { ArrowLeft, Check, Copy, ImagePlus, MessageSquare, User, Users } from 'lucide-react'
+import { ArrowLeft, Copy, EllipsisVertical, ImagePlus, MessageSquare, User, Users } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
@@ -108,7 +108,6 @@ function ChatView({
 }: ChatViewProps) {
   const avatar = getSessionAvatar(session, userCache)
   const messagesEndRef = useRef<HTMLDivElement>(null)
-  const [copiedItem, setCopiedItem] = useState<'username' | 'uid' | null>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [droppedFile, setDroppedFile] = useState<File | null>(null)
   const dragCounterRef = useRef(0)
@@ -117,20 +116,15 @@ function ChatView({
 
   const copyUsername = useCallback(() => {
     navigator.clipboard.writeText(sessionName)
-    setCopiedItem('username')
-    setTimeout(() => setCopiedItem(null), 2000)
   }, [sessionName])
 
   const copyUid = useCallback(() => {
     navigator.clipboard.writeText(String(session.talker_id))
-    setCopiedItem('uid')
-    setTimeout(() => setCopiedItem(null), 2000)
   }, [session.talker_id])
 
   // Reset state when session changes
   // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally reset state when session changes
   useEffect(() => {
-    setCopiedItem(null)
     setDroppedFile(null)
     setIsDragging(false)
     dragCounterRef.current = 0
@@ -247,7 +241,7 @@ function ChatView({
         </Avatar>
 
         <div className='flex-1'>
-          <h3 className='flex items-center gap-1.5 font-semibold'>
+          <h3 className='font-semibold'>
             <a
               href={`https://space.bilibili.com/${session.talker_id}`}
               target='_blank'
@@ -256,35 +250,36 @@ function ChatView({
             >
               {sessionName}
             </a>
-            <Menu>
-              <MenuTrigger className='app-region-no-drag inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-foreground dark:hover:bg-zinc-800' aria-label='复制菜单'>
-                {copiedItem ? <Check className='size-3.5 text-emerald-500' aria-hidden='true' /> : <Copy className='size-3.5' aria-hidden='true' />}
-              </MenuTrigger>
-              <MenuPopup align='start'>
-                <MenuItem onClick={copyUsername}>
-                  {copiedItem === 'username' ? (
-                    <Check className='size-4 text-emerald-500' aria-hidden='true' />
-                  ) : (
-                    <Copy className='size-4' aria-hidden='true' />
-                  )}
-                  复制用户名
-                </MenuItem>
-                <MenuItem onClick={copyUid}>
-                  {copiedItem === 'uid' ? <Check className='size-4 text-emerald-500' aria-hidden='true' /> : <Copy className='size-4' aria-hidden='true' />}
-                  {`复制 UID:${session.talker_id}`}
-                </MenuItem>
-              </MenuPopup>
-            </Menu>
           </h3>
           <div className='flex items-center gap-2'>
-            {session.live_status === 1 && (
-              <Badge variant='error' size='sm'>
-                直播中
+            {session.is_follow === 1 && (
+              <Badge variant='outline' size='sm'>
+                关注中
               </Badge>
             )}
             <span className='text-muted-foreground text-xs'>{messages.length || '-'} 条消息</span>
           </div>
         </div>
+
+        {/* User Settings Menu */}
+        <Menu>
+          <MenuTrigger
+            className='app-region-no-drag inline-flex size-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-zinc-100 hover:text-foreground dark:hover:bg-zinc-800'
+            aria-label='用户设置'
+          >
+            <EllipsisVertical className='size-5' aria-hidden='true' />
+          </MenuTrigger>
+          <MenuPopup align='end'>
+            <MenuItem onClick={copyUsername}>
+              <Copy className='size-4' aria-hidden='true' />
+              复制用户名
+            </MenuItem>
+            <MenuItem onClick={copyUid}>
+              <Copy className='size-4' aria-hidden='true' />
+              {`复制 UID:${session.talker_id}`}
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
       </div>
 
       {/* Messages */}
