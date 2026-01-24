@@ -597,11 +597,22 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         if (isErrorResponse(data)) {
           console.error('Failed to send message:', data.error)
+          toastManager.add({
+            type: 'error',
+            title: '发送失败',
+            description: data.error || '无法发送消息',
+          })
           return false
         }
 
         if (data.code !== 0) {
           console.error('Failed to send message:', data.message)
+          // Show the API error message to the user
+          toastManager.add({
+            type: 'error',
+            title: '发送失败',
+            description: data.message || '无法发送消息',
+          })
           return false
         }
 
@@ -656,6 +667,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         return true
       } catch (err) {
         console.error('Failed to send message:', err)
+        toastManager.add({
+          type: 'error',
+          title: '发送失败',
+          description: err instanceof Error ? err.message : '网络错误，请稍后重试',
+        })
         return false
       } finally {
         setSendingMessage(false)
@@ -716,57 +732,54 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   )
 
   // Toggle Do Not Disturb for a session
-  const toggleDnd = useCallback(
-    async (session: BilibiliSession, enabled: boolean): Promise<boolean> => {
-      try {
-        const result = await window.electronAPI.bilibili.setDnd({
-          dndUid: session.session_type === SESSION_TYPE.USER ? session.talker_id : undefined,
-          dndGroupId: session.session_type === SESSION_TYPE.FAN_GROUP ? session.talker_id : undefined,
-          sessionType: session.session_type,
-          enabled,
-        })
+  const toggleDnd = useCallback(async (session: BilibiliSession, enabled: boolean): Promise<boolean> => {
+    try {
+      const result = await window.electronAPI.bilibili.setDnd({
+        dndUid: session.session_type === SESSION_TYPE.USER ? session.talker_id : undefined,
+        dndGroupId: session.session_type === SESSION_TYPE.FAN_GROUP ? session.talker_id : undefined,
+        sessionType: session.session_type,
+        enabled,
+      })
 
-        if (!result.success) {
-          console.error('Failed to toggle DND:', result.error)
-          toastManager.add({
-            type: 'error',
-            title: '操作失败',
-            description: result.error || '无法更改免打扰设置',
-          })
-          return false
-        }
-
-        // Update the session in the sessions list
-        setSessions(prev =>
-          prev.map(s => {
-            if (s.talker_id === session.talker_id && s.session_type === session.session_type) {
-              return { ...s, is_dnd: enabled ? 1 : 0 }
-            }
-            return s
-          })
-        )
-
-        // Also update the selected session if it matches
-        setSelectedSession(prev => {
-          if (prev?.talker_id === session.talker_id && prev?.session_type === session.session_type) {
-            return { ...prev, is_dnd: enabled ? 1 : 0 }
-          }
-          return prev
-        })
-
-        return true
-      } catch (err) {
-        console.error('Failed to toggle DND:', err)
+      if (!result.success) {
+        console.error('Failed to toggle DND:', result.error)
         toastManager.add({
           type: 'error',
           title: '操作失败',
-          description: '无法更改免打扰设置',
+          description: result.error || '无法更改免打扰设置',
         })
         return false
       }
-    },
-    []
-  )
+
+      // Update the session in the sessions list
+      setSessions(prev =>
+        prev.map(s => {
+          if (s.talker_id === session.talker_id && s.session_type === session.session_type) {
+            return { ...s, is_dnd: enabled ? 1 : 0 }
+          }
+          return s
+        })
+      )
+
+      // Also update the selected session if it matches
+      setSelectedSession(prev => {
+        if (prev?.talker_id === session.talker_id && prev?.session_type === session.session_type) {
+          return { ...prev, is_dnd: enabled ? 1 : 0 }
+        }
+        return prev
+      })
+
+      return true
+    } catch (err) {
+      console.error('Failed to toggle DND:', err)
+      toastManager.add({
+        type: 'error',
+        title: '操作失败',
+        description: '无法更改免打扰设置',
+      })
+      return false
+    }
+  }, [])
 
   // Send image message to the current session
   const sendImageMessage = useCallback(

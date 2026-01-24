@@ -82,7 +82,7 @@ function getMessageSourceLabel(msgSource: number): string | null {
     case MSG_SOURCE.SYSTEM_TIP:
       return '系统提示'
     case MSG_SOURCE.AI:
-      return 'AI'
+      return '回音AI'
     default:
       return `来源 ${msgSource}`
   }
@@ -133,6 +133,9 @@ function renderMessageContent(message: BilibiliMessage, emojiInfoMap: EmojiInfoM
 
       case MSG_TYPE.SYSTEM_TIP:
         return renderSystemTipContent(content)
+
+      case MSG_TYPE.AI_GENERATED:
+        return renderAiGeneratedContent(content)
 
       default:
         return renderDefaultContent(content, message.msg_type)
@@ -558,6 +561,83 @@ function renderSystemTipContent(content: { content?: string }): React.ReactNode 
   }
 }
 
+// AI generated message (msg_type 52)
+// Content format: { paragraphs: [{ para_type: 1, text: { nodes: [{ node_type: 1, raw_text: "...", word: {...} }] } }], sub_type: 4, ... }
+// sub_type 4 = system-like welcome message (centered display)
+// Other sub_types = normal chat messages (bubble display)
+function renderAiGeneratedContent(content: {
+  paragraphs?: Array<{
+    para_type?: number
+    text?: {
+      nodes?: Array<{
+        node_type?: number
+        raw_text?: string
+        word?: { words?: string; font_size?: number }
+      }>
+    }
+  }>
+  sub_type?: number
+}): React.ReactNode {
+  try {
+    const paragraphs = content.paragraphs || []
+    const isSystemLike = content.sub_type === 4
+
+    if (!Array.isArray(paragraphs) || paragraphs.length === 0) {
+      return isSystemLike ? (
+        <p className='text-center text-muted-foreground text-xs'>[AI 消息]</p>
+      ) : (
+        <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>[AI 消息]</p>
+      )
+    }
+
+    // Extract text from all paragraphs
+    // Nodes within a paragraph are word-level inline elements that should be concatenated together
+    // Only paragraph breaks should use newlines
+    const paragraphTexts: string[] = []
+    for (const paragraph of paragraphs) {
+      const nodes = paragraph.text?.nodes || []
+      const nodeTexts: string[] = []
+      for (const node of nodes) {
+        // Prefer raw_text, fallback to word.words
+        const text = node.raw_text || node.word?.words
+        if (text) {
+          nodeTexts.push(text)
+        }
+      }
+      // Join nodes within a paragraph without separator (they're inline elements)
+      const paragraphText = nodeTexts.join('')
+      if (paragraphText) {
+        paragraphTexts.push(paragraphText)
+      }
+    }
+
+    // Join paragraphs with newlines
+    const fullText = paragraphTexts.join('\n')
+
+    if (!fullText) {
+      return isSystemLike ? (
+        <p className='text-center text-muted-foreground text-xs'>[AI 消息]</p>
+      ) : (
+        <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>[AI 消息]</p>
+      )
+    }
+
+    // System-like messages (sub_type 4) are left-aligned with muted styling
+    if (isSystemLike) {
+      return (
+        <p className='whitespace-pre-wrap text-xs'>
+          <span className='text-muted-foreground'>{fullText}</span>
+        </p>
+      )
+    }
+
+    // Normal AI chat messages use regular text styling
+    return <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>{fullText}</p>
+  } catch {
+    return <p className='text-center text-muted-foreground text-xs'>[AI 消息]</p>
+  }
+}
+
 // Default fallback for unknown types
 function renderDefaultContent(content: Record<string, unknown>, msgType: number): React.ReactNode {
   // Try to extract readable text from content using safe extraction
@@ -768,6 +848,34 @@ export function MessageBubble({
         </div>
       </div>
     )
+  }
+
+  // AI generated messages (msg_type 52) - sub_type 4 is system-like welcome message (centered)
+  // Other sub_types are normal chat messages and fall through to regular bubble rendering
+  if (message.msg_type === MSG_TYPE.AI_GENERATED) {
+    try {
+      const aiContent = JSON.parse(message.content)
+      // sub_type 4 = system-like welcome/announcement message
+      if (aiContent.sub_type === 4) {
+        return (
+          <div className='flex justify-center py-1'>
+            <div className='rounded bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>
+              {renderMessageContent(message, emojiInfoMap)}
+            </div>
+          </div>
+        )
+      }
+      // Other sub_types fall through to normal message rendering below
+    } catch {
+      // If parsing fails, display as centered fallback
+      return (
+        <div className='flex justify-center py-1'>
+          <div className='rounded-full bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>
+            {renderMessageContent(message, emojiInfoMap)}
+          </div>
+        </div>
+      )
+    }
   }
 
   // Recalled/revoked messages (msg_status === 1) should be displayed centered like system messages

@@ -256,6 +256,35 @@ export interface SystemTipContent {
   content: string // Serialized JSON array of SystemTipItem
 }
 
+// AI generated message content (msg_type 52)
+export interface AiGeneratedWordNode {
+  node_type: number
+  raw_text: string
+  word?: {
+    words: string
+    font_size?: number
+  }
+}
+
+export interface AiGeneratedParagraph {
+  para_type: number
+  text?: {
+    nodes: AiGeneratedWordNode[]
+  }
+}
+
+export interface AiGeneratedMessageContent {
+  paragraphs: AiGeneratedParagraph[]
+  show_like?: number
+  show_change?: number
+  gpt_session_id?: number
+  gpt_bind_query?: string
+  session_closed_line?: string
+  voice_url?: string
+  sub_type?: number
+  voice_time?: number
+}
+
 // Message type constants
 export const MSG_TYPE = {
   TEXT: 1,
@@ -270,6 +299,7 @@ export const MSG_TYPE = {
   MINI_PROGRAM: 21, // 小程序
   ARTICLE: 22, // 专栏
   LIVE_CARD: 27, // 直播卡片
+  AI_GENERATED: 52, // AI/LLM 生成的消息
   FAN_GROUP_SYSTEM: 306, // 粉丝团系统消息
 } as const
 
