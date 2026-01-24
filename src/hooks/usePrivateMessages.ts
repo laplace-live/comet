@@ -597,11 +597,22 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         if (isErrorResponse(data)) {
           console.error('Failed to send message:', data.error)
+          toastManager.add({
+            type: 'error',
+            title: '发送失败',
+            description: data.error || '无法发送消息',
+          })
           return false
         }
 
         if (data.code !== 0) {
           console.error('Failed to send message:', data.message)
+          // Show the API error message to the user
+          toastManager.add({
+            type: 'error',
+            title: '发送失败',
+            description: data.message || '无法发送消息',
+          })
           return false
         }
 
@@ -656,6 +667,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         return true
       } catch (err) {
         console.error('Failed to send message:', err)
+        toastManager.add({
+          type: 'error',
+          title: '发送失败',
+          description: err instanceof Error ? err.message : '网络错误，请稍后重试',
+        })
         return false
       } finally {
         setSendingMessage(false)
