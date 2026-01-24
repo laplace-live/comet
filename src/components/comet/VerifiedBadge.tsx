@@ -1,4 +1,4 @@
-import { BadgeCheck } from 'lucide-react'
+import { IconBoltFilled } from '@tabler/icons-react'
 
 import type { UserCacheEntry } from '@/lib/message-utils'
 
@@ -21,17 +21,17 @@ export function VerifiedBadge({ official, size = 'sm', className = '' }: Verifie
 
   const isOrganization = official.type === 1
   const sizeClasses = size === 'sm' ? 'size-4' : 'size-5'
-  const iconClasses = size === 'sm' ? 'size-3' : 'size-3.5'
+  const iconClasses = size === 'sm' ? 'size-2.5' : 'size-3.5'
 
   return (
     <Tooltip>
       <TooltipTrigger
         render={<span />}
         className={`flex cursor-default items-center justify-center rounded-full border border-white dark:border-zinc-900 ${sizeClasses} ${
-          isOrganization ? 'bg-sky-500 text-white' : 'bg-amber-500 text-white'
+          isOrganization ? 'bg-sky-500 text-white' : 'bg-yellow-500 text-white'
         } ${className}`}
       >
-        <BadgeCheck className={iconClasses} aria-hidden='true' />
+        <IconBoltFilled className={iconClasses} aria-hidden='true' />
       </TooltipTrigger>
       <TooltipPopup side='right' className='max-w-48'>
         <p className='font-medium'>{isOrganization ? '机构认证' : '个人认证'}</p>

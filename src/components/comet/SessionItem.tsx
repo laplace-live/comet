@@ -65,7 +65,7 @@ export function SessionItem({ session, isSelected, userCache, onClick }: Session
             )}
           </AvatarFallback>
         </Avatar>
-        <VerifiedBadge official={cachedUser?.official} className='absolute -top-0.5 -right-0.5' />
+        <VerifiedBadge official={cachedUser?.official} className='absolute -right-0.5 -bottom-0.5' />
       </div>
 
       <div className='min-w-0 flex-1'>
