@@ -240,6 +240,7 @@ function updateAccountCredentials(mid: number, credentials: BilibiliCredentials)
   return true
 }
 
+
 // Clear all accounts (full logout)
 function clearAllAccounts(): void {
   store.set('accounts', null)
@@ -438,12 +439,31 @@ export function registerBilibiliIpcHandlers() {
     const result = await checkAccountCredentials(credentials)
 
     if (result.isLogin) {
-      // Active account is valid - clear any expired flag
+      // Active account is valid - clear any expired flag and update user info (avatar, etc.)
       const accounts = getAccounts()
       const account = accounts.find(a => a.userInfo.mid === activeAccountMid)
-      if (account?.isExpired) {
-        account.isExpired = false
-        saveAccounts(accounts)
+      if (account) {
+        let needsSave = false
+
+        // Clear expired flag if it was set
+        if (account.isExpired) {
+          account.isExpired = false
+          needsSave = true
+        }
+
+        // Update user info if changed (e.g., avatar, username)
+        if (result.face && result.face !== account.userInfo.face) {
+          account.userInfo.face = result.face
+          needsSave = true
+        }
+        if (result.uname && result.uname !== account.userInfo.uname) {
+          account.userInfo.uname = result.uname
+          needsSave = true
+        }
+
+        if (needsSave) {
+          saveAccounts(accounts)
+        }
       }
       return result
     }
@@ -459,8 +479,29 @@ export function registerBilibiliIpcHandlers() {
 
       const accountResult = await checkAccountCredentials(account.credentials)
       if (accountResult.isLogin) {
-        // Found a valid account - switch to it
+        // Found a valid account - switch to it and update user info
         setActiveAccount(account.userInfo.mid)
+
+        // Re-fetch accounts to get fresh state (previous markAccountExpired calls may have modified the store)
+        const freshAccounts = getAccounts()
+        const freshAccount = freshAccounts.find(a => a.userInfo.mid === account.userInfo.mid)
+
+        // Update user info if changed (e.g., avatar, username)
+        if (freshAccount) {
+          let needsSave = false
+          if (accountResult.face && accountResult.face !== freshAccount.userInfo.face) {
+            freshAccount.userInfo.face = accountResult.face
+            needsSave = true
+          }
+          if (accountResult.uname && accountResult.uname !== freshAccount.userInfo.uname) {
+            freshAccount.userInfo.uname = accountResult.uname
+            needsSave = true
+          }
+          if (needsSave) {
+            saveAccounts(freshAccounts)
+          }
+        }
+
         return accountResult
       }
       // This account is also expired - mark it
