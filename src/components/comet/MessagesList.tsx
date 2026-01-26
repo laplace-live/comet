@@ -32,7 +32,7 @@ export const MessagesList = memo(function MessagesList({
           key={msg.msg_key}
           message={msg}
           emojiInfoMap={emojiInfoMap}
-          isSent={msg.receiver_id === session.talker_id}
+          isSent={msg.sender_uid === userInfo?.mid}
           session={session}
           userCache={userCache}
           userInfo={userInfo}
