@@ -482,18 +482,24 @@ export function registerBilibiliIpcHandlers() {
         // Found a valid account - switch to it and update user info
         setActiveAccount(account.userInfo.mid)
 
+        // Re-fetch accounts to get fresh state (previous markAccountExpired calls may have modified the store)
+        const freshAccounts = getAccounts()
+        const freshAccount = freshAccounts.find(a => a.userInfo.mid === account.userInfo.mid)
+
         // Update user info if changed (e.g., avatar, username)
-        let needsSave = false
-        if (accountResult.face && accountResult.face !== account.userInfo.face) {
-          account.userInfo.face = accountResult.face
-          needsSave = true
-        }
-        if (accountResult.uname && accountResult.uname !== account.userInfo.uname) {
-          account.userInfo.uname = accountResult.uname
-          needsSave = true
-        }
-        if (needsSave) {
-          saveAccounts(accounts)
+        if (freshAccount) {
+          let needsSave = false
+          if (accountResult.face && accountResult.face !== freshAccount.userInfo.face) {
+            freshAccount.userInfo.face = accountResult.face
+            needsSave = true
+          }
+          if (accountResult.uname && accountResult.uname !== freshAccount.userInfo.uname) {
+            freshAccount.userInfo.uname = accountResult.uname
+            needsSave = true
+          }
+          if (needsSave) {
+            saveAccounts(freshAccounts)
+          }
         }
 
         return accountResult
