@@ -308,6 +308,7 @@ export const MSG_TYPE = {
 export const IGNORED_WS_MSG_TYPES: ReadonlySet<number> = new Set([
   108, // 关注事件 (Follow event)
   113, // 被评论通知 (Comment notification)
+  114, // @我的 (Mentioned notification)
   115, // 被点赞通知 (Like notification)
 ])
 
