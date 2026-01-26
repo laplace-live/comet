@@ -472,8 +472,29 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         }
 
         // Reverse to get chronological order (oldest first)
-        setMessages(allMessages.reverse())
+        const sortedMessages = allMessages.reverse()
+        setMessages(sortedMessages)
         setMessagesLoading(false)
+
+        // For group chats (fan groups), fetch user info for message senders
+        if (session.session_type === SESSION_TYPE.FAN_GROUP) {
+          // Collect unique sender UIDs (excluding 0 which is system messages)
+          const senderUids = new Set<number>()
+          for (const msg of sortedMessages) {
+            if (msg.sender_uid && msg.sender_uid !== 0) {
+              senderUids.add(msg.sender_uid)
+            }
+          }
+
+          // Filter out UIDs already in cache or the current user
+          const uidsToFetch = [...senderUids].filter(
+            uid => uid !== userInfo?.mid && !userCacheRef.current[uid]
+          )
+
+          if (uidsToFetch.length > 0) {
+            fetchUserInfoBatch(uidsToFetch)
+          }
+        }
 
         // Mark session as read in the background (doesn't block message display)
         if (session.max_seqno) {
@@ -495,7 +516,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setMessagesLoading(false)
       }
     },
-    [mergeEmojiInfos]
+    [mergeEmojiInfos, userInfo, fetchUserInfoBatch]
   )
 
   // Silent fetch of new messages - no loading spinner, merges with existing messages
@@ -522,13 +543,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         if (newMessages.length === 0) return
 
         // Merge new messages with existing ones, avoiding duplicates
+        let uniqueNewMessages: BilibiliMessage[] = []
         setMessages(prev => {
           // Create a Set of existing message keys for fast lookup
           const existingKeys = new Set(prev.map(m => m.msg_key))
           const existingSeqnos = new Set(prev.map(m => m.msg_seqno))
 
           // Filter out messages that already exist
-          const uniqueNewMessages = newMessages.filter(
+          uniqueNewMessages = newMessages.filter(
             m => !existingKeys.has(m.msg_key) && !existingSeqnos.has(m.msg_seqno)
           )
 
@@ -539,6 +561,22 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           merged.sort((a, b) => a.timestamp - b.timestamp)
           return merged
         })
+
+        // For group chats, fetch user info for new message senders
+        if (session.session_type === SESSION_TYPE.FAN_GROUP && uniqueNewMessages.length > 0) {
+          const senderUids = new Set<number>()
+          for (const msg of uniqueNewMessages) {
+            if (msg.sender_uid && msg.sender_uid !== 0) {
+              senderUids.add(msg.sender_uid)
+            }
+          }
+          const uidsToFetch = [...senderUids].filter(
+            uid => uid !== userInfo?.mid && !userCacheRef.current[uid]
+          )
+          if (uidsToFetch.length > 0) {
+            fetchUserInfoBatch(uidsToFetch)
+          }
+        }
 
         // Mark as read since we're viewing this session
         if (data.data?.max_seqno) {
@@ -557,7 +595,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         console.error('[usePrivateMessages] Silent message fetch error:', err)
       }
     },
-    [mergeEmojiInfos]
+    [mergeEmojiInfos, userInfo, fetchUserInfoBatch]
   )
 
   const selectSession = useCallback(

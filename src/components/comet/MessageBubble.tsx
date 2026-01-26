@@ -504,7 +504,7 @@ function renderShareContent(content: {
 // Fan group system message
 function renderFanGroupSystemContent(content: { content?: unknown; group_id?: number }): React.ReactNode {
   const text = extractTextContent(content.content) || extractTextContent(content)
-  return <p className='text-sm italic'>{text || '[粉丝团系统消息]'}</p>
+  return <span>{text || '[粉丝团系统消息]'}</span>
 }
 
 // System tip message (msg_type 18)
@@ -830,22 +830,25 @@ export function MessageBubble({
     }
     // Show revoke event in developer mode
     return (
-      <div className='flex justify-center py-1'>
+      <div className='flex items-center justify-center gap-1 py-1'>
         <div className='flex items-center gap-2 rounded-full border border-amber-500/50 border-dashed bg-amber-50 px-3 py-1 text-amber-700 text-xs dark:bg-amber-950/30 dark:text-amber-400'>
           <Code className='size-3' aria-hidden='true' />
           <span>撤回事件 (msg_type: {MSG_TYPE.REVOKE})</span>
         </div>
+        <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />
       </div>
     )
   }
 
   // System tip messages (msg_type 18) should be displayed centered without bubble styling
-  if (message.msg_type === MSG_TYPE.SYSTEM_TIP) {
+  // Fan group system messages (msg_type 306, e.g. "欢迎xxx入群") should be displayed centered
+  if (message.msg_type === MSG_TYPE.SYSTEM_TIP || message.msg_type === MSG_TYPE.FAN_GROUP_SYSTEM) {
     return (
-      <div className='flex justify-center py-1'>
-        <div className='rounded-full bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>
+      <div className='flex items-center justify-center gap-1 py-1'>
+        <div className='rounded-full bg-zinc-100 px-3 py-1 text-muted-foreground text-xs dark:bg-zinc-800/50'>
           {renderMessageContent(message, emojiInfoMap)}
         </div>
+        {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
       </div>
     )
   }
@@ -858,10 +861,11 @@ export function MessageBubble({
       // sub_type 4 = system-like welcome/announcement message
       if (aiContent.sub_type === 4) {
         return (
-          <div className='flex justify-center py-1'>
+          <div className='flex items-center justify-center gap-1 py-1'>
             <div className='rounded bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>
               {renderMessageContent(message, emojiInfoMap)}
             </div>
+            {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
           </div>
         )
       }
@@ -869,10 +873,11 @@ export function MessageBubble({
     } catch {
       // If parsing fails, display as centered fallback
       return (
-        <div className='flex justify-center py-1'>
+        <div className='flex items-center justify-center gap-1 py-1'>
           <div className='rounded-full bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>
             {renderMessageContent(message, emojiInfoMap)}
           </div>
+          {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
         </div>
       )
     }
@@ -897,15 +902,25 @@ export function MessageBubble({
   const RICH_CONTENT_TYPES: number[] = [MSG_TYPE.IMAGE, MSG_TYPE.CUSTOM_EMOJI, MSG_TYPE.VIDEO_PUSH, MSG_TYPE.SHARE]
   const isRichContent = RICH_CONTENT_TYPES.includes(message.msg_type)
 
-  // Get avatar URL based on sender
-  const avatarUrl = isSent
-    ? userInfo?.face // Current user's avatar for sent messages
-    : getSessionAvatar(session, userCache) // Other user's avatar for received messages
-
   const isFanGroup = session.session_type === SESSION_TYPE.FAN_GROUP
 
+  // Get sender info from userCache for group chats
+  const senderInfo = userCache[message.sender_uid]
+
+  // Get avatar URL based on sender
+  // For group chats, use the actual sender's avatar from userCache
+  const avatarUrl = isSent
+    ? userInfo?.face // Current user's avatar for sent messages
+    : isFanGroup
+      ? senderInfo?.face // For group chats, use the sender's avatar from cache
+      : getSessionAvatar(session, userCache) // For 1-to-1 chats, use session avatar
+
+  // Get sender name for group chats (shown above messages from others)
+  const senderName = !isSent && isFanGroup ? senderInfo?.name || `UID:${message.sender_uid}` : null
+
   // Get the user ID for the Bilibili space link
-  const resolvedUid = isSent ? userInfo?.mid : session.talker_id
+  // For group chats, use the actual sender_uid, not the group ID
+  const resolvedUid = isSent ? userInfo?.mid : isFanGroup ? message.sender_uid : session.talker_id
   const bilibiliSpaceUrl = resolvedUid ? `https://space.bilibili.com/${resolvedUid}` : null
   const laplaceUrl = resolvedUid ? `https://laplace.live/user/${resolvedUid}` : null
 
@@ -961,6 +976,17 @@ export function MessageBubble({
       </Menu>
 
       <div className={cn('flex max-w-[70%] flex-col gap-1', isSent ? 'items-end' : 'items-start')}>
+        {/* Sender name for group chats (shown for received messages) */}
+        {senderName && (
+          <a
+            href={bilibiliSpaceUrl || '#'}
+            target='_blank'
+            rel='noopener noreferrer'
+            className='truncate text-muted-foreground text-xs hover:text-foreground hover:underline'
+          >
+            {senderName}
+          </a>
+        )}
         {/* Developer mode indicator for recalled messages */}
         {isRecalledInDevMode && (
           <div className='flex items-center gap-1 text-amber-600 text-xs dark:text-amber-400'>
