@@ -2,8 +2,9 @@
 // User Agent
 // ============================================================================
 
-export const USER_AGENT =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+export const CHROME_VERSION = '144'
+
+export const USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION}.0.0.0 Safari/537.36`
 
 // ============================================================================
 // Bilibili API Base URLs
@@ -20,6 +21,48 @@ export const BILIBILI_API = {
   MESSAGE: 'https://message.bilibili.com',
   /** Broadcast WebSocket */
   BROADCAST_WS: 'wss://broadcast.chat.bilibili.com:7826',
+} as const
+
+// ============================================================================
+// HTTP Headers
+// ============================================================================
+
+/** Client Hints for Chrome on Windows */
+export const CLIENT_HINTS = {
+  'sec-ch-ua': `"Not(A:Brand";v="8", "Chromium";v="${CHROME_VERSION}", "Google Chrome";v="${CHROME_VERSION}"`,
+  'sec-ch-ua-mobile': '?0',
+  'sec-ch-ua-platform': '"Windows"',
+} as const
+
+/** Sec-Fetch headers for different request contexts */
+export const SEC_FETCH = {
+  /** For API/XHR requests */
+  API: {
+    'sec-fetch-dest': 'empty',
+    'sec-fetch-mode': 'cors',
+    'sec-fetch-site': 'same-site',
+  },
+  /** For navigation requests */
+  NAVIGATE: {
+    'sec-fetch-dest': 'document',
+    'sec-fetch-mode': 'navigate',
+    'sec-fetch-site': 'none',
+    'sec-fetch-user': '?1',
+  },
+} as const
+
+export const BILIBILI_HEADERS = {
+  /** Referer header for messaging APIs */
+  REFERER: `${BILIBILI_API.MESSAGE}/`,
+  /** Origin header for messaging APIs */
+  ORIGIN: BILIBILI_API.MESSAGE,
+} as const
+
+/** Common headers for Bilibili API requests */
+export const COMMON_HEADERS = {
+  'User-Agent': USER_AGENT,
+  ...CLIENT_HINTS,
+  ...SEC_FETCH.API,
 } as const
 
 // ============================================================================
@@ -58,17 +101,6 @@ export const BILIBILI_ENDPOINTS = {
   // WebSocket
   /** Broadcast WebSocket for real-time notifications */
   BROADCAST_WS: `${BILIBILI_API.BROADCAST_WS}/sub`,
-} as const
-
-// ============================================================================
-// HTTP Headers
-// ============================================================================
-
-export const BILIBILI_HEADERS = {
-  /** Referer header for messaging APIs */
-  REFERER: `${BILIBILI_API.MESSAGE}/`,
-  /** Origin header for messaging APIs */
-  ORIGIN: BILIBILI_API.MESSAGE,
 } as const
 
 // ============================================================================

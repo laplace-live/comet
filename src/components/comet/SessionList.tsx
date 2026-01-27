@@ -1,5 +1,7 @@
 import { Loader2, MessageSquare, RefreshCw, Search, Settings, X } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { forwardRef, useMemo, useState } from 'react'
+import type { ScrollerProps } from 'react-virtuoso'
+import { Virtuoso } from 'react-virtuoso'
 
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliSession } from '@/types/bilibili'
@@ -22,11 +24,16 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from '@/components/ui/menu'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { SessionItem } from './SessionItem'
 import { UserMenu } from './UserMenu'
+
+const CustomScroller = forwardRef<HTMLDivElement, ScrollerProps>(({ children, ...props }, ref) => (
+  <div ref={ref} {...props} className='scrollbar-thin'>
+    {children}
+  </div>
+))
 
 type SessionVisibilityFilter = 'all' | 'unread' | 'read'
 
@@ -73,7 +80,6 @@ export function SessionList({
   onRemoveAccount,
   onReauthAccount,
 }: SessionListProps) {
-  const sentinelRef = useRef<HTMLDivElement>(null)
   const [filterText, setFilterText] = useState('')
   const [visibilityFilter, setVisibilityFilter] = useState<SessionVisibilityFilter>('all')
 
@@ -111,25 +117,14 @@ export function SessionList({
     return result
   }, [sessions, filterText, visibilityFilter, userCache])
 
-  // Auto-load more when sentinel becomes visible
-  useEffect(() => {
-    const sentinel = sentinelRef.current
-    if (!sentinel || !hasMoreSessions || loadingMore) return
-
-    const observer = new IntersectionObserver(
-      entries => {
-        if (entries[0].isIntersecting && hasMoreSessions && !loadingMore) {
-          onLoadMore()
-        }
-      },
-      { threshold: 0.1 }
-    )
-
-    observer.observe(sentinel)
-    return () => observer.disconnect()
-  }, [hasMoreSessions, loadingMore, onLoadMore])
-
   const isFiltering = filterText.trim().length > 0 || visibilityFilter !== 'all'
+
+  // Handle end reached for infinite scroll - only when not filtering
+  const handleEndReached = () => {
+    if (hasMoreSessions && !loadingMore && !isFiltering) {
+      onLoadMore()
+    }
+  }
 
   return (
     <div
@@ -193,37 +188,37 @@ export function SessionList({
         </div>
       </div>
 
-      <ScrollArea className='flex-1'>
-        <div>
-          {loading ? (
-            <SessionListSkeleton />
-          ) : filteredSessions.length === 0 ? (
-            isFiltering ? (
-              <SessionListNoResults />
-            ) : (
-              <SessionListEmpty />
-            )
-          ) : (
-            <>
-              {filteredSessions.map(session => (
-                <SessionItem
-                  key={`${session.session_type}-${session.talker_id}`}
-                  session={session}
-                  isSelected={selectedSession?.talker_id === session.talker_id}
-                  userCache={userCache}
-                  onClick={() => onSessionClick(session)}
-                />
-              ))}
-              {/* Sentinel element for infinite scroll - only show when not filtering */}
-              {hasMoreSessions && !isFiltering && (
-                <div ref={sentinelRef} className='flex items-center justify-center p-4'>
+      {loading ? (
+        <div className='flex-1 overflow-hidden'>
+          <SessionListSkeleton />
+        </div>
+      ) : filteredSessions.length === 0 ? (
+        <div className='flex-1 overflow-hidden'>{isFiltering ? <SessionListNoResults /> : <SessionListEmpty />}</div>
+      ) : (
+        <Virtuoso
+          className='flex-1'
+          data={filteredSessions}
+          endReached={handleEndReached}
+          overscan={200}
+          itemContent={(_, session) => (
+            <SessionItem
+              session={session}
+              isSelected={selectedSession?.talker_id === session.talker_id}
+              userCache={userCache}
+              onClick={() => onSessionClick(session)}
+            />
+          )}
+          components={{
+            Scroller: CustomScroller,
+            Footer: () =>
+              hasMoreSessions && !isFiltering ? (
+                <div className='flex items-center justify-center p-4'>
                   <Loader2 className='size-5 animate-spin text-muted-foreground' aria-hidden='true' />
                 </div>
-              )}
-            </>
-          )}
-        </div>
-      </ScrollArea>
+              ) : null,
+          }}
+        />
+      )}
 
       <UserMenu
         userInfo={userInfo}

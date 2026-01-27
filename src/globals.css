@@ -182,3 +182,23 @@
 .app-region-no-drag {
   -webkit-app-region: no-drag;
 }
+
+/* Custom scrollbar styling to match ScrollArea component */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: oklch(from currentColor l c h / 20%) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: oklch(from currentColor l c h / 20%);
+  border-radius: 9999px;
+}

@@ -15,7 +15,7 @@ import type {
 } from '@/types/bilibili'
 import { SESSION_TYPE } from '@/types/bilibili'
 
-import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, getImageExtension, USER_AGENT } from '@/lib/const'
+import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, COMMON_HEADERS, getImageExtension } from '@/lib/const'
 import { IpcChannel } from '@/lib/ipc'
 
 /**
@@ -267,9 +267,7 @@ export function registerBilibiliIpcHandlers() {
   ipcMain.handle(IpcChannel.BILIBILI_QR_GENERATE, async () => {
     try {
       const resp = await fetch(BILIBILI_ENDPOINTS.QR_GENERATE, {
-        headers: {
-          'User-Agent': USER_AGENT,
-        },
+        headers: { ...COMMON_HEADERS },
       })
 
       const data: BilibiliQRCodeGenerateResponse = await resp.json()
@@ -307,9 +305,7 @@ export function registerBilibiliIpcHandlers() {
       url.searchParams.set('qrcode_key', qrcodeKey)
 
       const resp = await fetch(url.toString(), {
-        headers: {
-          'User-Agent': USER_AGENT,
-        },
+        headers: { ...COMMON_HEADERS },
       })
 
       const data: BilibiliQRCodePollResponse = await resp.json()
@@ -328,10 +324,7 @@ export function registerBilibiliIpcHandlers() {
         // Fetch user info to complete the account data
         const cookieHeader = cookieStringFromCredentials(credentials)
         const navResp = await fetch(BILIBILI_ENDPOINTS.NAV, {
-          headers: {
-            Cookie: cookieHeader,
-            'User-Agent': USER_AGENT,
-          },
+          headers: { Cookie: cookieHeader, ...COMMON_HEADERS },
         })
         const navData: BilibiliNavResponse = await navResp.json()
 
@@ -404,10 +397,7 @@ export function registerBilibiliIpcHandlers() {
         const cookieHeader = cookieStringFromCredentials(credentials)
 
         const resp = await fetch(BILIBILI_ENDPOINTS.NAV, {
-          headers: {
-            Cookie: cookieHeader,
-            'User-Agent': USER_AGENT,
-          },
+          headers: { Cookie: cookieHeader, ...COMMON_HEADERS },
         })
 
         const data: BilibiliNavResponse = await resp.json()
@@ -590,10 +580,7 @@ export function registerBilibiliIpcHandlers() {
       // Verify the new credentials are valid
       const cookieHeader = cookieStringFromCredentials(credentials)
       const resp = await fetch(BILIBILI_ENDPOINTS.NAV, {
-        headers: {
-          Cookie: cookieHeader,
-          'User-Agent': USER_AGENT,
-        },
+        headers: { Cookie: cookieHeader, ...COMMON_HEADERS },
       })
 
       const data: BilibiliNavResponse = await resp.json()
@@ -663,7 +650,7 @@ export function registerBilibiliIpcHandlers() {
         const resp = await fetch(url.toString(), {
           headers: {
             Cookie: cookieHeader,
-            'User-Agent': USER_AGENT,
+            ...COMMON_HEADERS,
             Referer: BILIBILI_HEADERS.REFERER,
             Origin: BILIBILI_HEADERS.ORIGIN,
           },
@@ -733,7 +720,7 @@ export function registerBilibiliIpcHandlers() {
         const resp = await fetch(url.toString(), {
           headers: {
             Cookie: cookieHeader,
-            'User-Agent': USER_AGENT,
+            ...COMMON_HEADERS,
             Referer: BILIBILI_HEADERS.REFERER,
             Origin: BILIBILI_HEADERS.ORIGIN,
           },
@@ -784,7 +771,7 @@ export function registerBilibiliIpcHandlers() {
         const resp = await fetch(url.toString(), {
           headers: {
             Cookie: cookieHeader,
-            'User-Agent': USER_AGENT,
+            ...COMMON_HEADERS,
             Referer: BILIBILI_HEADERS.REFERER,
             Origin: BILIBILI_HEADERS.ORIGIN,
           },
@@ -859,7 +846,7 @@ export function registerBilibiliIpcHandlers() {
           method: 'POST',
           headers: {
             Cookie: cookieHeader,
-            'User-Agent': USER_AGENT,
+            ...COMMON_HEADERS,
             'Content-Type': 'application/x-www-form-urlencoded',
             Referer: BILIBILI_HEADERS.REFERER,
             Origin: BILIBILI_HEADERS.ORIGIN,
@@ -921,7 +908,7 @@ export function registerBilibiliIpcHandlers() {
           method: 'POST',
           headers: {
             Cookie: cookieHeader,
-            'User-Agent': USER_AGENT,
+            ...COMMON_HEADERS,
             'Content-Type': 'application/x-www-form-urlencoded',
             Referer: BILIBILI_HEADERS.REFERER,
             Origin: BILIBILI_HEADERS.ORIGIN,
@@ -991,7 +978,7 @@ export function registerBilibiliIpcHandlers() {
           method: 'POST',
           headers: {
             Cookie: cookieHeader,
-            'User-Agent': USER_AGENT,
+            ...COMMON_HEADERS,
             'Content-Type': 'application/x-www-form-urlencoded',
             Referer: BILIBILI_HEADERS.REFERER,
             Origin: BILIBILI_HEADERS.ORIGIN,
@@ -1057,7 +1044,7 @@ export function registerBilibiliIpcHandlers() {
           method: 'POST',
           headers: {
             Cookie: cookieHeader,
-            'User-Agent': USER_AGENT,
+            ...COMMON_HEADERS,
             Referer: BILIBILI_HEADERS.REFERER,
             Origin: BILIBILI_HEADERS.ORIGIN,
           },
