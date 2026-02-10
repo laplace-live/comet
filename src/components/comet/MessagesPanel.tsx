@@ -1,4 +1,15 @@
-import { ArrowLeft, Bell, BellOff, Copy, EllipsisVertical, ImagePlus, MessageSquare, User, Users } from 'lucide-react'
+import {
+  ArrowDown,
+  ArrowLeft,
+  Bell,
+  BellOff,
+  Copy,
+  EllipsisVertical,
+  ImagePlus,
+  MessageSquare,
+  User,
+  Users,
+} from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ListRange, VirtuosoHandle } from 'react-virtuoso'
 
@@ -142,6 +153,45 @@ function ChatView({
     [scrollPositionCacheRef]
   )
 
+  // New message indicator: track whether user is at bottom and count unseen new messages
+  const [isAtBottom, setIsAtBottom] = useState(true)
+  const isAtBottomRef = useRef(true)
+  const prevMessageCountRef = useRef(messages.length)
+
+  const handleAtBottomStateChange = useCallback((atBottom: boolean) => {
+    setIsAtBottom(atBottom)
+    isAtBottomRef.current = atBottom
+  }, [])
+
+  // Count new messages that arrive while user is scrolled up
+  const [newMessageCount, setNewMessageCount] = useState(0)
+
+  useEffect(() => {
+    const prevCount = prevMessageCountRef.current
+    const currentCount = messages.length
+    prevMessageCountRef.current = currentCount
+
+    if (currentCount > prevCount && !isAtBottomRef.current) {
+      setNewMessageCount(prev => prev + (currentCount - prevCount))
+    }
+  }, [messages.length])
+
+  // Reset new message count when user scrolls to bottom
+  useEffect(() => {
+    if (isAtBottom) {
+      setNewMessageCount(0)
+    }
+  }, [isAtBottom])
+
+  // Reset new message indicator when session changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: intentionally reset when session changes
+  useEffect(() => {
+    setNewMessageCount(0)
+    setIsAtBottom(true)
+    isAtBottomRef.current = true
+    prevMessageCountRef.current = messages.length
+  }, [session.talker_id])
+
   const copyUsername = useCallback(() => {
     navigator.clipboard.writeText(sessionName)
   }, [sessionName])
@@ -165,6 +215,7 @@ function ChatView({
   const scrollToBottom = useCallback(() => {
     if (messages.length > 0) {
       virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'smooth' })
+      setNewMessageCount(0)
     }
   }, [messages.length])
 
@@ -333,19 +384,34 @@ function ChatView({
           onRecall={onRecall}
           initialScrollIndex={savedScrollIndex}
           onRangeChanged={handleRangeChanged}
+          onAtBottomStateChange={handleAtBottomStateChange}
         />
       )}
 
-      {/* Message Input - isolated component to prevent re-renders of messages */}
-      <MessageInput
-        sessionId={session.talker_id}
-        sendingMessage={sendingMessage}
-        droppedFile={droppedFile}
-        onSendMessage={onSendMessage}
-        onSendImage={onSendImage}
-        onMessageSent={scrollToBottom}
-        onDroppedFileProcessed={handleDroppedFileProcessed}
-      />
+      {/* Message Input with new messages indicator anchored above it */}
+      <div className='relative flex-none'>
+        {newMessageCount > 0 && (
+          <div className='absolute right-4 bottom-full z-40 mb-2'>
+            <button
+              type='button'
+              onClick={scrollToBottom}
+              className='flex items-center gap-1.5 rounded-full bg-primary px-3 py-1.5 font-medium text-primary-foreground text-xs shadow-lg transition-all hover:bg-primary/90 active:scale-95'
+            >
+              <ArrowDown className='size-3.5' aria-hidden='true' />
+              {newMessageCount} 条新消息
+            </button>
+          </div>
+        )}
+        <MessageInput
+          sessionId={session.talker_id}
+          sendingMessage={sendingMessage}
+          droppedFile={droppedFile}
+          onSendMessage={onSendMessage}
+          onSendImage={onSendImage}
+          onMessageSent={scrollToBottom}
+          onDroppedFileProcessed={handleDroppedFileProcessed}
+        />
+      </div>
     </div>
   )
 }

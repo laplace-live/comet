@@ -25,6 +25,7 @@ export interface MessagesListProps {
   virtuosoRef?: React.Ref<VirtuosoHandle>
   initialScrollIndex?: number
   onRangeChanged?: (range: ListRange) => void
+  onAtBottomStateChange?: (atBottom: boolean) => void
 }
 
 // Memoized messages list to prevent re-renders when input changes
@@ -38,6 +39,7 @@ export const MessagesList = memo(function MessagesList({
   virtuosoRef,
   initialScrollIndex,
   onRangeChanged,
+  onAtBottomStateChange,
 }: MessagesListProps) {
   return (
     <Virtuoso
@@ -50,6 +52,7 @@ export const MessagesList = memo(function MessagesList({
       }
       followOutput='smooth'
       rangeChanged={onRangeChanged}
+      atBottomStateChange={onAtBottomStateChange}
       itemContent={(_, msg) => (
         <div className='px-4 pb-4'>
           <MessageBubble
