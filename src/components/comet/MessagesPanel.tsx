@@ -1,5 +1,6 @@
 import { ArrowLeft, Bell, BellOff, Copy, EllipsisVertical, ImagePlus, MessageSquare, User, Users } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import type { VirtuosoHandle } from 'react-virtuoso'
 
 import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
 import type { UserCache } from '@/lib/message-utils'
@@ -18,7 +19,6 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Spinner } from '@/components/ui/spinner'
 import { toastManager } from '@/components/ui/toast'
 
@@ -112,7 +112,7 @@ function ChatView({
   onToggleDnd,
 }: ChatViewProps) {
   const avatar = getSessionAvatar(session, userCache)
-  const messagesEndRef = useRef<HTMLDivElement>(null)
+  const virtuosoRef = useRef<VirtuosoHandle>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [droppedFile, setDroppedFile] = useState<File | null>(null)
   const dragCounterRef = useRef(0)
@@ -140,23 +140,11 @@ function ChatView({
     dragCounterRef.current = 0
   }, [session.talker_id])
 
-  // Auto-scroll to bottom when messages load or session changes
-  // Using useEffect with requestAnimationFrame to ensure DOM is fully laid out
-  useEffect(() => {
-    if (!messagesLoading && messages.length > 0) {
-      // Use requestAnimationFrame to wait for layout calculation to complete
-      // This ensures the ScrollArea viewport is properly sized before scrolling
-      requestAnimationFrame(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'instant' })
-      })
-    }
-  }, [messagesLoading, messages])
-
   const scrollToBottom = useCallback(() => {
-    requestAnimationFrame(() => {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-    })
-  }, [])
+    if (messages.length > 0) {
+      virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'smooth' })
+    }
+  }, [messages.length])
 
   // Drag and drop handlers for image upload
   const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -302,30 +290,26 @@ function ChatView({
       </div>
 
       {/* Messages */}
-      <ScrollArea className='flex-1'>
-        <div className='p-4'>
-          {messagesLoading ? (
-            <div className='flex items-center justify-center py-16'>
-              <Spinner className='size-8 text-muted-foreground' aria-hidden='true' />
-            </div>
-          ) : messages.length === 0 ? (
-            <div className='flex flex-col items-center justify-center py-16 text-muted-foreground'>
-              <MessageSquare className='mb-4 size-12 opacity-50' aria-hidden='true' />
-              <p>暂无消息</p>
-            </div>
-          ) : (
-            <MessagesList
-              messages={messages}
-              emojiInfoMap={emojiInfoMap}
-              session={session}
-              userCache={userCache}
-              userInfo={userInfo}
-              onRecall={onRecall}
-            />
-          )}
-          <div ref={messagesEndRef} />
+      {messagesLoading ? (
+        <div className='flex flex-1 items-center justify-center py-16'>
+          <Spinner className='size-8 text-muted-foreground' aria-hidden='true' />
         </div>
-      </ScrollArea>
+      ) : messages.length === 0 ? (
+        <div className='flex flex-1 flex-col items-center justify-center py-16 text-muted-foreground'>
+          <MessageSquare className='mb-4 size-12 opacity-50' aria-hidden='true' />
+          <p>暂无消息</p>
+        </div>
+      ) : (
+        <MessagesList
+          virtuosoRef={virtuosoRef}
+          messages={messages}
+          emojiInfoMap={emojiInfoMap}
+          session={session}
+          userCache={userCache}
+          userInfo={userInfo}
+          onRecall={onRecall}
+        />
+      )}
 
       {/* Message Input - isolated component to prevent re-renders of messages */}
       <MessageInput

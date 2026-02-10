@@ -199,7 +199,7 @@ export function SessionList({
           className='flex-1'
           data={filteredSessions}
           endReached={handleEndReached}
-          overscan={200}
+          overscan={20}
           itemContent={(_, session) => (
             <SessionItem
               session={session}
