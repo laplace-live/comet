@@ -137,6 +137,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const messagesRef = useRef<BilibiliMessage[]>([])
   const selectedSessionRef = useRef<BilibiliSession | null>(null)
 
+  // Track window focus state to decide when to mark messages as read vs show notifications
+  const windowFocusedRef = useRef(document.hasFocus())
+
   // Message and emoji cache per session (avoids refetching when switching back)
   const messagesCacheRef = useRef<Map<string, BilibiliMessage[]>>(new Map())
   const emojiCacheRef = useRef<Map<string, EmojiInfoMap>>(new Map())
@@ -175,6 +178,45 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       emojiCacheRef.current.set(key, emojiInfoMap)
     }
   }, [emojiInfoMap])
+
+  // Track window focus state and mark current session as read when regaining focus
+  useEffect(() => {
+    const handleFocus = () => {
+      windowFocusedRef.current = true
+
+      // When window regains focus, mark the current session as read
+      const session = selectedSessionRef.current
+      if (session) {
+        window.electronAPI.bilibili
+          .updateAck({
+            talkerId: String(session.talker_id),
+            sessionType: String(session.session_type),
+            ackSeqno: String(session.max_seqno || 0),
+          })
+          .catch(err => console.error('Failed to mark as read on focus:', err))
+
+        // Reset unread count for the selected session
+        setSessions(prev =>
+          prev.map(s =>
+            s.talker_id === session.talker_id && s.session_type === session.session_type
+              ? { ...s, unread_count: 0 }
+              : s
+          )
+        )
+      }
+    }
+
+    const handleBlur = () => {
+      windowFocusedRef.current = false
+    }
+
+    window.addEventListener('focus', handleFocus)
+    window.addEventListener('blur', handleBlur)
+    return () => {
+      window.removeEventListener('focus', handleFocus)
+      window.removeEventListener('blur', handleBlur)
+    }
+  }, [])
 
   // Fetch user info for multiple users in batch
   const fetchUserInfoBatch = useCallback(async (uids: number[]) => {
@@ -614,8 +656,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           }
         }
 
-        // Mark as read since we're viewing this session
-        if (data.data?.max_seqno) {
+        // Only mark as read if the window is focused (user is actively viewing)
+        if (data.data?.max_seqno && windowFocusedRef.current) {
           window.electronAPI.bilibili
             .updateAck({
               talkerId: String(session.talker_id),
@@ -1294,6 +1336,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         selectedSession?.talker_id === notification.talkerId &&
         selectedSession?.session_type === notification.sessionType
 
+      const isWindowFocused = windowFocusedRef.current
+
       // If the notification is for the currently selected session
       if (isCurrentSession) {
         if (notification.instantMsg) {
@@ -1322,8 +1366,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
             return [...prev, newMessage]
           })
 
-          // Also mark as read since we're viewing it
-          if (selectedSession.max_seqno) {
+          // Only mark as read if the window is focused (user is actively viewing)
+          if (isWindowFocused && selectedSession.max_seqno) {
             window.electronAPI.bilibili
               .updateAck({
                 talkerId: String(selectedSession.talker_id),
@@ -1333,12 +1377,16 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
               .catch(err => console.error('Failed to mark as read:', err))
           }
 
-          // Show notification if window is not focused (main process will check focus state)
-          console.log('[usePrivateMessages] Current session message - attempting notification')
+          // Show notification (main process will suppress if window is focused)
           showNotificationForMessage(newMessage, instantMsg.senderUid, notification.talkerId, notification.sessionType)
         } else {
           // No instant message data available - do a silent fetch to get new messages
           fetchMessagesQuietly(selectedSession)
+
+          // When window is not focused, also show a notification (fetch the latest message for it)
+          if (!isWindowFocused) {
+            fetchLatestMessageForNotification(notification.talkerId, notification.sessionType)
+          }
         }
       } else {
         // Not the current session - show system notification
@@ -1377,11 +1425,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           const updatedSessions = [...prev]
           const session = { ...updatedSessions[existingSessionIndex] }
 
-          // Update unread count only if not the currently selected session
-          if (!isCurrentSession) {
-            session.unread_count = (session.unread_count || 0) + 1
-          } else {
+          // Update unread count: only reset to 0 if this is the current session AND window is focused
+          if (isCurrentSession && isWindowFocused) {
             session.unread_count = 0
+          } else {
+            session.unread_count = (session.unread_count || 0) + 1
           }
 
           // Update last_msg if we have instant message data
@@ -1518,6 +1566,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           fetchMessagesQuietly(session)
         } else {
           setMessages([])
+          setEmojiInfoMap({})
           fetchMessages(session)
         }
       } else {
