@@ -53,10 +53,10 @@ export function UserMenu({
   const hasMultipleAccounts = accounts.length > 1
 
   return (
-    <div className='flex-none border-border/50 border-t p-3'>
+    <div className='flex-none border-border/50 border-t'>
       <Menu>
-        <MenuTrigger className='flex w-full select-none items-center gap-3 rounded-lg p-2 outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring'>
-          <Avatar className='size-8'>
+        <MenuTrigger className='flex w-full select-none items-center gap-3 px-4 py-2 outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring'>
+          <Avatar className='size-10'>
             {userInfo.face && <AvatarImage src={enforceHttps(userInfo.face)} alt={userInfo.uname} />}
             <AvatarFallback className='text-sm'>{userInfo.uname.charAt(0)}</AvatarFallback>
           </Avatar>
