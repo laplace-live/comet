@@ -1,6 +1,6 @@
 import { ArrowLeft, Bell, BellOff, Copy, EllipsisVertical, ImagePlus, MessageSquare, User, Users } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { VirtuosoHandle } from 'react-virtuoso'
+import type { ListRange, VirtuosoHandle } from 'react-virtuoso'
 
 import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
 import type { UserCache } from '@/lib/message-utils'
@@ -56,6 +56,9 @@ export function MessagesPanel({
   onRecall,
   onToggleDnd,
 }: MessagesPanelProps) {
+  // Scroll position cache persists across session switches (survives ChatView unmount/remount)
+  const scrollPositionCacheRef = useRef<Map<string, number>>(new Map())
+
   return (
     <div
       className={`flex flex-1 flex-col bg-linear-to-b from-zinc-50/80 to-zinc-100/80 dark:from-zinc-900 dark:to-zinc-950 ${isVisible ? 'flex' : 'hidden md:flex'}`}
@@ -74,6 +77,7 @@ export function MessagesPanel({
           onSendImage={onSendImage}
           onRecall={onRecall}
           onToggleDnd={onToggleDnd}
+          scrollPositionCacheRef={scrollPositionCacheRef}
         />
       ) : (
         <EmptyState />
@@ -95,6 +99,7 @@ interface ChatViewProps {
   onSendImage: (imageData: string, mimeType: string) => Promise<boolean>
   onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
   onToggleDnd: (session: BilibiliSession, enabled: boolean) => Promise<boolean>
+  scrollPositionCacheRef: React.MutableRefObject<Map<string, number>>
 }
 
 function ChatView({
@@ -110,6 +115,7 @@ function ChatView({
   onSendImage,
   onRecall,
   onToggleDnd,
+  scrollPositionCacheRef,
 }: ChatViewProps) {
   const avatar = getSessionAvatar(session, userCache)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
@@ -119,6 +125,22 @@ function ChatView({
 
   const sessionName = getSessionName(session, userCache)
   const isDnd = session.is_dnd === 1
+
+  // Scroll position tracking
+  const sessionKey = `${session.talker_id}_${session.session_type}`
+  const sessionKeyRef = useRef(sessionKey)
+  sessionKeyRef.current = sessionKey
+
+  // Get saved scroll position for this session (undefined = new session, scroll to bottom)
+  const savedScrollIndex = scrollPositionCacheRef.current.get(sessionKey)
+
+  // Track scroll position changes and save to cache continuously
+  const handleRangeChanged = useCallback(
+    (range: ListRange) => {
+      scrollPositionCacheRef.current.set(sessionKeyRef.current, range.startIndex)
+    },
+    [scrollPositionCacheRef]
+  )
 
   const copyUsername = useCallback(() => {
     navigator.clipboard.writeText(sessionName)
@@ -301,6 +323,7 @@ function ChatView({
         </div>
       ) : (
         <MessagesList
+          key={sessionKey}
           virtuosoRef={virtuosoRef}
           messages={messages}
           emojiInfoMap={emojiInfoMap}
@@ -308,6 +331,8 @@ function ChatView({
           userCache={userCache}
           userInfo={userInfo}
           onRecall={onRecall}
+          initialScrollIndex={savedScrollIndex}
+          onRangeChanged={handleRangeChanged}
         />
       )}
 

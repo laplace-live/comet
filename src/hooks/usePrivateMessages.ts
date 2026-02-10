@@ -134,6 +134,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Refs to access latest state in callbacks
   const sessionsRef = useRef<BilibiliSession[]>([])
   const userCacheRef = useRef<UserCache>({})
+  const messagesRef = useRef<BilibiliMessage[]>([])
+  const selectedSessionRef = useRef<BilibiliSession | null>(null)
+
+  // Message and emoji cache per session (avoids refetching when switching back)
+  const messagesCacheRef = useRef<Map<string, BilibiliMessage[]>>(new Map())
+  const emojiCacheRef = useRef<Map<string, EmojiInfoMap>>(new Map())
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -143,6 +149,32 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   useEffect(() => {
     userCacheRef.current = userCache
   }, [userCache])
+
+  useEffect(() => {
+    messagesRef.current = messages
+  }, [messages])
+
+  useEffect(() => {
+    selectedSessionRef.current = selectedSession
+  }, [selectedSession])
+
+  // Keep message cache in sync while viewing a session
+  useEffect(() => {
+    const session = selectedSessionRef.current
+    if (session && messages.length > 0) {
+      const key = `${session.talker_id}_${session.session_type}`
+      messagesCacheRef.current.set(key, messages)
+    }
+  }, [messages])
+
+  // Keep emoji cache in sync while viewing a session
+  useEffect(() => {
+    const session = selectedSessionRef.current
+    if (session) {
+      const key = `${session.talker_id}_${session.session_type}`
+      emojiCacheRef.current.set(key, emojiInfoMap)
+    }
+  }, [emojiInfoMap])
 
   // Fetch user info for multiple users in batch
   const fetchUserInfoBatch = useCallback(async (uids: number[]) => {
@@ -296,6 +328,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       setUserCache({})
       setHasMoreSessions(false)
       setNextEndTs(null)
+      messagesCacheRef.current.clear()
+      emojiCacheRef.current.clear()
 
       // Check login - this may remove additional expired accounts on the backend
       const loginResult = await window.electronAPI.bilibili.checkLogin()
@@ -487,9 +521,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           }
 
           // Filter out UIDs already in cache or the current user
-          const uidsToFetch = [...senderUids].filter(
-            uid => uid !== userInfo?.mid && !userCacheRef.current[uid]
-          )
+          const uidsToFetch = [...senderUids].filter(uid => uid !== userInfo?.mid && !userCacheRef.current[uid])
 
           if (uidsToFetch.length > 0) {
             fetchUserInfoBatch(uidsToFetch)
@@ -535,6 +567,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           return
         }
 
+        // Guard: only update if still viewing this session (prevents stale responses)
+        if (
+          selectedSessionRef.current?.talker_id !== session.talker_id ||
+          selectedSessionRef.current?.session_type !== session.session_type
+        ) {
+          return
+        }
+
         const newMessages = data.data?.messages || []
 
         // Merge emoji infos from this response
@@ -550,9 +590,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           const existingSeqnos = new Set(prev.map(m => m.msg_seqno))
 
           // Filter out messages that already exist
-          uniqueNewMessages = newMessages.filter(
-            m => !existingKeys.has(m.msg_key) && !existingSeqnos.has(m.msg_seqno)
-          )
+          uniqueNewMessages = newMessages.filter(m => !existingKeys.has(m.msg_key) && !existingSeqnos.has(m.msg_seqno))
 
           if (uniqueNewMessages.length === 0) return prev
 
@@ -570,9 +608,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
               senderUids.add(msg.sender_uid)
             }
           }
-          const uidsToFetch = [...senderUids].filter(
-            uid => uid !== userInfo?.mid && !userCacheRef.current[uid]
-          )
+          const uidsToFetch = [...senderUids].filter(uid => uid !== userInfo?.mid && !userCacheRef.current[uid])
           if (uidsToFetch.length > 0) {
             fetchUserInfoBatch(uidsToFetch)
           }
@@ -600,11 +636,26 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
   const selectSession = useCallback(
     (session: BilibiliSession) => {
+      const newKey = `${session.talker_id}_${session.session_type}`
+      const cachedMessages = messagesCacheRef.current.get(newKey)
+      const cachedEmojis = emojiCacheRef.current.get(newKey)
+
       setSelectedSession(session)
-      setMessages([])
-      fetchMessages(session)
+
+      if (cachedMessages && cachedMessages.length > 0) {
+        // Restore from cache - no loading spinner
+        setMessages(cachedMessages)
+        setEmojiInfoMap(cachedEmojis || {})
+        // Silently refresh in background to pick up new messages
+        fetchMessagesQuietly(session)
+      } else {
+        // No cache - clear and fetch fresh
+        setMessages([])
+        setEmojiInfoMap({})
+        fetchMessages(session)
+      }
     },
-    [fetchMessages]
+    [fetchMessages, fetchMessagesQuietly]
   )
 
   const clearSelectedSession = useCallback(() => {
@@ -999,6 +1050,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setUserCache({})
         setHasMoreSessions(false)
         setNextEndTs(null)
+        messagesCacheRef.current.clear()
+        emojiCacheRef.current.clear()
 
         // Re-check login with new account - this may remove expired accounts
         const loginResult = await window.electronAPI.bilibili.checkLogin()
@@ -1072,6 +1125,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
               setSelectedSession(null)
               setMessages([])
               setUserCache({})
+              messagesCacheRef.current.clear()
+              emojiCacheRef.current.clear()
             }
           }
         } else {
@@ -1451,9 +1506,20 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (session) {
         // Select the session (this will fetch messages and mark as read)
         console.log('[usePrivateMessages] Selecting session:', session.talker_id)
+        const newKey = `${session.talker_id}_${session.session_type}`
+        const cachedMessages = messagesCacheRef.current.get(newKey)
+        const cachedEmojis = emojiCacheRef.current.get(newKey)
+
         setSelectedSession(session)
-        setMessages([])
-        fetchMessages(session)
+
+        if (cachedMessages && cachedMessages.length > 0) {
+          setMessages(cachedMessages)
+          setEmojiInfoMap(cachedEmojis || {})
+          fetchMessagesQuietly(session)
+        } else {
+          setMessages([])
+          fetchMessages(session)
+        }
       } else {
         console.log('[usePrivateMessages] Session still not found after refresh')
       }
@@ -1465,7 +1531,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       console.log('[usePrivateMessages] Cleaning up navigation listener')
       cleanup()
     }
-  }, [fetchMessages, refreshSessionsQuietly])
+  }, [fetchMessages, fetchMessagesQuietly, refreshSessionsQuietly])
 
   // Auto-connect WebSocket when logged in
   useEffect(() => {
