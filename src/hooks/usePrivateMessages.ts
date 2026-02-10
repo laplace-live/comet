@@ -140,10 +140,6 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Track window focus state to decide when to mark messages as read vs show notifications
   const windowFocusedRef = useRef(document.hasFocus())
 
-  // Message and emoji cache per session (avoids refetching when switching back)
-  const messagesCacheRef = useRef<Map<string, BilibiliMessage[]>>(new Map())
-  const emojiCacheRef = useRef<Map<string, EmojiInfoMap>>(new Map())
-
   // Keep refs in sync with state
   useEffect(() => {
     sessionsRef.current = sessions
@@ -161,24 +157,6 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     selectedSessionRef.current = selectedSession
   }, [selectedSession])
 
-  // Keep message cache in sync while viewing a session
-  useEffect(() => {
-    const session = selectedSessionRef.current
-    if (session && messages.length > 0) {
-      const key = `${session.talker_id}_${session.session_type}`
-      messagesCacheRef.current.set(key, messages)
-    }
-  }, [messages])
-
-  // Keep emoji cache in sync while viewing a session
-  useEffect(() => {
-    const session = selectedSessionRef.current
-    if (session) {
-      const key = `${session.talker_id}_${session.session_type}`
-      emojiCacheRef.current.set(key, emojiInfoMap)
-    }
-  }, [emojiInfoMap])
-
   // Track window focus state and mark current session as read when regaining focus
   useEffect(() => {
     const handleFocus = () => {
@@ -190,10 +168,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         // Derive the latest seqno from current messages to avoid using stale session data.
         // selectedSession.max_seqno may not reflect messages that arrived while unfocused.
         const currentMessages = messagesRef.current
-        const latestSeqno = currentMessages.reduce(
-          (max, m) => Math.max(max, m.msg_seqno),
-          session.max_seqno || 0
-        )
+        const latestSeqno = currentMessages.reduce((max, m) => Math.max(max, m.msg_seqno), session.max_seqno || 0)
 
         window.electronAPI.bilibili
           .updateAck({
@@ -206,9 +181,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         // Reset unread count for the selected session
         setSessions(prev =>
           prev.map(s =>
-            s.talker_id === session.talker_id && s.session_type === session.session_type
-              ? { ...s, unread_count: 0 }
-              : s
+            s.talker_id === session.talker_id && s.session_type === session.session_type ? { ...s, unread_count: 0 } : s
           )
         )
       }
@@ -365,6 +338,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Logout
   const logout = useCallback(async () => {
     try {
+      // Capture mid before logout clears it
+      const logoutMid = activeAccountMid
+
       // Disconnect WebSocket first to stop receiving notifications for this user
       await window.electronAPI.bilibili.wsDisconnect()
       setWsConnected(false)
@@ -378,8 +354,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       setUserCache({})
       setHasMoreSessions(false)
       setNextEndTs(null)
-      messagesCacheRef.current.clear()
-      emojiCacheRef.current.clear()
+
+      // Clear persistent message cache for the logged-out account
+      if (logoutMid) {
+        window.electronAPI.bilibili
+          .cacheClearAccount({ accountMid: logoutMid })
+          .catch(err => console.error('[usePrivateMessages] Failed to clear message cache:', err))
+      }
 
       // Check login - this may remove additional expired accounts on the backend
       const loginResult = await window.electronAPI.bilibili.checkLogin()
@@ -420,7 +401,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     } catch (err) {
       console.error('Failed to logout:', err)
     }
-  }, [fetchUserInfoBatch])
+  }, [fetchUserInfoBatch, activeAccountMid])
 
   const fetchSessions = useCallback(async () => {
     setLoading(true)
@@ -560,6 +541,18 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setMessages(sortedMessages)
         setMessagesLoading(false)
 
+        // Persist to SQLite cache (fire-and-forget)
+        if (activeAccountMid && sortedMessages.length > 0) {
+          window.electronAPI.bilibili
+            .cacheSaveMessages({
+              accountMid: activeAccountMid,
+              talkerId: session.talker_id,
+              sessionType: session.session_type,
+              messages: sortedMessages,
+            })
+            .catch(err => console.error('[usePrivateMessages] Failed to save messages to cache:', err))
+        }
+
         // For group chats (fan groups), fetch user info for message senders
         if (session.session_type === SESSION_TYPE.FAN_GROUP) {
           // Collect unique sender UIDs (excluding 0 which is system messages)
@@ -598,7 +591,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setMessagesLoading(false)
       }
     },
-    [mergeEmojiInfos, userInfo, fetchUserInfoBatch]
+    [mergeEmojiInfos, userInfo, fetchUserInfoBatch, activeAccountMid]
   )
 
   // Silent fetch of new messages - no loading spinner, merges with existing messages
@@ -634,6 +627,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         // Merge new messages with existing ones, avoiding duplicates
         let uniqueNewMessages: BilibiliMessage[] = []
+        let mergedMessages: BilibiliMessage[] = []
         setMessages(prev => {
           // Create a Set of existing message keys for fast lookup
           const existingKeys = new Set(prev.map(m => m.msg_key))
@@ -645,10 +639,23 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           if (uniqueNewMessages.length === 0) return prev
 
           // Merge and sort by timestamp (oldest first)
-          const merged = [...prev, ...uniqueNewMessages]
-          merged.sort((a, b) => a.timestamp - b.timestamp)
-          return merged
+          mergedMessages = [...prev, ...uniqueNewMessages]
+          mergedMessages.sort((a, b) => a.timestamp - b.timestamp)
+          return mergedMessages
         })
+
+        // Persist updated messages to SQLite cache (fire-and-forget)
+        // Use mergedMessages captured from the updater, not messagesRef which lags behind
+        if (activeAccountMid && mergedMessages.length > 0) {
+          window.electronAPI.bilibili
+            .cacheSaveMessages({
+              accountMid: activeAccountMid,
+              talkerId: session.talker_id,
+              sessionType: session.session_type,
+              messages: mergedMessages,
+            })
+            .catch(err => console.error('[usePrivateMessages] Failed to save messages to cache:', err))
+        }
 
         // For group chats, fetch user info for new message senders
         if (session.session_type === SESSION_TYPE.FAN_GROUP && uniqueNewMessages.length > 0) {
@@ -681,31 +688,40 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         console.error('[usePrivateMessages] Silent message fetch error:', err)
       }
     },
-    [mergeEmojiInfos, userInfo, fetchUserInfoBatch]
+    [mergeEmojiInfos, userInfo, fetchUserInfoBatch, activeAccountMid]
   )
 
   const selectSession = useCallback(
-    (session: BilibiliSession) => {
-      const newKey = `${session.talker_id}_${session.session_type}`
-      const cachedMessages = messagesCacheRef.current.get(newKey)
-      const cachedEmojis = emojiCacheRef.current.get(newKey)
-
+    async (session: BilibiliSession) => {
       setSelectedSession(session)
+      setEmojiInfoMap({})
 
-      if (cachedMessages && cachedMessages.length > 0) {
-        // Restore from cache - no loading spinner
-        setMessages(cachedMessages)
-        setEmojiInfoMap(cachedEmojis || {})
-        // Silently refresh in background to pick up new messages
-        fetchMessagesQuietly(session)
-      } else {
-        // No cache - clear and fetch fresh
-        setMessages([])
-        setEmojiInfoMap({})
-        fetchMessages(session)
+      // Try loading from SQLite persistent cache
+      if (activeAccountMid) {
+        try {
+          const cachedMessages = await window.electronAPI.bilibili.cacheLoadMessages({
+            accountMid: activeAccountMid,
+            talkerId: session.talker_id,
+            sessionType: session.session_type,
+          })
+
+          if (cachedMessages && cachedMessages.length > 0) {
+            // Restore from persistent cache - no loading spinner
+            setMessages(cachedMessages)
+            // Silently refresh in background to pick up new messages
+            fetchMessagesQuietly(session)
+            return
+          }
+        } catch (err) {
+          console.error('[usePrivateMessages] Failed to load cached messages:', err)
+        }
       }
+
+      // No cache hit - clear and fetch fresh from API
+      setMessages([])
+      fetchMessages(session)
     },
-    [fetchMessages, fetchMessagesQuietly]
+    [fetchMessages, fetchMessagesQuietly, activeAccountMid]
   )
 
   const clearSelectedSession = useCallback(() => {
@@ -1093,15 +1109,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           return
         }
 
-        // Clear current state
+        // Clear current state (SQLite cache is kept for all accounts)
         setSessions([])
         setSelectedSession(null)
         setMessages([])
         setUserCache({})
         setHasMoreSessions(false)
         setNextEndTs(null)
-        messagesCacheRef.current.clear()
-        emojiCacheRef.current.clear()
 
         // Re-check login with new account - this may remove expired accounts
         const loginResult = await window.electronAPI.bilibili.checkLogin()
@@ -1175,10 +1189,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
               setSelectedSession(null)
               setMessages([])
               setUserCache({})
-              messagesCacheRef.current.clear()
-              emojiCacheRef.current.clear()
             }
           }
+
+          // Clear persistent message cache for the removed account
+          window.electronAPI.bilibili
+            .cacheClearAccount({ accountMid: mid })
+            .catch(err => console.error('[usePrivateMessages] Failed to clear message cache:', err))
         } else {
           // Removal failed - reconnect WebSocket if we disconnected it
           if (wasActiveAccount) {
@@ -1424,12 +1441,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       }
 
       // Update session list to reflect new messages (incremental update, no refetch)
+      let sessionFound = false
       setSessions(prev => {
         const existingSessionIndex = prev.findIndex(
           s => s.talker_id === notification.talkerId && s.session_type === notification.sessionType
         )
 
         if (existingSessionIndex >= 0) {
+          sessionFound = true
           const updatedSessions = [...prev]
           const session = { ...updatedSessions[existingSessionIndex] }
 
@@ -1473,11 +1492,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           return updatedSessions
         }
 
-        // Session not found - this is a new conversation, do a silent background refresh
-        // We'll fetch sessions without showing a spinner
-        refreshSessionsQuietly()
         return prev
       })
+
+      // Session not found - this is a new conversation, do a silent background refresh
+      if (!sessionFound) {
+        refreshSessionsQuietly()
+      }
 
       // Keep selectedSession in sync so handleFocus and other consumers see the latest max_seqno
       if (isCurrentSession && notification.latestSeqno) {
@@ -1578,21 +1599,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (session) {
         // Select the session (this will fetch messages and mark as read)
         console.log('[usePrivateMessages] Selecting session:', session.talker_id)
-        const newKey = `${session.talker_id}_${session.session_type}`
-        const cachedMessages = messagesCacheRef.current.get(newKey)
-        const cachedEmojis = emojiCacheRef.current.get(newKey)
-
-        setSelectedSession(session)
-
-        if (cachedMessages && cachedMessages.length > 0) {
-          setMessages(cachedMessages)
-          setEmojiInfoMap(cachedEmojis || {})
-          fetchMessagesQuietly(session)
-        } else {
-          setMessages([])
-          setEmojiInfoMap({})
-          fetchMessages(session)
-        }
+        selectSession(session)
       } else {
         console.log('[usePrivateMessages] Session still not found after refresh')
       }
@@ -1604,7 +1611,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       console.log('[usePrivateMessages] Cleaning up navigation listener')
       cleanup()
     }
-  }, [fetchMessages, fetchMessagesQuietly, refreshSessionsQuietly])
+  }, [selectSession, refreshSessionsQuietly])
 
   // Auto-connect WebSocket when logged in
   useEffect(() => {

@@ -24,7 +24,7 @@ export default defineConfig(({ mode }) => ({
     },
     rollupOptions: {
       // Mark optional ws dependencies as external (they're not required)
-      external: ['bufferutil', 'utf-8-validate'],
+      external: ['bufferutil', 'utf-8-validate', 'better-sqlite3'],
     },
   },
 }))

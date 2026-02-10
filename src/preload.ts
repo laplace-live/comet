@@ -2,8 +2,11 @@
 // https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts
 import { contextBridge, ipcRenderer } from 'electron'
 
-import type { BilibiliCredentials } from './types/bilibili'
+import type { BilibiliCredentials, BilibiliMessage } from './types/bilibili'
 import type {
+  CacheClearAccountParams,
+  CacheLoadMessagesParams,
+  CacheSaveMessagesParams,
   CheckForUpdatesResult,
   CheckLoginResult,
   CopyImageParams,
@@ -126,6 +129,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // System notifications
     showNotification: (params: ShowNotificationParams): Promise<{ shown: boolean; reason?: string }> =>
       ipcRenderer.invoke(IpcChannel.SHOW_NOTIFICATION, params),
+
+    // Message cache (SQLite persistent storage)
+    cacheSaveMessages: (params: CacheSaveMessagesParams): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_SAVE_MESSAGES, params),
+    cacheLoadMessages: (params: CacheLoadMessagesParams): Promise<BilibiliMessage[]> =>
+      ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_LOAD_MESSAGES, params),
+    cacheClearAccount: (params: CacheClearAccountParams): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_CLEAR_ACCOUNT, params),
+    cacheClearAll: (): Promise<{ success: boolean }> => ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_CLEAR_ALL),
 
     // Navigation event listener (for notification clicks)
     onNavigateToSession: (callback: (params: NavigateToSessionParams) => void) => {

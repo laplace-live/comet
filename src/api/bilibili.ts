@@ -13,6 +13,7 @@ import type {
   BilibiliSessionsResponse,
   BilibiliUserCardsResponse,
 } from '@/types/bilibili'
+
 import { SESSION_TYPE } from '@/types/bilibili'
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, COMMON_HEADERS, getImageExtension } from '@/lib/const'
@@ -239,7 +240,6 @@ function updateAccountCredentials(mid: number, credentials: BilibiliCredentials)
   saveAccounts(accounts)
   return true
 }
-
 
 // Clear all accounts (full logout)
 function clearAllAccounts(): void {

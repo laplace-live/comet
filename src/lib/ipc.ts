@@ -7,12 +7,16 @@
 
 import type {
   BilibiliCredentials,
+  BilibiliMessage,
   BilibiliMessagesResponse,
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
   BilibiliUserCardsResponse,
 } from '@/types/bilibili'
 import type {
+  CacheClearAccountParams,
+  CacheLoadMessagesParams,
+  CacheSaveMessagesParams,
   CheckForUpdatesResult,
   CheckLoginResult,
   CopyImageParams,
@@ -93,6 +97,12 @@ export const IpcChannel = {
   BILIBILI_WS_CONNECT: 'bilibili:ws-connect',
   BILIBILI_WS_DISCONNECT: 'bilibili:ws-disconnect',
   BILIBILI_WS_STATUS: 'bilibili:ws-status',
+
+  // Message Cache (SQLite persistent storage)
+  BILIBILI_CACHE_SAVE_MESSAGES: 'bilibili:cache-save-messages',
+  BILIBILI_CACHE_LOAD_MESSAGES: 'bilibili:cache-load-messages',
+  BILIBILI_CACHE_CLEAR_ACCOUNT: 'bilibili:cache-clear-account',
+  BILIBILI_CACHE_CLEAR_ALL: 'bilibili:cache-clear-all',
 } as const
 
 // ============================================================================
@@ -236,6 +246,24 @@ export interface IpcInvokeContract {
   [IpcChannel.BILIBILI_WS_STATUS]: {
     params: undefined
     result: WSStatusResult
+  }
+
+  // Message Cache
+  [IpcChannel.BILIBILI_CACHE_SAVE_MESSAGES]: {
+    params: CacheSaveMessagesParams
+    result: { success: boolean }
+  }
+  [IpcChannel.BILIBILI_CACHE_LOAD_MESSAGES]: {
+    params: CacheLoadMessagesParams
+    result: BilibiliMessage[]
+  }
+  [IpcChannel.BILIBILI_CACHE_CLEAR_ACCOUNT]: {
+    params: CacheClearAccountParams
+    result: { success: boolean }
+  }
+  [IpcChannel.BILIBILI_CACHE_CLEAR_ALL]: {
+    params: undefined
+    result: { success: boolean }
   }
 }
 

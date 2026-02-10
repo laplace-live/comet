@@ -8,6 +8,7 @@ import type { ShowNotificationParams, UpdateStatusInfo } from './types/electron'
 
 import { registerBilibiliIpcHandlers } from './api/bilibili'
 import { cleanupBroadcastWebSocket, initBroadcastWebSocket } from './api/broadcast-websocket'
+import { closeMessageStore, registerMessageStoreHandlers } from './api/messageStore'
 import { UPDATE_BASE_URL } from './lib/const'
 import { IpcChannel, IpcEvent } from './lib/ipc'
 
@@ -121,6 +122,7 @@ const isSafeForExternalOpen = (url: string): boolean => {
 if (isSingleInstance) {
   // Register IPC handlers
   registerBilibiliIpcHandlers()
+  registerMessageStoreHandlers()
 
   // Initialize WebSocket for real-time notifications
   initBroadcastWebSocket()
@@ -520,9 +522,10 @@ app.on('ready', () => {
   createWindow()
 })
 
-// Cleanup WebSocket on quit
+// Cleanup on quit
 app.on('before-quit', () => {
   cleanupBroadcastWebSocket()
+  closeMessageStore()
 })
 
 // Quit when all windows are closed, except on macOS. There, it's common

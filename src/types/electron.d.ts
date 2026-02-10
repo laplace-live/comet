@@ -1,5 +1,6 @@
 import type {
   BilibiliCredentials,
+  BilibiliMessage,
   BilibiliMessagesResponse,
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
@@ -263,6 +264,24 @@ export interface CheckForUpdatesResult {
   error?: string
 }
 
+// Message Cache types
+export interface CacheSaveMessagesParams {
+  accountMid: number
+  talkerId: number
+  sessionType: number
+  messages: BilibiliMessage[]
+}
+
+export interface CacheLoadMessagesParams {
+  accountMid: number
+  talkerId: number
+  sessionType: number
+}
+
+export interface CacheClearAccountParams {
+  accountMid: number
+}
+
 export interface ElectronAPI {
   // Platform detection for OS-specific UI adjustments (e.g., 'darwin', 'win32', 'linux')
   platform: NodeJS.Platform
@@ -313,6 +332,12 @@ export interface ElectronAPI {
     // System notifications
     showNotification: (params: ShowNotificationParams) => Promise<{ shown: boolean; reason?: string }>
     onNavigateToSession: (callback: (params: NavigateToSessionParams) => void) => () => void
+
+    // Message cache (SQLite persistent storage)
+    cacheSaveMessages: (params: CacheSaveMessagesParams) => Promise<{ success: boolean }>
+    cacheLoadMessages: (params: CacheLoadMessagesParams) => Promise<BilibiliMessage[]>
+    cacheClearAccount: (params: CacheClearAccountParams) => Promise<{ success: boolean }>
+    cacheClearAll: () => Promise<{ success: boolean }>
   }
 
   // Clipboard utilities
