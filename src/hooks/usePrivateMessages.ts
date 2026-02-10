@@ -187,11 +187,19 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       // When window regains focus, mark the current session as read
       const session = selectedSessionRef.current
       if (session) {
+        // Derive the latest seqno from current messages to avoid using stale session data.
+        // selectedSession.max_seqno may not reflect messages that arrived while unfocused.
+        const currentMessages = messagesRef.current
+        const latestSeqno = currentMessages.reduce(
+          (max, m) => Math.max(max, m.msg_seqno),
+          session.max_seqno || 0
+        )
+
         window.electronAPI.bilibili
           .updateAck({
             talkerId: String(session.talker_id),
             sessionType: String(session.session_type),
-            ackSeqno: String(session.max_seqno || 0),
+            ackSeqno: String(latestSeqno),
           })
           .catch(err => console.error('Failed to mark as read on focus:', err))
 
@@ -1452,6 +1460,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
             }
           }
 
+          // Update max_seqno so ack calls use the latest value
+          if (notification.latestSeqno) {
+            session.max_seqno = notification.latestSeqno
+          }
+
           // Move to top of list if it has new messages
           session.session_ts = Date.now() * 1000 // Update timestamp
           updatedSessions.splice(existingSessionIndex, 1)
@@ -1465,6 +1478,17 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         refreshSessionsQuietly()
         return prev
       })
+
+      // Keep selectedSession in sync so handleFocus and other consumers see the latest max_seqno
+      if (isCurrentSession && notification.latestSeqno) {
+        const newSeqno = notification.latestSeqno
+        setSelectedSession(prev => {
+          if (prev?.talker_id === notification.talkerId && prev?.session_type === notification.sessionType) {
+            return { ...prev, max_seqno: newSeqno }
+          }
+          return prev
+        })
+      }
     },
     [
       selectedSession,
