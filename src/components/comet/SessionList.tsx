@@ -241,9 +241,9 @@ function SessionListSkeleton() {
       {Array.from({ length: 5 }).map((_, i) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: fixed key
         <div key={`skeleton-${i}`} className='flex items-center gap-3 px-4 py-2'>
-          <Skeleton className='size-10 rounded-full' />
+          <Skeleton className='size-10 rounded-full ring-2 ring-border/50' />
           <div className='flex-1 space-y-2'>
-            <Skeleton className='h-4 w-24' />
+            <Skeleton className='h-5 w-24' />
             <Skeleton className='h-4 w-full' />
           </div>
         </div>
