@@ -60,7 +60,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
     "@typescript-eslint/eslint-plugin": "^5.62.0",
-    "@typescript-eslint/parser": "^5.62.0",
+    "@typescript-eslint/parser": "^8.59.4",
     "@vitejs/plugin-react": "^4.7.0",
     "electron": "42.2.0",
     "eslint": "^8.57.1",
