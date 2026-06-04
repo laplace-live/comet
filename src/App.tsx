@@ -272,6 +272,7 @@ export default function App() {
               accounts={accounts}
               activeAccountMid={activeAccountMid}
               onReorderAccounts={reorderAccounts}
+              backfillStatus={backfillStatus}
             />
 
             <MessagesPanel
