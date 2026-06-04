@@ -2,6 +2,7 @@
 // https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts
 import { contextBridge, ipcRenderer } from 'electron'
 
+import type { BackfillStatus, SearchQueryParams } from './api/search-index'
 import type { BilibiliCredentials } from './types/bilibili'
 import type {
   CheckForUpdatesResult,
@@ -148,6 +149,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clipboard: {
     copyImage: (params: CopyImageParams): Promise<CopyImageResult> =>
       ipcRenderer.invoke(IpcChannel.CLIPBOARD_COPY_IMAGE, params),
+  },
+
+  // Full-text search index
+  search: {
+    query: (params: SearchQueryParams) => ipcRenderer.invoke(IpcChannel.SEARCH_QUERY, params),
+    backfillStart: (params: { sessionType?: number }): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(IpcChannel.SEARCH_BACKFILL_START, params),
+    backfillPause: (): Promise<{ success: boolean }> => ipcRenderer.invoke(IpcChannel.SEARCH_BACKFILL_PAUSE),
+    backfillResume: (): Promise<{ success: boolean }> => ipcRenderer.invoke(IpcChannel.SEARCH_BACKFILL_RESUME),
+    backfillStatus: () => ipcRenderer.invoke(IpcChannel.SEARCH_BACKFILL_STATUS),
+    backfillClear: (params: { mid?: number }): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke(IpcChannel.SEARCH_BACKFILL_CLEAR, params),
+    stats: () => ipcRenderer.invoke(IpcChannel.SEARCH_STATS),
+    // Event listener for backfill progress (returns cleanup function)
+    onBackfillProgress: (callback: (status: BackfillStatus) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: BackfillStatus) => {
+        callback(status)
+      }
+      ipcRenderer.on(IpcEvent.SEARCH_BACKFILL_PROGRESS, listener)
+      return () => {
+        ipcRenderer.removeListener(IpcEvent.SEARCH_BACKFILL_PROGRESS, listener)
+      }
+    },
   },
 
   // App menu event listeners
