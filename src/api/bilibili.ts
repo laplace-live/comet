@@ -3,7 +3,7 @@ import { Byte, Encoder } from '@nuintun/qrcode'
 import { BrowserWindow, ipcMain, safeStorage } from 'electron'
 import Store from 'electron-store'
 
-import type { BackfillStatus, SearchQueryParams } from '@/api/search-index'
+import type { BackfillStatus, IndexedMessageInput, SearchQueryParams } from '@/api/search-index'
 import type {
   BilibiliCredentials,
   BilibiliImageUploadResponse,
@@ -25,6 +25,8 @@ import {
   clearAccountIndex,
   getBackfillStatus,
   getIndexStats,
+  indexMessages,
+  indexSessions,
   pauseBackfill,
   querySearch,
   resumeBackfill,
@@ -828,6 +830,52 @@ export function registerBilibiliIpcHandlers() {
 
         if (data.code !== 0) {
           return { error: data.message || 'Failed to fetch sessions', code: data.code }
+        }
+
+        // Fire-and-forget: index session metadata + each session's last_msg preview.
+        // Never let indexing failures break session delivery; scoped via getActiveAccountMid().
+        try {
+          const mid = getActiveAccountMid()
+          const sessionList = data.data?.session_list
+          if (mid && sessionList) {
+            indexSessions(mid, sessionList)
+
+            const lastMessages: IndexedMessageInput[] = []
+            for (const session of sessionList) {
+              const lm = session.last_msg
+              if (!lm?.msg_key) continue
+              lastMessages.push({
+                talkerId: session.talker_id,
+                sessionType: session.session_type,
+                msgSeqno: String(lm.msg_seqno),
+                msgKey: String(lm.msg_key),
+                senderUid: lm.sender_uid ?? null,
+                msgType: lm.msg_type ?? null,
+                msgSource: lm.msg_source ?? null,
+                timestamp: lm.timestamp ?? null,
+                msgStatus: lm.msg_status ?? null,
+                content: lm.content ?? '',
+              })
+            }
+            if (lastMessages.length > 0) {
+              // Group by conversation so the indexer writes one transaction per talker.
+              const byConv = new Map<string, IndexedMessageInput[]>()
+              for (const m of lastMessages) {
+                const key = `${m.talkerId}:${m.sessionType}`
+                const arr = byConv.get(key)
+                if (arr) {
+                  arr.push(m)
+                } else {
+                  byConv.set(key, [m])
+                }
+              }
+              for (const group of byConv.values()) {
+                indexMessages(mid, group)
+              }
+            }
+          }
+        } catch (indexError) {
+          console.error('[SearchIndex] Failed to index sessions:', indexError)
         }
 
         return data
