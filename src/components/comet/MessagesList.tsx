@@ -23,6 +23,8 @@ export interface MessagesListProps {
   userInfo: CheckLoginResult | null
   onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
   virtuosoRef?: React.Ref<VirtuosoHandle>
+  /** Seqno of the message to visually flash after a jump (null when none). */
+  highlightedSeqno?: number | null
 }
 
 // Memoized messages list to prevent re-renders when input changes
@@ -34,6 +36,7 @@ export const MessagesList = memo(function MessagesList({
   userInfo,
   onRecall,
   virtuosoRef,
+  highlightedSeqno,
 }: MessagesListProps) {
   return (
     <Virtuoso
@@ -43,12 +46,14 @@ export const MessagesList = memo(function MessagesList({
       overscan={20}
       initialTopMostItemIndex={messages.length > 0 ? messages.length - 1 : 0}
       followOutput='smooth'
+      computeItemKey={(_, m) => String(m.msg_key ?? m.msg_seqno)}
       itemContent={(_, msg) => (
         <div className='px-4 pb-4'>
           <MessageBubble
             message={msg}
             emojiInfoMap={emojiInfoMap}
             isSent={msg.sender_uid === userInfo?.mid}
+            isHighlighted={highlightedSeqno != null && msg.msg_seqno === highlightedSeqno}
             session={session}
             userCache={userCache}
             userInfo={userInfo}
