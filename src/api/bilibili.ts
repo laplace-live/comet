@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { Byte, Encoder } from '@nuintun/qrcode'
-import { ipcMain, safeStorage } from 'electron'
+import { BrowserWindow, ipcMain, safeStorage } from 'electron'
 import Store from 'electron-store'
 
+import type { BackfillStatus, SearchQueryParams } from '@/api/search-index'
 import type {
   BilibiliCredentials,
   BilibiliImageUploadResponse,
@@ -18,7 +19,17 @@ import type {
 import { SESSION_TYPE } from '@/types/bilibili'
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, COMMON_HEADERS, getImageExtension } from '@/lib/const'
-import { IpcChannel } from '@/lib/ipc'
+import { IpcChannel, IpcEvent } from '@/lib/ipc'
+
+import {
+  clearAccountIndex,
+  getBackfillStatus,
+  getIndexStats,
+  pauseBackfill,
+  querySearch,
+  resumeBackfill,
+  startBackfill,
+} from '@/api/search-index'
 
 /**
  * Preserve large integer fields as strings in JSON response text.
@@ -406,6 +417,15 @@ export function cookieStringFromCredentials(credentials: BilibiliCredentials): s
   ]
     .filter(Boolean)
     .join('; ')
+}
+
+// Broadcast backfill progress to all renderer windows (mirrors BILIBILI_NEW_MESSAGE fan-out).
+// Exported so the search-index backfill loop can push status updates as they happen.
+export function broadcastBackfillProgress(status: BackfillStatus): void {
+  const windows = BrowserWindow.getAllWindows()
+  for (const win of windows) {
+    win.webContents.send(IpcEvent.SEARCH_BACKFILL_PROGRESS, status)
+  }
 }
 
 export function registerBilibiliIpcHandlers() {
@@ -1331,4 +1351,64 @@ export function registerBilibiliIpcHandlers() {
       }
     }
   )
+
+  // ============================================================================
+  // Full-text search index handlers
+  // All handlers resolve the active account internally via getActiveAccountMid().
+  // ============================================================================
+
+  // Run a search query against the local index for the active account
+  ipcMain.handle(IpcChannel.SEARCH_QUERY, (_event, params: SearchQueryParams) => {
+    const mid = getActiveAccountMid()
+    if (!mid) {
+      return { conversationHits: [], messageHits: [], total: 0 }
+    }
+    return querySearch(mid, params)
+  })
+
+  // Start the opt-in backfill crawler for the active account
+  ipcMain.handle(IpcChannel.SEARCH_BACKFILL_START, (_event, params: { sessionType?: number }) => {
+    const mid = getActiveAccountMid()
+    if (!mid) {
+      return { success: false }
+    }
+    startBackfill(mid, { sessionType: params?.sessionType })
+    return { success: true }
+  })
+
+  // Pause the running backfill
+  ipcMain.handle(IpcChannel.SEARCH_BACKFILL_PAUSE, () => {
+    pauseBackfill()
+    return { success: true }
+  })
+
+  // Resume a paused backfill
+  ipcMain.handle(IpcChannel.SEARCH_BACKFILL_RESUME, () => {
+    resumeBackfill()
+    return { success: true }
+  })
+
+  // Get the current backfill status snapshot
+  ipcMain.handle(IpcChannel.SEARCH_BACKFILL_STATUS, () => {
+    return getBackfillStatus()
+  })
+
+  // Clear the index partition for an account (defaults to the active account)
+  ipcMain.handle(IpcChannel.SEARCH_BACKFILL_CLEAR, (_event, params: { mid?: number }) => {
+    const mid = params?.mid ?? getActiveAccountMid()
+    if (!mid) {
+      return { success: false }
+    }
+    clearAccountIndex(mid)
+    return { success: true }
+  })
+
+  // Get index storage/coverage stats for the active account
+  ipcMain.handle(IpcChannel.SEARCH_STATS, () => {
+    const mid = getActiveAccountMid()
+    if (!mid) {
+      return { messageCount: 0, conversationCount: 0, sizeBytes: 0, lastUpdatedAt: null }
+    }
+    return getIndexStats(mid)
+  })
 }
