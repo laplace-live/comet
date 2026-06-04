@@ -23,8 +23,10 @@ export default defineConfig(({ mode }) => ({
       fileName: 'main',
     },
     rollupOptions: {
-      // Mark optional ws dependencies as external (they're not required)
-      external: ['bufferutil', 'utf-8-validate'],
+      // Mark optional ws dependencies as external (they're not required).
+      // better-sqlite3-multiple-ciphers ships a native .node addon and must
+      // never be bundled — it is loaded at runtime via createRequire().
+      external: ['bufferutil', 'utf-8-validate', 'better-sqlite3-multiple-ciphers'],
     },
   },
 }))

@@ -1,11 +1,13 @@
 nodeLinker: hoisted
 blockExoticSubdeps: false
 allowBuilds:
+  better-sqlite3-multiple-ciphers: true
   electron-winstaller: true
   esbuild: true
   protobufjs: true
   unrs-resolver: true
 onlyBuiltDependencies:
+  - better-sqlite3-multiple-ciphers
   - electron
   - electron-winstaller
   - esbuild
