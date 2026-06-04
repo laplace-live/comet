@@ -359,6 +359,21 @@ function toFtsMatch(query: string): string {
   return `"${query.trim().replace(/"/g, '""')}"`
 }
 
+// Build a snippet for the short-query LIKE fallback (no FTS snippet() available).
+// Wraps the first case-insensitive match of `q` in the contract sentinels and
+// returns a bounded window of surrounding text. Sentinels: U+0001 / U+0002.
+function buildFallbackSnippet(text: string, q: string): string {
+  const idx = text.toLowerCase().indexOf(q.toLowerCase())
+  if (idx < 0) return text.slice(0, 64)
+  const ctx = 24
+  const start = Math.max(0, idx - ctx)
+  const end = Math.min(text.length, idx + q.length + ctx)
+  const before = (start > 0 ? '…' : '') + text.slice(start, idx)
+  const mid = text.slice(idx, idx + q.length)
+  const after = text.slice(idx + q.length, end) + (end < text.length ? '…' : '')
+  return `${before}\u0001${mid}\u0002${after}`
+}
+
 export function querySearch(mid: number, params: SearchQueryParams): SearchQueryResult {
   if (!db) return { conversationHits: [], messageHits: [], total: 0 }
 
@@ -481,6 +496,87 @@ export function querySearch(mid: number, params: SearchQueryParams): SearchQuery
         timestamp: r.timestamp,
         typeLabel: r.typeLabel,
         snippet: r.snippet,
+      })
+    }
+  } else {
+    // Short-query (1-2 char / <3 code points) fallback. Trigram cannot match,
+    // so scan a bounded recency window of the most recent 500 rows with LIKE.
+    const FALLBACK_WINDOW = 500
+
+    const baseWhere = `
+      WHERE account_mid = ?
+        ${scopeCurrent ? 'AND talker_id = ?' : ''}
+    `
+    const windowSql = `
+      SELECT
+        rowid        AS rowid,
+        talker_id    AS talkerId,
+        session_type AS sessionType,
+        msg_seqno    AS msgSeqno,
+        msg_key      AS msgKey,
+        sender_uid   AS senderUid,
+        msg_type     AS msgType,
+        timestamp    AS timestamp,
+        type_label   AS typeLabel,
+        searchable_text AS searchableText
+      FROM messages
+      ${baseWhere}
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `
+    const windowArgs: Array<string | number> = scopeCurrent
+      ? [mid, params.talkerId as number, FALLBACK_WINDOW]
+      : [mid, FALLBACK_WINDOW]
+
+    const windowRows = db.prepare(windowSql).all(...windowArgs) as Array<{
+      rowid: number
+      talkerId: number
+      sessionType: number
+      msgSeqno: string
+      msgKey: string
+      senderUid: number | null
+      msgType: number | null
+      timestamp: number | null
+      typeLabel: string | null
+      searchableText: string | null
+    }>
+
+    const needle = q.toLowerCase()
+    const matched = windowRows.filter(
+      r => typeof r.searchableText === 'string' && r.searchableText.toLowerCase().includes(needle)
+    )
+
+    // Rank by a bm25-style relevance proxy: term frequency normalised by document
+    // length (shorter docs with more occurrences rank higher), recency as tiebreak.
+    const score = (text: string): number => {
+      const lower = text.toLowerCase()
+      let count = 0
+      let from = lower.indexOf(needle)
+      while (from !== -1) {
+        count += 1
+        from = lower.indexOf(needle, from + needle.length)
+      }
+      return count / Math.max(1, lower.length)
+    }
+    matched.sort((a, b) => {
+      const sb = score(b.searchableText ?? '') - score(a.searchableText ?? '')
+      if (sb !== 0) return sb
+      return (b.timestamp ?? 0) - (a.timestamp ?? 0)
+    })
+
+    total = matched.length
+
+    for (const r of matched.slice(params.offset, params.offset + params.limit)) {
+      messageHits.push({
+        talkerId: r.talkerId,
+        sessionType: r.sessionType,
+        msgSeqno: String(r.msgSeqno),
+        msgKey: String(r.msgKey),
+        senderUid: r.senderUid,
+        msgType: r.msgType,
+        timestamp: r.timestamp,
+        typeLabel: r.typeLabel,
+        snippet: buildFallbackSnippet(r.searchableText ?? '', q),
       })
     }
   }

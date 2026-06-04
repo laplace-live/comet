@@ -551,3 +551,116 @@ describe('querySearch conversation hits', () => {
     expect(res.conversationHits.length).toBeGreaterThan(0)
   })
 })
+
+describe('querySearch short-query fallback (<3 chars)', () => {
+  beforeEach(async () => {
+    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+  })
+
+  afterEach(() => {
+    closeSearchIndex()
+  })
+
+  it('matches a 2-char CJK query via LIKE fallback over searchable_text', () => {
+    indexMessages(MID, [
+      msg({
+        talkerId: 1100,
+        msgSeqno: '60',
+        msgKey: 'k60',
+        timestamp: 5000,
+        content: JSON.stringify({ content: '我爱北京天安门' }),
+      }),
+      msg({
+        talkerId: 1100,
+        msgSeqno: '61',
+        msgKey: 'k61',
+        timestamp: 5001,
+        content: JSON.stringify({ content: '完全无关的句子' }),
+      }),
+    ])
+
+    const res = querySearch(MID, { query: '北京', scope: 'all', limit: 50, offset: 0 })
+
+    expect(res.messageHits.length).toBe(1)
+    expect(res.messageHits[0].msgKey).toBe('k60')
+    expect(res.total).toBe(1)
+  })
+
+  it('matches a 1-char query via LIKE fallback', () => {
+    indexMessages(MID, [
+      msg({
+        talkerId: 1101,
+        msgSeqno: '70',
+        msgKey: 'k70',
+        timestamp: 6000,
+        content: JSON.stringify({ content: '猫' }),
+      }),
+      msg({
+        talkerId: 1101,
+        msgSeqno: '71',
+        msgKey: 'k71',
+        timestamp: 6001,
+        content: JSON.stringify({ content: '狗' }),
+      }),
+    ])
+
+    const res = querySearch(MID, { query: '猫', scope: 'all', limit: 50, offset: 0 })
+    expect(res.messageHits.length).toBe(1)
+    expect(res.messageHits[0].msgKey).toBe('k70')
+  })
+
+  it('fallback respects scope=current talkerId', () => {
+    indexMessages(MID, [
+      msg({
+        talkerId: 1200,
+        msgSeqno: '80',
+        msgKey: 'k80',
+        timestamp: 7000,
+        content: JSON.stringify({ content: '红色' }),
+      }),
+      msg({
+        talkerId: 1201,
+        msgSeqno: '81',
+        msgKey: 'k81',
+        timestamp: 7001,
+        content: JSON.stringify({ content: '红色' }),
+      }),
+    ])
+
+    const res = querySearch(MID, { query: '红色', scope: 'current', talkerId: 1200, limit: 50, offset: 0 })
+    expect(res.messageHits.length).toBe(1)
+    expect(res.messageHits[0].talkerId).toBe(1200)
+  })
+
+  it('fallback windows to the most recent 500 rows and excludes older matches', () => {
+    const inputs: IndexedMessageInput[] = []
+    // 1 old matching row at the very bottom of the recency window.
+    inputs.push(
+      msg({
+        talkerId: 1300,
+        msgSeqno: '1',
+        msgKey: 'old-match',
+        timestamp: 1,
+        content: JSON.stringify({ content: '稀有词' }),
+      })
+    )
+    // 500 newer NON-matching rows push the old match out of the recent-500 window.
+    for (let i = 0; i < 500; i++) {
+      inputs.push(
+        msg({
+          talkerId: 1300,
+          msgSeqno: String(1000 + i),
+          msgKey: `filler-${i}`,
+          timestamp: 1000 + i,
+          content: JSON.stringify({ content: `填充内容${i}` }),
+        })
+      )
+    }
+    indexMessages(MID, inputs)
+
+    const res = querySearch(MID, { query: '稀有', scope: 'all', limit: 50, offset: 0 })
+    // The only match is older than the 500 most-recent rows, so the bounded
+    // fallback window must not return it.
+    expect(res.messageHits.length).toBe(0)
+  })
+})
