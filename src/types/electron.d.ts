@@ -1,3 +1,4 @@
+import type { BackfillStatus, IndexStats, SearchQueryParams, SearchQueryResult } from '@/api/search-index'
 import type {
   BilibiliCredentials,
   BilibiliMessagesResponse,
@@ -333,6 +334,19 @@ export interface ElectronAPI {
   // Clipboard utilities
   clipboard: {
     copyImage: (params: CopyImageParams) => Promise<CopyImageResult>
+  }
+
+  // Full-text search index
+  search: {
+    query: (params: SearchQueryParams) => Promise<SearchQueryResult>
+    backfillStart: (params: { sessionType?: number }) => Promise<{ success: boolean }>
+    backfillPause: () => Promise<{ success: boolean }>
+    backfillResume: () => Promise<{ success: boolean }>
+    backfillStatus: () => Promise<BackfillStatus>
+    backfillClear: (params: { mid?: number }) => Promise<{ success: boolean }>
+    stats: () => Promise<IndexStats>
+    // Event listener for backfill progress (returns cleanup function)
+    onBackfillProgress: (callback: (status: BackfillStatus) => void) => () => void
   }
 
   // App menu event listeners (return cleanup function)
