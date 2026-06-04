@@ -34,6 +34,11 @@ function extractTextContent(value: unknown): string {
  * @param msgStatus 1 = recalled.
  */
 export function extractSearchableText(content: string, msgType: number, msgStatus?: number): ExtractedText {
+  // Recalled messages: content is excluded from the index; only the synthetic label is kept.
+  if (msgStatus === 1) {
+    return { text: '', typeLabel: '[已撤回的消息]' }
+  }
+
   let parsed: unknown
   try {
     parsed = JSON.parse(content)
@@ -57,6 +62,9 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
 
     case MSG_TYPE.CUSTOM_EMOJI:
       return { text: '', typeLabel: '[表情]' }
+
+    case MSG_TYPE.REVOKE:
+      return { text: '', typeLabel: null }
 
     default:
       return { text: '', typeLabel: null }

@@ -32,3 +32,29 @@ describe('extractSearchableText — label-only types', () => {
     expect(result).toEqual({ text: '', typeLabel: '[表情]' })
   })
 })
+
+describe('extractSearchableText — recall & revoke', () => {
+  it('REVOKE (msg_type 5) → empty text and no label (skipped)', () => {
+    const content = JSON.stringify({ content: 'some recall trigger' })
+    const result = extractSearchableText(content, MSG_TYPE.REVOKE)
+    expect(result).toEqual({ text: '', typeLabel: null })
+  })
+
+  it('recalled TEXT (msgStatus===1) → text excluded, [已撤回的消息] label', () => {
+    const content = JSON.stringify({ content: '原始内容不应被索引' })
+    const result = extractSearchableText(content, MSG_TYPE.TEXT, 1)
+    expect(result).toEqual({ text: '', typeLabel: '[已撤回的消息]' })
+  })
+
+  it('recall takes precedence over any msg_type label', () => {
+    const content = JSON.stringify({ url: 'https://i0.hdslb.com/x.jpg' })
+    const result = extractSearchableText(content, MSG_TYPE.IMAGE, 1)
+    expect(result).toEqual({ text: '', typeLabel: '[已撤回的消息]' })
+  })
+
+  it('msgStatus 0 does not trigger recall handling', () => {
+    const content = JSON.stringify({ content: '正常消息' })
+    const result = extractSearchableText(content, MSG_TYPE.TEXT, 0)
+    expect(result).toEqual({ text: '正常消息', typeLabel: null })
+  })
+})
