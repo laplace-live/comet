@@ -185,3 +185,17 @@ describe('extractSearchableText — AI_GENERATED', () => {
     expect(result).toEqual({ text: '', typeLabel: null })
   })
 })
+
+describe('extractSearchableText — FAN_GROUP_SYSTEM', () => {
+  it('extracts content.content text', () => {
+    const content = JSON.stringify({ group_id: 12345, content: '欢迎 张三 加入粉丝团' })
+    const result = extractSearchableText(content, MSG_TYPE.FAN_GROUP_SYSTEM)
+    expect(result).toEqual({ text: '欢迎 张三 加入粉丝团', typeLabel: null })
+  })
+
+  it('falls back to whole-object extraction when content.content is absent', () => {
+    const content = JSON.stringify({ text: '系统消息文本' })
+    const result = extractSearchableText(content, MSG_TYPE.FAN_GROUP_SYSTEM)
+    expect(result.text).toBe('系统消息文本')
+  })
+})

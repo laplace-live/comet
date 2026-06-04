@@ -150,6 +150,11 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
       return { text: paragraphTexts.join('\n'), typeLabel: null }
     }
 
+    case MSG_TYPE.FAN_GROUP_SYSTEM: {
+      const text = extractTextContent(obj.content) || extractTextContent(obj)
+      return { text, typeLabel: null }
+    }
+
     case MSG_TYPE.REVOKE:
       return { text: '', typeLabel: null }
 
