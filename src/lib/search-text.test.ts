@@ -133,3 +133,23 @@ describe('extractSearchableText — VIDEO_PUSH', () => {
     expect(result.text).toContain('只有标题')
   })
 })
+
+describe('extractSearchableText — SYSTEM_TIP', () => {
+  it('double-parses content.content and joins each item text', () => {
+    const inner = JSON.stringify([
+      { text: '该用户已被', color_day: '#9499A0', color_nig: '#9499A0' },
+      { text: '封禁', color_day: '#FB7299', color_nig: '#FB7299', jump_url: 'https://b.tv/x' },
+    ])
+    const content = JSON.stringify({ content: inner })
+    const result = extractSearchableText(content, MSG_TYPE.SYSTEM_TIP)
+    expect(result.typeLabel).toBeNull()
+    expect(result.text).toContain('该用户已被')
+    expect(result.text).toContain('封禁')
+  })
+
+  it('returns empty text when inner content is not a valid JSON array', () => {
+    const content = JSON.stringify({ content: 'not-json' })
+    const result = extractSearchableText(content, MSG_TYPE.SYSTEM_TIP)
+    expect(result).toEqual({ text: '', typeLabel: null })
+  })
+})

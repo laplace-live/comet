@@ -101,6 +101,28 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
       return { text: joinParts([title, desc, attachMsg]), typeLabel: null }
     }
 
+    case MSG_TYPE.SYSTEM_TIP: {
+      if (typeof obj.content !== 'string') {
+        return { text: '', typeLabel: null }
+      }
+      try {
+        const items = JSON.parse(obj.content)
+        if (!Array.isArray(items)) {
+          return { text: '', typeLabel: null }
+        }
+        const parts = items.map(item => {
+          if (item && typeof item === 'object') {
+            const t = (item as Record<string, unknown>).text
+            return typeof t === 'string' ? t : ''
+          }
+          return ''
+        })
+        return { text: joinParts(parts), typeLabel: null }
+      } catch {
+        return { text: '', typeLabel: null }
+      }
+    }
+
     case MSG_TYPE.REVOKE:
       return { text: '', typeLabel: null }
 
