@@ -454,6 +454,77 @@ describe('querySearch message hits (FTS trigram)', () => {
     const keys2 = page2.messageHits.map(h => h.msgKey)
     expect(keys1.some(k => keys2.includes(k))).toBe(false)
   })
+
+  it('ranks via FTS5 bm25 on a >=3-char query (FTS branch, not the <3 fallback)', () => {
+    // Query is 3 code points, so isTrigramEligible() is true and this routes
+    // through the real `MATCH ... ORDER BY bm25(messages_fts) ASC` SQL path.
+    indexMessages(MID, [
+      // Low relevance: long doc, single occurrence of the 3-char term.
+      msg({
+        talkerId: 600,
+        msgSeqno: '50',
+        msgKey: 'fts-long',
+        content: JSON.stringify({ content: `北京市${'其他内容'.repeat(20)}` }),
+      }),
+      // High relevance: short doc, the 3-char term repeated.
+      msg({
+        talkerId: 601,
+        msgSeqno: '51',
+        msgKey: 'fts-short',
+        content: JSON.stringify({ content: '北京市北京市北京市' }),
+      }),
+    ])
+
+    const res = querySearch(MID, { query: '北京市', scope: 'all', limit: 50, offset: 0 })
+
+    expect(res.messageHits.length).toBe(2)
+    // bm25 (smaller = better) ranks the short repeated doc first.
+    expect(res.messageHits[0].msgKey).toBe('fts-short')
+    expect(res.messageHits[1].msgKey).toBe('fts-long')
+  })
+
+  it('emits SQL snippet() sentinels on a >=3-char query (FTS branch)', () => {
+    // 3 code points -> FTS branch -> snippet(messages_fts, 0, char(1), char(2), ...).
+    indexMessages(MID, [
+      msg({
+        talkerId: 602,
+        msgSeqno: '52',
+        msgKey: 'fts-snip',
+        content: JSON.stringify({ content: '今天天气很好我们去公园散步聊到了人工智能' }),
+      }),
+    ])
+
+    const res = querySearch(MID, { query: '人工智能', scope: 'all', limit: 50, offset: 0 })
+
+    expect(res.messageHits.length).toBe(1)
+    const snippet = res.messageHits[0].snippet
+    // The SQL snippet() path wraps the match in the contract sentinels U+0001/U+0002.
+    expect(snippet).toContain('\u0001')
+    expect(snippet).toContain('\u0002')
+    expect(snippet).toContain('人工智能')
+  })
+
+  it('does not throw on FTS special characters or empty/whitespace queries', () => {
+    indexMessages(MID, [
+      msg({ talkerId: 603, msgSeqno: '53', msgKey: 'fts-safe', content: JSON.stringify({ content: '今天天气很好' }) }),
+    ])
+
+    // FTS5 operators/wildcards must be neutralised by toFtsMatch, never parsed.
+    expect(() => querySearch(MID, { query: '天气 OR x*', scope: 'all', limit: 50, offset: 0 })).not.toThrow()
+    const orRes = querySearch(MID, { query: '天气 OR x*', scope: 'all', limit: 50, offset: 0 })
+    expect(Array.isArray(orRes.messageHits)).toBe(true)
+    expect(Array.isArray(orRes.conversationHits)).toBe(true)
+    expect(typeof orRes.total).toBe('number')
+
+    // A lone double-quote must not break the quoted MATCH string.
+    expect(() => querySearch(MID, { query: '"', scope: 'all', limit: 50, offset: 0 })).not.toThrow()
+
+    // Empty / whitespace-only queries short-circuit to an empty result.
+    const blank = querySearch(MID, { query: '   ', scope: 'all', limit: 50, offset: 0 })
+    expect(blank.messageHits).toEqual([])
+    expect(blank.conversationHits).toEqual([])
+    expect(blank.total).toBe(0)
+  })
 })
 
 function session(overrides: Partial<BilibiliSession>): BilibiliSession {
