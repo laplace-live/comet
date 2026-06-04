@@ -52,6 +52,10 @@ interface MessagesPanelProps {
   onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
   onToggleDnd: (session: BilibiliSession, enabled: boolean) => Promise<boolean>
   onToggleSticky: (session: BilibiliSession, pinned: boolean) => Promise<boolean>
+  /** Index of a message to scroll to (from a search jump); null when none. */
+  jumpToIndex: number | null
+  /** Seqno of the message to flash after a jump; null when none. */
+  highlightedSeqno: number | null
 }
 
 export function MessagesPanel({
@@ -69,6 +73,8 @@ export function MessagesPanel({
   onRecall,
   onToggleDnd,
   onToggleSticky,
+  jumpToIndex,
+  highlightedSeqno,
 }: MessagesPanelProps) {
   return (
     <div
@@ -89,6 +95,8 @@ export function MessagesPanel({
           onRecall={onRecall}
           onToggleDnd={onToggleDnd}
           onToggleSticky={onToggleSticky}
+          jumpToIndex={jumpToIndex}
+          highlightedSeqno={highlightedSeqno}
         />
       ) : (
         <EmptyState />
@@ -111,6 +119,8 @@ interface ChatViewProps {
   onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
   onToggleDnd: (session: BilibiliSession, enabled: boolean) => Promise<boolean>
   onToggleSticky: (session: BilibiliSession, pinned: boolean) => Promise<boolean>
+  jumpToIndex: number | null
+  highlightedSeqno: number | null
 }
 
 function ChatView({
@@ -127,6 +137,8 @@ function ChatView({
   onRecall,
   onToggleDnd,
   onToggleSticky,
+  jumpToIndex,
+  highlightedSeqno,
 }: ChatViewProps) {
   const avatar = getSessionAvatar(session, userCache)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
@@ -167,6 +179,25 @@ function ChatView({
       virtuosoRef.current?.scrollToIndex({ index: messages.length - 1, behavior: 'smooth' })
     }
   }, [messages.length])
+
+  // Imperatively scroll to a jumped-to message and retry once after layout settles
+  // so variable-height bubbles are measured before the final centering.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-run only when the jump target changes
+  useEffect(() => {
+    if (jumpToIndex === null) return
+    if (jumpToIndex < 0 || jumpToIndex >= messages.length) return
+
+    const scroll = () => {
+      virtuosoRef.current?.scrollToIndex({ index: jumpToIndex, align: 'center' })
+    }
+    // First pass in a microtask, second pass after a short delay for height re-measure.
+    const raf = requestAnimationFrame(scroll)
+    const retry = setTimeout(scroll, 120)
+    return () => {
+      cancelAnimationFrame(raf)
+      clearTimeout(retry)
+    }
+  }, [jumpToIndex])
 
   // Drag and drop handlers for image upload
   const handleDragEnter = useCallback((e: React.DragEvent) => {
@@ -338,6 +369,7 @@ function ChatView({
           userCache={userCache}
           userInfo={userInfo}
           onRecall={onRecall}
+          highlightedSeqno={highlightedSeqno}
         />
       )}
 
