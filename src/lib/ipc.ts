@@ -5,6 +5,7 @@
  * All main process handlers and preload bridge implementations should import from here.
  */
 
+import type { BackfillStatus, IndexStats, SearchQueryParams, SearchQueryResult } from '@/api/search-index'
 import type {
   BilibiliCredentials,
   BilibiliMessagesResponse,
@@ -96,6 +97,15 @@ export const IpcChannel = {
   BILIBILI_WS_CONNECT: 'bilibili:ws-connect',
   BILIBILI_WS_DISCONNECT: 'bilibili:ws-disconnect',
   BILIBILI_WS_STATUS: 'bilibili:ws-status',
+
+  // Full-text search index
+  SEARCH_QUERY: 'search:query',
+  SEARCH_BACKFILL_START: 'search:backfill-start',
+  SEARCH_BACKFILL_PAUSE: 'search:backfill-pause',
+  SEARCH_BACKFILL_RESUME: 'search:backfill-resume',
+  SEARCH_BACKFILL_STATUS: 'search:backfill-status',
+  SEARCH_BACKFILL_CLEAR: 'search:backfill-clear',
+  SEARCH_STATS: 'search:stats',
 } as const
 
 // ============================================================================
@@ -114,6 +124,9 @@ export const IpcEvent = {
   BILIBILI_WS_CONNECTED: 'bilibili:ws-connected',
   BILIBILI_WS_DISCONNECTED: 'bilibili:ws-disconnected',
   BILIBILI_NAVIGATE_TO_SESSION: 'bilibili:navigate-to-session',
+
+  // Full-text search index progress (main → renderer)
+  SEARCH_BACKFILL_PROGRESS: 'search:backfill-progress',
 } as const
 
 // ============================================================================
@@ -244,6 +257,36 @@ export interface IpcInvokeContract {
     params: undefined
     result: WSStatusResult
   }
+
+  // Full-text search index
+  [IpcChannel.SEARCH_QUERY]: {
+    params: SearchQueryParams
+    result: SearchQueryResult
+  }
+  [IpcChannel.SEARCH_BACKFILL_START]: {
+    params: { sessionType?: number }
+    result: { success: boolean }
+  }
+  [IpcChannel.SEARCH_BACKFILL_PAUSE]: {
+    params: undefined
+    result: { success: boolean }
+  }
+  [IpcChannel.SEARCH_BACKFILL_RESUME]: {
+    params: undefined
+    result: { success: boolean }
+  }
+  [IpcChannel.SEARCH_BACKFILL_STATUS]: {
+    params: undefined
+    result: BackfillStatus
+  }
+  [IpcChannel.SEARCH_BACKFILL_CLEAR]: {
+    params: { mid?: number }
+    result: { success: boolean }
+  }
+  [IpcChannel.SEARCH_STATS]: {
+    params: undefined
+    result: IndexStats
+  }
 }
 
 /**
@@ -259,6 +302,7 @@ export interface IpcEventContract {
   [IpcEvent.BILIBILI_WS_CONNECTED]: undefined
   [IpcEvent.BILIBILI_WS_DISCONNECTED]: undefined
   [IpcEvent.BILIBILI_NAVIGATE_TO_SESSION]: NavigateToSessionParams
+  [IpcEvent.SEARCH_BACKFILL_PROGRESS]: BackfillStatus
 }
 
 // ============================================================================
