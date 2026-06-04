@@ -437,6 +437,37 @@ export function cookieStringFromCredentials(credentials: BilibiliCredentials): s
     .join('; ')
 }
 
+// Snake_case message shape shared by BilibiliMessage, BilibiliLastMessage, and the
+// synthetic object the send-hook builds. Only the fields toIndexedMessage reads.
+type SnakeCaseMessage = {
+  msg_seqno: number | string
+  msg_key: number | string
+  sender_uid?: number | null
+  msg_type?: number | null
+  msg_source?: number | null
+  timestamp?: number | null
+  msg_status?: number | null
+  content?: string | null
+}
+
+// Map a snake_case Bilibili message (fetched session last_msg, fetched message, or a
+// locally-built sent message) to the IndexedMessageInput shape. Centralizes the coercion
+// rules: msg_key/msg_seqno → String, talker/session ids → number, ?? null for nullable fields.
+function toIndexedMessage(talkerId: number, sessionType: number, m: SnakeCaseMessage): IndexedMessageInput {
+  return {
+    talkerId,
+    sessionType,
+    msgSeqno: String(m.msg_seqno),
+    msgKey: String(m.msg_key),
+    senderUid: m.sender_uid ?? null,
+    msgType: m.msg_type ?? null,
+    msgSource: m.msg_source ?? null,
+    timestamp: m.timestamp ?? null,
+    msgStatus: m.msg_status ?? null,
+    content: m.content ?? '',
+  }
+}
+
 // Broadcast backfill progress to all renderer windows (mirrors BILIBILI_NEW_MESSAGE fan-out).
 // Exported so the search-index backfill loop can push status updates as they happen.
 export function broadcastBackfillProgress(status: BackfillStatus): void {
@@ -856,38 +887,16 @@ export function registerBilibiliIpcHandlers() {
           if (mid && sessionList) {
             indexSessions(mid, sessionList)
 
+            // Collect each session's last_msg preview into one flat array; indexMessages
+            // wraps the whole batch in a single transaction and tracks touched conversations.
             const lastMessages: IndexedMessageInput[] = []
             for (const session of sessionList) {
               const lm = session.last_msg
               if (!lm?.msg_key) continue
-              lastMessages.push({
-                talkerId: session.talker_id,
-                sessionType: session.session_type,
-                msgSeqno: String(lm.msg_seqno),
-                msgKey: String(lm.msg_key),
-                senderUid: lm.sender_uid ?? null,
-                msgType: lm.msg_type ?? null,
-                msgSource: lm.msg_source ?? null,
-                timestamp: lm.timestamp ?? null,
-                msgStatus: lm.msg_status ?? null,
-                content: lm.content ?? '',
-              })
+              lastMessages.push(toIndexedMessage(session.talker_id, session.session_type, lm))
             }
             if (lastMessages.length > 0) {
-              // Group by conversation so the indexer writes one transaction per talker.
-              const byConv = new Map<string, IndexedMessageInput[]>()
-              for (const m of lastMessages) {
-                const key = `${m.talkerId}:${m.sessionType}`
-                const arr = byConv.get(key)
-                if (arr) {
-                  arr.push(m)
-                } else {
-                  byConv.set(key, [m])
-                }
-              }
-              for (const group of byConv.values()) {
-                indexMessages(mid, group)
-              }
+              indexMessages(mid, lastMessages)
             }
           }
         } catch (indexError) {
@@ -973,18 +982,7 @@ export function registerBilibiliIpcHandlers() {
           if (mid && messages && messages.length > 0) {
             const talkerIdNum = Number(talkerId)
             const sessionTypeNum = Number(sessionType)
-            const mapped: IndexedMessageInput[] = messages.map(m => ({
-              talkerId: talkerIdNum,
-              sessionType: sessionTypeNum,
-              msgSeqno: String(m.msg_seqno),
-              msgKey: String(m.msg_key),
-              senderUid: m.sender_uid ?? null,
-              msgType: m.msg_type ?? null,
-              msgSource: m.msg_source ?? null,
-              timestamp: m.timestamp ?? null,
-              msgStatus: m.msg_status ?? null,
-              content: m.content ?? '',
-            }))
+            const mapped = messages.map(m => toIndexedMessage(talkerIdNum, sessionTypeNum, m))
             indexMessages(mid, mapped)
           }
         } catch (indexError) {
@@ -1188,20 +1186,19 @@ export function registerBilibiliIpcHandlers() {
           if (mid && sentMsgKey != null && String(sentMsgKey).length > 0) {
             const msgTypeNum = Number(msgType)
             const isRecall = msgTypeNum === 5
-            indexMessages(mid, [
-              {
-                talkerId: Number(receiverId),
-                sessionType: Number(receiverType),
-                msgSeqno: '',
-                msgKey: String(sentMsgKey),
-                senderUid: Number(credentials.DedeUserID),
-                msgType: msgTypeNum,
-                msgSource: null,
-                timestamp,
-                msgStatus: isRecall ? 1 : 0,
-                content,
-              },
-            ])
+            // The send response carries no seqno, so use '' as a placeholder. msg_type 5 is a
+            // recall trigger; msg_status 1 keeps its content out of FTS (handled in indexMessages).
+            const sent = toIndexedMessage(Number(receiverId), Number(receiverType), {
+              msg_seqno: '',
+              msg_key: String(sentMsgKey),
+              sender_uid: Number(credentials.DedeUserID),
+              msg_type: msgTypeNum,
+              msg_source: null,
+              timestamp,
+              msg_status: isRecall ? 1 : 0,
+              content,
+            })
+            indexMessages(mid, [sent])
           }
         } catch (indexError) {
           console.error('[SearchIndex] Failed to index sent message:', indexError)
