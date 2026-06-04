@@ -336,6 +336,13 @@ function removeAccount(mid: number): boolean {
     return false
   }
 
+  // Purge this account's search-index partition (fire-and-forget, never throws to caller).
+  try {
+    clearAccountIndex(mid)
+  } catch (indexError) {
+    console.error('[SearchIndex] Failed to clear index for removed account:', indexError)
+  }
+
   saveAccounts(filteredAccounts)
 
   // If we removed the active account, switch to another one
@@ -402,6 +409,15 @@ function updateAccountCredentials(mid: number, credentials: BilibiliCredentials)
 
 // Clear all accounts (full logout)
 function clearAllAccounts(): void {
+  // Purge each account's search-index partition before dropping account records.
+  try {
+    for (const account of getAccounts()) {
+      clearAccountIndex(account.userInfo.mid)
+    }
+  } catch (indexError) {
+    console.error('[SearchIndex] Failed to clear index on full logout:', indexError)
+  }
+
   store.set('accounts', null)
   store.set('activeAccountMid', null)
 }
