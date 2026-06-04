@@ -52,6 +52,12 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
       return { text, typeLabel: null }
     }
 
+    case MSG_TYPE.IMAGE:
+      return { text: '', typeLabel: '[图片]' }
+
+    case MSG_TYPE.CUSTOM_EMOJI:
+      return { text: '', typeLabel: '[表情]' }
+
     default:
       return { text: '', typeLabel: null }
   }
