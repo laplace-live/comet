@@ -26,6 +26,12 @@ export default function App() {
     userCache,
     hasMoreSessions,
     userInfo,
+    // Search + jump state
+    searchResults,
+    searchLoading,
+    backfillStatus,
+    jumpToIndex,
+    highlightedSeqno,
     // Multi-account state
     accounts,
     activeAccountMid,
@@ -37,6 +43,9 @@ export default function App() {
     fetchSessions,
     loadMoreSessions,
     selectSession,
+    selectSessionAndJump,
+    runSearch,
+    clearSearch,
     clearSelectedSession,
     sendMessage,
     sendImageMessage,
@@ -58,6 +67,7 @@ export default function App() {
   const [initialLoading, setInitialLoading] = useState(true)
   const openSettings = useSettings(state => state.openSettings)
   const openAbout = useSettings(state => state.openAbout)
+  const fullTextIndexEnabled = useSettings(state => state.fullTextIndexEnabled)
 
   // Listen for About menu event from main process (always available)
   useEffect(() => {
@@ -141,6 +151,69 @@ export default function App() {
     await fetchSessions()
   }, [checkLogin, fetchSessions])
 
+  // Resolve a search hit's (talkerId, sessionType) to a session object. Falls back
+  // to a synthetic minimal session for conversations outside the loaded window.
+  const resolveSession = useCallback(
+    (talkerId: number, sessionType: number): import('@/types/bilibili').BilibiliSession => {
+      const existing = sessions.find(s => s.talker_id === talkerId && s.session_type === sessionType)
+      if (existing) return existing
+      return {
+        talker_id: talkerId,
+        session_type: sessionType,
+        unread_count: 0,
+        last_msg: null,
+        session_ts: 0,
+        max_seqno: 0,
+        is_dnd: 0,
+        top_ts: 0,
+        is_follow: 0,
+      } as import('@/types/bilibili').BilibiliSession
+    },
+    [sessions]
+  )
+
+  const handleSearch = useCallback(
+    (query: string, scope: 'current' | 'all') => {
+      runSearch({
+        query,
+        scope,
+        talkerId: scope === 'current' ? (selectedSession?.talker_id ?? undefined) : undefined,
+        sessionType: scope === 'current' ? (selectedSession?.session_type ?? undefined) : undefined,
+        limit: 50,
+        offset: 0,
+      })
+    },
+    [runSearch, selectedSession]
+  )
+
+  const handleConversationHitClick = useCallback(
+    (hit: { talkerId: number; sessionType: number }) => {
+      selectSession(resolveSession(hit.talkerId, hit.sessionType))
+    },
+    [selectSession, resolveSession]
+  )
+
+  const handleMessageHitClick = useCallback(
+    (hit: { talkerId: number; sessionType: number; msgSeqno: string }) => {
+      selectSessionAndJump(resolveSession(hit.talkerId, hit.sessionType), Number(hit.msgSeqno))
+    },
+    [selectSessionAndJump, resolveSession]
+  )
+
+  const handleLoadMoreMessageHits = useCallback(
+    (query: string, scope: 'current' | 'all', offset: number) => {
+      runSearch({
+        query,
+        scope,
+        talkerId: scope === 'current' ? (selectedSession?.talker_id ?? undefined) : undefined,
+        sessionType: scope === 'current' ? (selectedSession?.session_type ?? undefined) : undefined,
+        limit: 50,
+        offset,
+      })
+    },
+    [runSearch, selectedSession]
+  )
+
   // Show loading state while checking initial login
   if (initialLoading) {
     return (
@@ -182,6 +255,16 @@ export default function App() {
               onAddAccount={startAddingAccount}
               onRemoveAccount={removeAccount}
               onReauthAccount={startReauthAccount}
+              searchResults={searchResults}
+              searchLoading={searchLoading}
+              backfillStatus={backfillStatus}
+              indexEnabled={fullTextIndexEnabled}
+              onSearch={handleSearch}
+              onClearSearch={clearSearch}
+              onConversationHitClick={handleConversationHitClick}
+              onMessageHitClick={handleMessageHitClick}
+              onLoadMoreMessageHits={handleLoadMoreMessageHits}
+              onOpenSettings={openSettings}
             />
 
             {/* Settings Dialog */}
@@ -206,6 +289,8 @@ export default function App() {
               onRecall={recallMessage}
               onToggleDnd={toggleDnd}
               onToggleSticky={toggleSticky}
+              jumpToIndex={jumpToIndex}
+              highlightedSeqno={highlightedSeqno}
             />
 
             {/* Add Account / Re-auth Dialog */}
