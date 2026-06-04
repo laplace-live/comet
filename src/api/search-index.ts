@@ -15,14 +15,15 @@ const require = createRequire(import.meta.url)
 // Lazily required inside initSearchIndex so importing this module never dlopen()s
 // the native binding (keeps unit tests that don't init from needing the build).
 type DatabaseCtor = new (path: string, options?: Record<string, unknown>) => DatabaseHandle
+interface PreparedStatement {
+  run(...params: unknown[]): unknown
+  get(...params: unknown[]): unknown
+  all(...params: unknown[]): unknown[]
+}
 interface DatabaseHandle {
   pragma(source: string): unknown
   exec(sql: string): void
-  prepare(sql: string): {
-    run(...params: unknown[]): unknown
-    get(...params: unknown[]): unknown
-    all(...params: unknown[]): unknown[]
-  }
+  prepare(sql: string): PreparedStatement
   transaction<T extends (...args: never[]) => unknown>(fn: T): T
   close(): void
 }
@@ -105,6 +106,15 @@ export interface InitOptions {
 // ---------------------------------------------------------------------------
 let db: DatabaseHandle | null = null
 
+// Cached upsert statements (bound to the live `db` handle). These run on hot
+// fetch paths, so we prepare once and reuse; closeSearchIndex() resets them to
+// null so a re-init re-binds them to the new handle.
+let upsertMsgStmt: PreparedStatement | null = null
+let upsertSessionStmt: PreparedStatement | null = null
+
+// One-time guard so the degraded-mode (no OS keychain) warning is logged once.
+let degradedKeyWarned = false
+
 function getDb(): DatabaseHandle {
   if (!db) throw new Error('search-index: DB not initialized; call initSearchIndex() first')
   return db
@@ -134,12 +144,23 @@ export async function initSearchIndex(opts?: InitOptions): Promise<void> {
   const Database = require('better-sqlite3-multiple-ciphers') as DatabaseCtor
 
   const dbPath = opts?.dbPath ?? `${app.getPath('userData')}/comet-index.db`
-  const keyHex =
-    opts?.encryptionKeyHex ??
-    resolveKeyHex(safeStorage, {
+  let keyHex = opts?.encryptionKeyHex
+  if (keyHex == null) {
+    // Production key-resolution path. When the OS keychain is unavailable
+    // (e.g. Linux without a keyring) the key helper falls back to a plaintext
+    // (v0:) wrapped blob — warn once that the index key is stored without
+    // keychain protection (spec degraded-mode requirement).
+    if (!safeStorage.isEncryptionAvailable() && !degradedKeyWarned) {
+      degradedKeyWarned = true
+      console.warn(
+        'search-index: OS keychain encryption is unavailable; the index encryption key will be stored WITHOUT keychain protection (degraded mode).'
+      )
+    }
+    keyHex = resolveKeyHex(safeStorage, {
       read: () => readKeyBlob(),
       write: (_k, v) => writeKeyBlob(v),
     })
+  }
 
   const handle = new Database(dbPath)
   // In-memory/temp DBs (tests only) cannot be keyed — the driver rejects
@@ -165,6 +186,10 @@ export function closeSearchIndex(): void {
     db.close()
     db = null
   }
+  // Cached statements are bound to the now-closed handle; drop them so a
+  // re-init re-prepares against the fresh connection.
+  upsertMsgStmt = null
+  upsertSessionStmt = null
 }
 
 // ---------------------------------------------------------------------------
@@ -200,7 +225,7 @@ function writeKeyBlob(value: string): void {
 export function indexMessages(mid: number, messages: IndexedMessageInput[]): void {
   try {
     if (!db || messages.length === 0) return
-    const stmt = db.prepare(`
+    upsertMsgStmt ??= db.prepare(`
       INSERT INTO messages (
         account_mid, talker_id, session_type, msg_seqno, msg_key,
         sender_uid, msg_type, msg_source, timestamp, msg_status,
@@ -221,6 +246,7 @@ export function indexMessages(mid: number, messages: IndexedMessageInput[]): voi
         type_label      = excluded.type_label,
         raw_json        = excluded.raw_json
     `)
+    const stmt = upsertMsgStmt
     const runAll = db.transaction((rows: IndexedMessageInput[]) => {
       for (const m of rows) {
         let extracted: { text: string; typeLabel: string | null }
@@ -257,7 +283,7 @@ export function indexMessages(mid: number, messages: IndexedMessageInput[]): voi
 export function indexSessions(mid: number, sessions: BilibiliSession[]): void {
   try {
     if (!db || sessions.length === 0) return
-    const stmt = db.prepare(`
+    upsertSessionStmt ??= db.prepare(`
       INSERT INTO sessions (
         account_mid, talker_id, session_type, name, group_name,
         last_msg_text, session_ts, unread_count
@@ -271,6 +297,7 @@ export function indexSessions(mid: number, sessions: BilibiliSession[]): void {
         session_ts    = excluded.session_ts,
         unread_count  = excluded.unread_count
     `)
+    const stmt = upsertSessionStmt
     const runAll = db.transaction((rows: BilibiliSession[]) => {
       for (const s of rows) {
         let lastMsgText: string | null = null
@@ -309,9 +336,10 @@ export function indexSessions(mid: number, sessions: BilibiliSession[]): void {
 export function clearAccountIndex(mid: number): void {
   try {
     if (!db) return
-    const purge = db.transaction((accountMid: number) => {
+    const handle = getDb()
+    const purge = handle.transaction((accountMid: number) => {
       for (const table of ['messages', 'sessions', 'users', 'account_cursors', 'conv_cursors']) {
-        getDb().prepare(`DELETE FROM ${table} WHERE account_mid = ?`).run(accountMid)
+        handle.prepare(`DELETE FROM ${table} WHERE account_mid = ?`).run(accountMid)
       }
     })
     purge(mid)
