@@ -199,3 +199,51 @@ describe('extractSearchableText — FAN_GROUP_SYSTEM', () => {
     expect(result.text).toBe('系统消息文本')
   })
 })
+
+describe('extractSearchableText — generic fallback & plain string', () => {
+  it('LOTTERY (13) uses generic precedence: content wins', () => {
+    const content = JSON.stringify({ content: '抽奖内容', text: 'ignored', title: 'ignored' })
+    const result = extractSearchableText(content, MSG_TYPE.LOTTERY)
+    expect(result).toEqual({ text: '抽奖内容', typeLabel: null })
+  })
+
+  it('ARTICLE (22) falls back through title when content/text absent', () => {
+    const content = JSON.stringify({ title: '专栏标题', desc: '专栏描述' })
+    const result = extractSearchableText(content, MSG_TYPE.ARTICLE)
+    expect(result.text).toBe('专栏标题')
+  })
+
+  it('LIVE_CARD (27) falls back to pure_text', () => {
+    const content = JSON.stringify({ pure_text: '直播间纯文本' })
+    const result = extractSearchableText(content, MSG_TYPE.LIVE_CARD)
+    expect(result.text).toBe('直播间纯文本')
+  })
+
+  it('MINI_PROGRAM (21) falls back to abs_text when nothing higher present', () => {
+    const content = JSON.stringify({ abs_text: '小程序摘要' })
+    const result = extractSearchableText(content, MSG_TYPE.MINI_PROGRAM)
+    expect(result.text).toBe('小程序摘要')
+  })
+
+  it('recurses into nested content object', () => {
+    const content = JSON.stringify({ content: { content: '嵌套文本' } })
+    const result = extractSearchableText(content, MSG_TYPE.LOTTERY)
+    expect(result.text).toBe('嵌套文本')
+  })
+
+  it('plain (non-JSON) string content falls back to the raw string', () => {
+    const result = extractSearchableText('就是一条纯文本', MSG_TYPE.TEXT)
+    expect(result).toEqual({ text: '就是一条纯文本', typeLabel: null })
+  })
+
+  it('plain string on an unknown type falls back to the raw string', () => {
+    const result = extractSearchableText('纯文本未知类型', 9999)
+    expect(result.text).toBe('纯文本未知类型')
+  })
+
+  it('returns empty text for an unknown type with no extractable fields', () => {
+    const content = JSON.stringify({ foo: 'bar', nested: { baz: 1 } })
+    const result = extractSearchableText(content, 9999)
+    expect(result).toEqual({ text: '', typeLabel: null })
+  })
+})

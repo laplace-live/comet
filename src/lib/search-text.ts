@@ -51,14 +51,14 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
     parsed = content
   }
 
-  const obj = (parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}) as Record<
-    string,
-    unknown
-  >
+  const isObject = parsed !== null && typeof parsed === 'object'
+  const obj = (isObject ? (parsed as Record<string, unknown>) : {}) as Record<string, unknown>
+  // For plain-string / primitive content, extraction must see the raw parsed value.
+  const value: unknown = isObject ? parsed : content
 
   switch (msgType) {
     case MSG_TYPE.TEXT: {
-      const text = extractTextContent(obj.content) || extractTextContent(obj)
+      const text = extractTextContent(obj.content) || extractTextContent(value)
       return { text, typeLabel: null }
     }
 
@@ -151,7 +151,7 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
     }
 
     case MSG_TYPE.FAN_GROUP_SYSTEM: {
-      const text = extractTextContent(obj.content) || extractTextContent(obj)
+      const text = extractTextContent(obj.content) || extractTextContent(value)
       return { text, typeLabel: null }
     }
 
@@ -159,6 +159,6 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
       return { text: '', typeLabel: null }
 
     default:
-      return { text: '', typeLabel: null }
+      return { text: extractTextContent(value), typeLabel: null }
   }
 }
