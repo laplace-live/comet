@@ -1,10 +1,13 @@
 import { createRequire } from 'node:module'
 import { app, safeStorage } from 'electron'
 
+import type { BackfillCrawler, CrawlerDeps } from '@/api/backfill-crawler'
+import type { ConvCursor } from '@/lib/backfill-cursor'
 import type { BilibiliSession } from '@/types/bilibili'
 
 import { extractSearchableText } from '@/lib/search-text'
 
+import { createBackfillCrawler } from '@/api/backfill-crawler'
 import { resolveKeyHex } from '@/api/search-index-key'
 import { SCHEMA_SQL, SCHEMA_VERSION } from '@/api/search-index-schema'
 
@@ -602,18 +605,152 @@ export function querySearch(mid: number, params: SearchQueryParams): SearchQuery
 
   return { conversationHits, messageHits, total }
 }
-export function startBackfill(_mid: number, _opts?: { sessionType?: number }): void {}
-export function pauseBackfill(): void {}
-export function resumeBackfill(): void {}
-export function getBackfillStatus(): BackfillStatus {
+// ---------------------------------------------------------------------------
+// Backfill crawler wiring
+// ---------------------------------------------------------------------------
+//
+// The crawler needs the in-process Bilibili fetchers, the active-account
+// resolver, and a renderer progress broadcaster — all of which live in
+// bilibili.ts. Since bilibili.ts already imports this module, importing those
+// symbols here statically would create a circular dependency. Instead, main.ts
+// injects them once at startup via `configureBackfill()`. The DB-backed cursor
+// persistence and the indexers stay local to this module.
+
+type BackfillExternals = Pick<
+  CrawlerDeps,
+  'getActiveAccountMid' | 'fetchSessions' | 'fetchSessionMsgs' | 'emitProgress'
+>
+
+let backfillExternals: BackfillExternals | null = null
+let crawler: BackfillCrawler | null = null
+
+/**
+ * Inject the network fetchers, active-account resolver, and progress broadcaster
+ * the backfill crawler depends on. Called once from main.ts at startup to keep
+ * this module free of a static dependency on bilibili.ts (avoids an import cycle).
+ */
+export function configureBackfill(externals: BackfillExternals): void {
+  backfillExternals = externals
+  // Force a rebuild on next use so a re-configure (e.g. test harness) takes effect.
+  crawler = null
+}
+
+function getConvCursorRow(mid: number, key: string): ConvCursor | undefined {
+  const [talkerId, sessionType] = key.split(':').map(Number)
+  const row = getDb()
+    .prepare(
+      `SELECT oldest_seqno, backfill_done, newest_seqno, newest_msg_key
+       FROM conv_cursors
+       WHERE account_mid = ? AND talker_id = ? AND session_type = ?`
+    )
+    .get(mid, talkerId, sessionType) as
+    | { oldest_seqno: string | null; backfill_done: number; newest_seqno: string | null; newest_msg_key: string | null }
+    | undefined
+  if (!row) return undefined
   return {
-    state: 'idle',
-    processedConversations: 0,
-    totalConversations: 0,
-    indexedMessages: 0,
-    currentTalkerId: null,
-    lastError: null,
+    oldestSeqno: row.oldest_seqno,
+    backfillDone: row.backfill_done === 1,
+    newestSeqno: row.newest_seqno,
+    newestMsgKey: row.newest_msg_key,
   }
+}
+
+function saveConvCursorRow(mid: number, key: string, cursor: ConvCursor): void {
+  const [talkerId, sessionType] = key.split(':').map(Number)
+  getDb()
+    .prepare(
+      `INSERT INTO conv_cursors
+         (account_mid, talker_id, session_type, oldest_seqno, backfill_done, newest_seqno, newest_msg_key, last_indexed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(account_mid, talker_id, session_type) DO UPDATE SET
+         oldest_seqno = excluded.oldest_seqno,
+         backfill_done = excluded.backfill_done,
+         newest_seqno = COALESCE(excluded.newest_seqno, conv_cursors.newest_seqno),
+         newest_msg_key = COALESCE(excluded.newest_msg_key, conv_cursors.newest_msg_key),
+         last_indexed_at = excluded.last_indexed_at`
+    )
+    .run(
+      mid,
+      talkerId,
+      sessionType,
+      cursor.oldestSeqno,
+      cursor.backfillDone ? 1 : 0,
+      cursor.newestSeqno,
+      cursor.newestMsgKey,
+      Date.now()
+    )
+}
+
+function saveAccountCursorRow(mid: number, cursor: { sessionEndTs: string | null; sessionHasMore: boolean }): void {
+  getDb()
+    .prepare(
+      `INSERT INTO account_cursors (account_mid, session_end_ts, session_has_more, last_full_sweep_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(account_mid) DO UPDATE SET
+         session_end_ts = excluded.session_end_ts,
+         session_has_more = excluded.session_has_more,
+         last_full_sweep_at = excluded.last_full_sweep_at`
+    )
+    .run(mid, cursor.sessionEndTs, cursor.sessionHasMore ? 1 : 0, Date.now())
+}
+
+function jitteredDelay(baseMs: number): number {
+  // base 2-4s band centered on baseMs (spec: 2-4s jittered)
+  const spread = 1000
+  return Math.round(baseMs - spread + Math.random() * (2 * spread))
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function getCrawler(): BackfillCrawler {
+  if (crawler) return crawler
+  if (!backfillExternals) {
+    throw new Error('search-index: backfill not configured; call configureBackfill() first')
+  }
+  crawler = createBackfillCrawler({
+    getActiveAccountMid: backfillExternals.getActiveAccountMid,
+    fetchSessions: backfillExternals.fetchSessions,
+    fetchSessionMsgs: backfillExternals.fetchSessionMsgs,
+    indexSessions,
+    indexMessages,
+    getConvCursor: getConvCursorRow,
+    saveConvCursor: saveConvCursorRow,
+    saveAccountCursor: saveAccountCursorRow,
+    emitProgress: backfillExternals.emitProgress,
+    sleep,
+    jitter: jitteredDelay,
+  })
+  return crawler
+}
+
+export function startBackfill(mid: number, opts?: { sessionType?: number }): void {
+  void mid // active account resolved inside the crawler via getActiveAccountMid()
+  getCrawler().start(opts)
+}
+
+export function pauseBackfill(): void {
+  getCrawler().pause()
+}
+
+export function resumeBackfill(): void {
+  getCrawler().resume()
+}
+
+export function getBackfillStatus(): BackfillStatus {
+  if (!backfillExternals) {
+    // Not yet configured (e.g. index unavailable): report idle rather than throwing.
+    return {
+      state: 'idle',
+      processedConversations: 0,
+      totalConversations: 0,
+      indexedMessages: 0,
+      currentTalkerId: null,
+      lastError: null,
+    }
+  }
+  return getCrawler().getStatus()
 }
 export function getIndexStats(mid: number): IndexStats {
   if (!db) {
