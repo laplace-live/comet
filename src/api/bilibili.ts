@@ -1163,6 +1163,34 @@ export function registerBilibiliIpcHandlers() {
           return { error: `[diag] code=${data.code} msg=${data.message || '(empty)'}`, code: data.code }
         }
 
+        // Fire-and-forget: index the outbound message. The send response only returns
+        // msg_key (no seqno), so use the locally-known content/receiver/sender/timestamp.
+        // msg_type 5 is a recall trigger; record msgStatus=1 so its content is excluded from FTS.
+        try {
+          const mid = getActiveAccountMid()
+          const sentMsgKey = data.data?.msg_key
+          if (mid && sentMsgKey != null && String(sentMsgKey).length > 0) {
+            const msgTypeNum = Number(msgType)
+            const isRecall = msgTypeNum === 5
+            indexMessages(mid, [
+              {
+                talkerId: Number(receiverId),
+                sessionType: Number(receiverType),
+                msgSeqno: '',
+                msgKey: String(sentMsgKey),
+                senderUid: Number(credentials.DedeUserID),
+                msgType: msgTypeNum,
+                msgSource: null,
+                timestamp,
+                msgStatus: isRecall ? 1 : 0,
+                content,
+              },
+            ])
+          }
+        } catch (indexError) {
+          console.error('[SearchIndex] Failed to index sent message:', indexError)
+        }
+
         return data
       } catch (error) {
         console.error('Failed to send message:', error)
