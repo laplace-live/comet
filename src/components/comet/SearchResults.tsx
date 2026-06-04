@@ -69,8 +69,8 @@ export function SearchResults({
         </div>
       )}
 
-      <div className='scrollbar-thin min-h-0 flex-1 overflow-y-auto'>
-        {/* Conversations group */}
+      {/* Conversations group (static, non-scrolling) */}
+      <div className='flex-none'>
         <div className='px-4 pt-3 pb-1 font-medium text-muted-foreground text-xs'>会话 · {conversationHits.length}</div>
         {conversationHits.length === 0 ? (
           <p className='px-4 pb-3 text-muted-foreground text-sm'>没有匹配的会话</p>
@@ -87,7 +87,7 @@ export function SearchResults({
           ))
         )}
 
-        {/* Messages group */}
+        {/* Messages group header */}
         <div className='px-4 pt-3 pb-1 font-medium text-muted-foreground text-xs'>消息 · {messageHits.length}</div>
 
         {backfillRunning && (
@@ -99,39 +99,40 @@ export function SearchResults({
             </Progress>
           </div>
         )}
-
-        {!indexEnabled ? (
-          <div className='flex flex-col items-start gap-2 px-4 py-4 text-muted-foreground text-sm'>
-            <p>开启全文搜索以检索全部历史消息</p>
-            <Button variant='outline' size='sm' onClick={onOpenSettings}>
-              前往设置
-              <ArrowRight className='size-4' aria-hidden='true' />
-            </Button>
-          </div>
-        ) : messageHits.length === 0 ? (
-          <div className='flex flex-col items-center justify-center py-8 text-muted-foreground'>
-            <Search className='mb-3 size-8 opacity-50' aria-hidden='true' />
-            <p className='text-sm'>没有匹配的消息</p>
-          </div>
-        ) : (
-          <Virtuoso
-            useWindowScroll
-            data={messageHits}
-            endReached={onLoadMoreMessages}
-            overscan={20}
-            itemContent={(_, hit) => (
-              <SearchResultRow
-                hit={hit}
-                kind='message'
-                userCache={userCache}
-                isSelected={false}
-                onClick={() => onMessageClick(hit)}
-              />
-            )}
-            components={{ Scroller: CustomScroller }}
-          />
-        )}
       </div>
+
+      {/* Messages group body: self-scrolling virtualized list (owns its own scroll). */}
+      {!indexEnabled ? (
+        <div className='flex flex-col items-start gap-2 px-4 py-4 text-muted-foreground text-sm'>
+          <p>开启全文搜索以检索全部历史消息</p>
+          <Button variant='outline' size='sm' onClick={onOpenSettings}>
+            前往设置
+            <ArrowRight className='size-4' aria-hidden='true' />
+          </Button>
+        </div>
+      ) : messageHits.length === 0 ? (
+        <div className='flex flex-col items-center justify-center py-8 text-muted-foreground'>
+          <Search className='mb-3 size-8 opacity-50' aria-hidden='true' />
+          <p className='text-sm'>没有匹配的消息</p>
+        </div>
+      ) : (
+        <Virtuoso
+          className='flex-1'
+          data={messageHits}
+          endReached={onLoadMoreMessages}
+          overscan={20}
+          itemContent={(_, hit) => (
+            <SearchResultRow
+              hit={hit}
+              kind='message'
+              userCache={userCache}
+              isSelected={false}
+              onClick={() => onMessageClick(hit)}
+            />
+          )}
+          components={{ Scroller: CustomScroller }}
+        />
+      )}
     </div>
   )
 }

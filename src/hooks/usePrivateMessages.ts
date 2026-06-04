@@ -188,6 +188,15 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     selectedSessionRef.current = selectedSession
   }, [selectedSession])
 
+  // Clear any pending search-debounce timer on unmount so it can't setState
+  // after the component is gone.
+  useEffect(
+    () => () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    },
+    []
+  )
+
   // Track window focus state and mark current session as read when regaining focus
   useEffect(() => {
     const handleFocus = () => {
@@ -709,7 +718,18 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         const result = await window.electronAPI.search.query({ ...params, query: trimmed })
         // Guard: ignore responses that arrive after a newer query was issued
         if (requestId !== searchRequestIdRef.current) return
-        setSearchResults(result)
+        // offset > 0 is a "load more" page: append the new message hits to the
+        // existing list (keeping the prior conversation hits). offset === 0 is a
+        // fresh query and fully replaces, resetting the list for a new term.
+        setSearchResults(prev =>
+          params.offset > 0 && prev
+            ? {
+                ...result,
+                conversationHits: prev.conversationHits,
+                messageHits: [...prev.messageHits, ...result.messageHits],
+              }
+            : result
+        )
       } catch (err) {
         console.error('[usePrivateMessages] Search query failed:', err)
         if (requestId === searchRequestIdRef.current) {
@@ -761,6 +781,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           pendingJumpSeqnoRef.current = null
           setJumpToIndex(index)
           setHighlightedSeqno(msgSeqno)
+        } else {
+          // Target not in the already-loaded window: clear the armed jump so a
+          // later unrelated setMessages (WS message, recall, emoji merge) can't
+          // re-fire the resolution effect and pop a spurious toast. The full
+          // history is already loaded here, so notify immediately.
+          pendingJumpSeqnoRef.current = null
+          toastManager.add({ type: 'info', title: '未找到该消息', description: '可能已被撤回或超出已加载范围' })
         }
         return
       }
