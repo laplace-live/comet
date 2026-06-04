@@ -373,6 +373,52 @@ export function querySearch(mid: number, params: SearchQueryParams): SearchQuery
 
   const scopeCurrent = params.scope === 'current' && typeof params.talkerId === 'number'
 
+  // Conversation hits: bounded LIKE over sessions.name / group_name / talker_id /
+  // last_msg_text. Capped ~20, respects params.sessionType, scoped to account_mid.
+  // Runs for all query lengths (does not depend on the trigram >=3-char rule).
+  const convLike = `%${q.replace(/[%_\\]/g, '\\$&')}%`
+  const convFilterType = typeof params.sessionType === 'number'
+  const convSql = `
+    SELECT
+      talker_id               AS talkerId,
+      session_type            AS sessionType,
+      COALESCE(name, group_name) AS name,
+      last_msg_text           AS snippet,
+      session_ts              AS sessionTs
+    FROM sessions
+    WHERE account_mid = ?
+      ${convFilterType ? 'AND session_type = ?' : ''}
+      AND (
+        name LIKE ? ESCAPE '\\'
+        OR group_name LIKE ? ESCAPE '\\'
+        OR last_msg_text LIKE ? ESCAPE '\\'
+        OR CAST(talker_id AS TEXT) LIKE ? ESCAPE '\\'
+      )
+    ORDER BY session_ts DESC
+    LIMIT 20
+  `
+  const convArgs: Array<string | number> = convFilterType
+    ? [mid, params.sessionType as number, convLike, convLike, convLike, convLike]
+    : [mid, convLike, convLike, convLike, convLike]
+
+  const convRows = db.prepare(convSql).all(...convArgs) as Array<{
+    talkerId: number
+    sessionType: number
+    name: string | null
+    snippet: string | null
+    sessionTs: string | null
+  }>
+
+  for (const r of convRows) {
+    conversationHits.push({
+      talkerId: r.talkerId,
+      sessionType: r.sessionType,
+      name: r.name,
+      snippet: r.snippet,
+      sessionTs: r.sessionTs == null ? null : String(r.sessionTs),
+    })
+  }
+
   if (isTrigramEligible(q)) {
     const match = toFtsMatch(q)
 

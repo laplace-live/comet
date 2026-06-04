@@ -2,8 +2,9 @@ import { createRequire } from 'node:module'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import type { IndexedMessageInput } from '@/api/search-index'
+import type { BilibiliSession } from '@/types/bilibili'
 
-import { closeSearchIndex, indexMessages, initSearchIndex, querySearch } from '@/api/search-index'
+import { closeSearchIndex, indexMessages, indexSessions, initSearchIndex, querySearch } from '@/api/search-index'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3-multiple-ciphers')
@@ -350,12 +351,22 @@ describe('querySearch message hits (FTS trigram)', () => {
 
   it('returns CJK message hits with snippet sentinels and account scoping', () => {
     indexMessages(MID, [
-      msg({ talkerId: 200, msgSeqno: '10', msgKey: 'k10', content: JSON.stringify({ content: '今天天气很好我们去公园散步' }) }),
+      msg({
+        talkerId: 200,
+        msgSeqno: '10',
+        msgKey: 'k10',
+        content: JSON.stringify({ content: '今天天气很好我们去公园散步' }),
+      }),
       msg({ talkerId: 201, msgSeqno: '11', msgKey: 'k11', content: JSON.stringify({ content: '明天会下雨吗' }) }),
     ])
     // Different account must NOT leak into MID's results.
     indexMessages(9999, [
-      msg({ talkerId: 200, msgSeqno: '12', msgKey: 'k12', content: JSON.stringify({ content: '今天天气很好别的账号' }) }),
+      msg({
+        talkerId: 200,
+        msgSeqno: '12',
+        msgKey: 'k12',
+        content: JSON.stringify({ content: '今天天气很好别的账号' }),
+      }),
     ])
 
     const res = querySearch(MID, { query: '天气', scope: 'all', limit: 50, offset: 0 })
@@ -375,7 +386,12 @@ describe('querySearch message hits (FTS trigram)', () => {
   it('ranks more relevant rows first via bm25', () => {
     indexMessages(MID, [
       // Low relevance: long doc, one occurrence.
-      msg({ talkerId: 300, msgSeqno: '20', msgKey: 'k20', content: JSON.stringify({ content: '苹果' + '其他内容'.repeat(20) }) }),
+      msg({
+        talkerId: 300,
+        msgSeqno: '20',
+        msgKey: 'k20',
+        content: JSON.stringify({ content: `苹果${'其他内容'.repeat(20)}` }),
+      }),
       // High relevance: short doc, repeated term.
       msg({ talkerId: 301, msgSeqno: '21', msgKey: 'k21', content: JSON.stringify({ content: '苹果苹果苹果' }) }),
     ])
@@ -430,5 +446,108 @@ describe('querySearch message hits (FTS trigram)', () => {
     const keys1 = page1.messageHits.map(h => h.msgKey)
     const keys2 = page2.messageHits.map(h => h.msgKey)
     expect(keys1.some(k => keys2.includes(k))).toBe(false)
+  })
+})
+
+function session(overrides: Partial<BilibiliSession>): BilibiliSession {
+  return {
+    talker_id: 200,
+    session_type: 1,
+    at_seqno: 0,
+    top_ts: 0,
+    group_name: '',
+    group_cover: '',
+    is_follow: 0,
+    is_dnd: 0,
+    ack_seqno: 0,
+    ack_ts: 0,
+    session_ts: 1700000000000000,
+    unread_count: 0,
+    last_msg: null,
+    group_type: 0,
+    can_fold: 0,
+    status: 0,
+    max_seqno: 0,
+    new_push_msg: 0,
+    setting: 0,
+    is_guardian: 0,
+    is_intercept: 0,
+    is_trust: 0,
+    system_msg_type: 0,
+    live_status: 0,
+    biz_msg_unread_count: 0,
+    user_label: null,
+    ...overrides,
+  } as BilibiliSession
+}
+
+describe('querySearch conversation hits', () => {
+  beforeEach(async () => {
+    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+  })
+
+  afterEach(() => {
+    closeSearchIndex()
+  })
+
+  it('matches sessions by name, talker_id, and last_msg_text', () => {
+    indexSessions(MID, [
+      session({
+        talker_id: 700,
+        session_type: 1,
+        group_name: '阿强的小屋',
+        last_msg: {
+          sender_uid: 700,
+          receiver_type: 1,
+          receiver_id: MID,
+          msg_type: 1,
+          content: JSON.stringify({ content: '周末一起打球' }),
+          msg_seqno: 1,
+          timestamp: 100,
+          at_uids: null,
+          msg_key: 'lm1',
+          msg_status: 0,
+          notify_code: '',
+          msg_source: 0,
+        },
+      }),
+      session({ talker_id: 701, session_type: 1, group_name: '无关会话', last_msg: null }),
+    ])
+
+    // Name match
+    const byName = querySearch(MID, { query: '阿强', scope: 'all', limit: 50, offset: 0 })
+    expect(byName.conversationHits.some(c => c.talkerId === 700)).toBe(true)
+
+    // last_msg_text match
+    const byMsg = querySearch(MID, { query: '打球', scope: 'all', limit: 50, offset: 0 })
+    expect(byMsg.conversationHits.some(c => c.talkerId === 700)).toBe(true)
+
+    // talker_id numeric match
+    const byId = querySearch(MID, { query: '700', scope: 'all', limit: 50, offset: 0 })
+    expect(byId.conversationHits.some(c => c.talkerId === 700)).toBe(true)
+  })
+
+  it('filters conversation hits by sessionType when provided', () => {
+    indexSessions(MID, [
+      session({ talker_id: 800, session_type: 1, group_name: '搜索目标用户' }),
+      session({ talker_id: 801, session_type: 2, group_name: '搜索目标粉丝团' }),
+    ])
+
+    const userOnly = querySearch(MID, { query: '搜索目标', scope: 'all', sessionType: 1, limit: 50, offset: 0 })
+    expect(userOnly.conversationHits.every(c => c.sessionType === 1)).toBe(true)
+    expect(userOnly.conversationHits.some(c => c.talkerId === 800)).toBe(true)
+    expect(userOnly.conversationHits.some(c => c.talkerId === 801)).toBe(false)
+  })
+
+  it('caps conversation hits at ~20', () => {
+    const sessions: BilibiliSession[] = []
+    for (let i = 0; i < 30; i++) {
+      sessions.push(session({ talker_id: 900 + i, session_type: 1, group_name: `公共前缀会话${i}` }))
+    }
+    indexSessions(MID, sessions)
+
+    const res = querySearch(MID, { query: '公共前缀会话', scope: 'all', limit: 50, offset: 0 })
+    expect(res.conversationHits.length).toBeLessThanOrEqual(20)
+    expect(res.conversationHits.length).toBeGreaterThan(0)
   })
 })
