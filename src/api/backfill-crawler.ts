@@ -121,7 +121,8 @@ export function createBackfillCrawler(deps: CrawlerDeps): BackfillCrawler {
       if (paused) return null
       const result = await doFetch()
 
-      const code = isError(result) ? result.code : result.code
+      // Both Bilibili envelopes expose `code` (success envelopes carry `code: 0`).
+      const code = result.code
       const blocked = isError(result) && result.code === -412
       const kind = classifyError(code, blocked)
 
@@ -139,10 +140,14 @@ export function createBackfillCrawler(deps: CrawlerDeps): BackfillCrawler {
         return null
       }
       if (decision.action === 'pause') {
+        // Spec §10: a blocked/exhausted state pauses the crawl and tears down so the
+        // user/system can resume later. The most recent page's cursor was already
+        // persisted before this fetch, so we do NOT block on the long cooldown sleep
+        // here — we just flag paused and return; the loop breaks and resolves to
+        // 'paused', leaving resume() free to continue from the persisted cursor.
         status = { ...status, state: 'paused', lastError: `code=${code}` }
         publish(true)
         paused = true
-        await deps.sleep(decision.delayMs)
         return null
       }
       // action === 'retry'
@@ -227,77 +232,85 @@ export function createBackfillCrawler(deps: CrawlerDeps): BackfillCrawler {
     status = { ...status, state: 'running', lastError: null }
     publish(true)
 
-    const mid = deps.getActiveAccountMid()
-    if (mid === null) {
-      status = { ...status, state: 'error', lastError: 'no active account' }
-      publish(true)
-      running = false
-      return
-    }
+    try {
+      const mid = deps.getActiveAccountMid()
+      if (mid === null) {
+        status = { ...status, state: 'error', lastError: 'no active account' }
+        publish(true)
+        return
+      }
 
-    // ---- walk the conversation list, backfilling each conversation ----------
-    let endTs: string | undefined
-    let prevEndTs: string | null = null
+      // ---- walk the conversation list, backfilling each conversation ----------
+      let endTs: string | undefined
+      let prevEndTs: string | null = null
 
-    // paged walk with internal breaks
-    for (;;) {
-      if (paused) break
-
-      const resp = await fetchWithBackoff(() =>
-        deps.fetchSessions({ sessionType: String(sessionType), size: SESSIONS_PAGE_SIZE, endTs })
-      )
-      if (resp === null) break // aborted or paused
-
-      const list = resp.data.session_list ?? []
-      if (list.length === 0) break
-
-      // mirror session metadata for offline conversation search
-      deps.indexSessions(mid, list)
-
-      const deduped = dedupeBoundarySessions(prevEndTs, {
-        sessions: list.map(s => ({ talkerId: s.talker_id, sessionTs: String(s.session_ts) })),
-        hasMore: resp.data.has_more === 1,
-      })
-
-      status = { ...status, totalConversations: status.totalConversations + deduped.length }
-      publish()
-
-      for (const s of deduped) {
+      // paged walk with internal breaks
+      for (;;) {
         if (paused) break
-        status = { ...status, currentTalkerId: s.talkerId }
+
+        const resp = await fetchWithBackoff(() =>
+          deps.fetchSessions({ sessionType: String(sessionType), size: SESSIONS_PAGE_SIZE, endTs })
+        )
+        if (resp === null) break // aborted or paused
+
+        const list = resp.data.session_list ?? []
+        if (list.length === 0) break
+
+        // mirror session metadata for offline conversation search
+        deps.indexSessions(mid, list)
+
+        const deduped = dedupeBoundarySessions(prevEndTs, {
+          sessions: list.map(s => ({ talkerId: s.talker_id, sessionTs: String(s.session_ts) })),
+          hasMore: resp.data.has_more === 1,
+        })
+
+        status = { ...status, totalConversations: status.totalConversations + deduped.length }
         publish()
-        const finished = await backfillConversation(mid, s.talkerId)
-        if (paused) break
-        if (finished) {
-          status = { ...status, processedConversations: status.processedConversations + 1 }
+
+        for (const s of deduped) {
+          if (paused) break
+          status = { ...status, currentTalkerId: s.talkerId }
           publish()
+          const finished = await backfillConversation(mid, s.talkerId)
+          if (paused) break
+          if (finished) {
+            status = { ...status, processedConversations: status.processedConversations + 1 }
+            publish()
+          }
         }
+
+        if (paused) break
+        if (resp.data.has_more !== 1) {
+          // reached the end of the conversation list
+          deps.saveAccountCursor(mid, { sessionEndTs: null, sessionHasMore: false })
+          break
+        }
+
+        // page back via end_ts = session_ts of the last item
+        prevEndTs = String(list[list.length - 1].session_ts)
+        endTs = prevEndTs
+        deps.saveAccountCursor(mid, { sessionEndTs: endTs, sessionHasMore: true })
+        await deps.sleep(deps.jitter(backoff.baseDelayMs))
       }
 
-      if (paused) break
-      if (resp.data.has_more !== 1) {
-        // reached the end of the conversation list
-        deps.saveAccountCursor(mid, { sessionEndTs: null, sessionHasMore: false })
-        break
+      // terminal state resolution
+      if (status.state === 'error') {
+        // keep error
+      } else if (paused) {
+        status = { ...status, state: 'paused' }
+      } else {
+        status = { ...status, state: 'done', currentTalkerId: null }
       }
-
-      // page back via end_ts = session_ts of the last item
-      prevEndTs = String(list[list.length - 1].session_ts)
-      endTs = prevEndTs
-      deps.saveAccountCursor(mid, { sessionEndTs: endTs, sessionHasMore: true })
-      await deps.sleep(deps.jitter(backoff.baseDelayMs))
+      publish(true)
+    } catch (err) {
+      // Any injected dep (fetch / index / cursor persistence) can throw. Never let
+      // that escape as an unhandled rejection: flag the error and publish so the UI
+      // sees it. `finally` always clears `running` so start()/resume() are not wedged.
+      status = { ...status, state: 'error', lastError: String(err) }
+      publish(true)
+    } finally {
+      running = false
     }
-
-    // terminal state resolution
-    if (status.state === 'error') {
-      // keep error
-    } else if (paused) {
-      status = { ...status, state: 'paused' }
-    } else {
-      status = { ...status, state: 'done', currentTalkerId: null }
-    }
-    publish(true)
-    running = false
   }
 
   return {

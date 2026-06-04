@@ -235,4 +235,38 @@ describe('createBackfillCrawler', () => {
     expect(indexed.sort((a, b) => a - b)).toEqual([700, 900])
     expect(crawler.getStatus().state).toBe('done')
   })
+
+  it('fails gracefully when a dep throws and stays restartable (running reset)', async () => {
+    // saveConvCursor throws on its first call, then succeeds. The first run must catch
+    // the throw, end in state 'error' with a lastError, and ALWAYS clear `running` so a
+    // subsequent start() is not wedged by the `if (running) return` guard.
+    let saveCalls = 0
+    const { deps, indexed, convCursors } = makeDeps({
+      fetchSessions: vi.fn(async () => sessionsResp([{ talker_id: 7, session_ts: 1000 }], 0)),
+      // genesis page on every call so a restart can complete cleanly
+      fetchSessionMsgs: vi.fn(async () => msgsResp([{ msg_seqno: 900, msg_key: 'k900' }], 900, 900, 0)),
+      saveConvCursor: vi.fn((_mid: number, key: string, cursor: unknown) => {
+        saveCalls += 1
+        if (saveCalls === 1) throw new Error('boom: db write failed')
+        convCursors.set(key, cursor)
+      }),
+    })
+
+    const crawler = createBackfillCrawler(deps)
+    crawler.start({ sessionType: 1 })
+    await crawler.waitIdle()
+
+    // first run wedged on the throw -> error state, recorded lastError
+    expect(crawler.getStatus().state).toBe('error')
+    expect(crawler.getStatus().lastError).not.toBeNull()
+    expect(crawler.getStatus().lastError).toContain('boom')
+
+    // `running` was reset by the finally block: a fresh start() actually runs again
+    // (it would be a no-op stuck on the old status if running had leaked true).
+    crawler.start({ sessionType: 1 })
+    await crawler.waitIdle()
+
+    expect(crawler.getStatus().state).toBe('done')
+    expect(indexed).toContain(900)
+  })
 })

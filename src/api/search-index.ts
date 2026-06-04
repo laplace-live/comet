@@ -635,63 +635,84 @@ export function configureBackfill(externals: BackfillExternals): void {
   crawler = null
 }
 
+// Cursor persistence is on the crawler's hot path. Like indexMessages/indexSessions,
+// these swallow DB errors (log + degrade) so a transient failure never throws into the
+// crawl loop. A read failure returns undefined (treated as a fresh cursor by the crawler).
 function getConvCursorRow(mid: number, key: string): ConvCursor | undefined {
-  const [talkerId, sessionType] = key.split(':').map(Number)
-  const row = getDb()
-    .prepare(
-      `SELECT oldest_seqno, backfill_done, newest_seqno, newest_msg_key
-       FROM conv_cursors
-       WHERE account_mid = ? AND talker_id = ? AND session_type = ?`
-    )
-    .get(mid, talkerId, sessionType) as
-    | { oldest_seqno: string | null; backfill_done: number; newest_seqno: string | null; newest_msg_key: string | null }
-    | undefined
-  if (!row) return undefined
-  return {
-    oldestSeqno: row.oldest_seqno,
-    backfillDone: row.backfill_done === 1,
-    newestSeqno: row.newest_seqno,
-    newestMsgKey: row.newest_msg_key,
+  try {
+    const [talkerId, sessionType] = key.split(':').map(Number)
+    const row = getDb()
+      .prepare(
+        `SELECT oldest_seqno, backfill_done, newest_seqno, newest_msg_key
+         FROM conv_cursors
+         WHERE account_mid = ? AND talker_id = ? AND session_type = ?`
+      )
+      .get(mid, talkerId, sessionType) as
+      | {
+          oldest_seqno: string | null
+          backfill_done: number
+          newest_seqno: string | null
+          newest_msg_key: string | null
+        }
+      | undefined
+    if (!row) return undefined
+    return {
+      oldestSeqno: row.oldest_seqno,
+      backfillDone: row.backfill_done === 1,
+      newestSeqno: row.newest_seqno,
+      newestMsgKey: row.newest_msg_key,
+    }
+  } catch (err) {
+    console.error('search-index: getConvCursor failed', err)
+    return undefined
   }
 }
 
 function saveConvCursorRow(mid: number, key: string, cursor: ConvCursor): void {
-  const [talkerId, sessionType] = key.split(':').map(Number)
-  getDb()
-    .prepare(
-      `INSERT INTO conv_cursors
-         (account_mid, talker_id, session_type, oldest_seqno, backfill_done, newest_seqno, newest_msg_key, last_indexed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(account_mid, talker_id, session_type) DO UPDATE SET
-         oldest_seqno = excluded.oldest_seqno,
-         backfill_done = excluded.backfill_done,
-         newest_seqno = COALESCE(excluded.newest_seqno, conv_cursors.newest_seqno),
-         newest_msg_key = COALESCE(excluded.newest_msg_key, conv_cursors.newest_msg_key),
-         last_indexed_at = excluded.last_indexed_at`
-    )
-    .run(
-      mid,
-      talkerId,
-      sessionType,
-      cursor.oldestSeqno,
-      cursor.backfillDone ? 1 : 0,
-      cursor.newestSeqno,
-      cursor.newestMsgKey,
-      Date.now()
-    )
+  try {
+    const [talkerId, sessionType] = key.split(':').map(Number)
+    getDb()
+      .prepare(
+        `INSERT INTO conv_cursors
+           (account_mid, talker_id, session_type, oldest_seqno, backfill_done, newest_seqno, newest_msg_key, last_indexed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(account_mid, talker_id, session_type) DO UPDATE SET
+           oldest_seqno = excluded.oldest_seqno,
+           backfill_done = excluded.backfill_done,
+           newest_seqno = COALESCE(excluded.newest_seqno, conv_cursors.newest_seqno),
+           newest_msg_key = COALESCE(excluded.newest_msg_key, conv_cursors.newest_msg_key),
+           last_indexed_at = excluded.last_indexed_at`
+      )
+      .run(
+        mid,
+        talkerId,
+        sessionType,
+        cursor.oldestSeqno,
+        cursor.backfillDone ? 1 : 0,
+        cursor.newestSeqno,
+        cursor.newestMsgKey,
+        Date.now()
+      )
+  } catch (err) {
+    console.error('search-index: saveConvCursor failed', err)
+  }
 }
 
 function saveAccountCursorRow(mid: number, cursor: { sessionEndTs: string | null; sessionHasMore: boolean }): void {
-  getDb()
-    .prepare(
-      `INSERT INTO account_cursors (account_mid, session_end_ts, session_has_more, last_full_sweep_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(account_mid) DO UPDATE SET
-         session_end_ts = excluded.session_end_ts,
-         session_has_more = excluded.session_has_more,
-         last_full_sweep_at = excluded.last_full_sweep_at`
-    )
-    .run(mid, cursor.sessionEndTs, cursor.sessionHasMore ? 1 : 0, Date.now())
+  try {
+    getDb()
+      .prepare(
+        `INSERT INTO account_cursors (account_mid, session_end_ts, session_has_more, last_full_sweep_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(account_mid) DO UPDATE SET
+           session_end_ts = excluded.session_end_ts,
+           session_has_more = excluded.session_has_more,
+           last_full_sweep_at = excluded.last_full_sweep_at`
+      )
+      .run(mid, cursor.sessionEndTs, cursor.sessionHasMore ? 1 : 0, Date.now())
+  } catch (err) {
+    console.error('search-index: saveAccountCursor failed', err)
+  }
 }
 
 function jitteredDelay(baseMs: number): number {
