@@ -4,7 +4,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { IndexedMessageInput } from '@/api/search-index'
 import type { BilibiliSession } from '@/types/bilibili'
 
-import { closeSearchIndex, indexMessages, indexSessions, initSearchIndex, querySearch } from '@/api/search-index'
+import {
+  closeSearchIndex,
+  getIndexStats,
+  indexMessages,
+  indexSessions,
+  initSearchIndex,
+  querySearch,
+} from '@/api/search-index'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3-multiple-ciphers')
@@ -662,5 +669,73 @@ describe('querySearch short-query fallback (<3 chars)', () => {
     // The only match is older than the 500 most-recent rows, so the bounded
     // fallback window must not return it.
     expect(res.messageHits.length).toBe(0)
+  })
+})
+
+describe('getIndexStats', () => {
+  beforeEach(async () => {
+    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+  })
+
+  afterEach(() => {
+    closeSearchIndex()
+  })
+
+  it('reports per-account message and conversation counts, size, and last update', () => {
+    indexMessages(MID, [
+      msg({
+        talkerId: 200,
+        msgSeqno: '10',
+        msgKey: 's10',
+        timestamp: 100,
+        content: JSON.stringify({ content: '消息一' }),
+      }),
+      msg({
+        talkerId: 200,
+        msgSeqno: '11',
+        msgKey: 's11',
+        timestamp: 200,
+        content: JSON.stringify({ content: '消息二' }),
+      }),
+      msg({
+        talkerId: 201,
+        msgSeqno: '12',
+        msgKey: 's12',
+        timestamp: 300,
+        content: JSON.stringify({ content: '消息三' }),
+      }),
+    ])
+    indexSessions(MID, [
+      session({ talker_id: 200, session_type: 1, group_name: '会话甲' }),
+      session({ talker_id: 201, session_type: 1, group_name: '会话乙' }),
+    ])
+
+    // A second account must not inflate MID's counts.
+    indexMessages(9999, [
+      msg({
+        talkerId: 200,
+        msgSeqno: '99',
+        msgKey: 'other',
+        timestamp: 999,
+        content: JSON.stringify({ content: '别的账号' }),
+      }),
+    ])
+
+    const stats = getIndexStats(MID)
+
+    expect(stats.messageCount).toBe(3)
+    expect(stats.conversationCount).toBe(2)
+    expect(stats.sizeBytes).toBeGreaterThan(0)
+    expect(stats.lastUpdatedAt).not.toBeNull()
+    expect(typeof stats.lastUpdatedAt).toBe('number')
+  })
+
+  it('returns zero counts for an account with no data', () => {
+    const stats = getIndexStats(424242)
+    expect(stats.messageCount).toBe(0)
+    expect(stats.conversationCount).toBe(0)
+    // sizeBytes is whole-DB page size; still > 0 because the DB has schema pages.
+    expect(stats.sizeBytes).toBeGreaterThan(0)
+    expect(stats.lastUpdatedAt).toBeNull()
   })
 })

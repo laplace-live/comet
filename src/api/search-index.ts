@@ -247,7 +247,16 @@ export function indexMessages(mid: number, messages: IndexedMessageInput[]): voi
         raw_json        = excluded.raw_json
     `)
     const stmt = upsertMsgStmt
+    // Cursor upsert: record last_indexed_at per conversation so getIndexStats can
+    // report lastUpdatedAt. Prepared on the live handle (not cached across re-init).
+    const cursorStmt = db.prepare(`
+      INSERT INTO conv_cursors (account_mid, talker_id, session_type, last_indexed_at)
+      VALUES (@account_mid, @talker_id, @session_type, @last_indexed_at)
+      ON CONFLICT (account_mid, talker_id, session_type) DO UPDATE SET
+        last_indexed_at = excluded.last_indexed_at
+    `)
     const runAll = db.transaction((rows: IndexedMessageInput[]) => {
+      const touched = new Map<string, { talkerId: number; sessionType: number }>()
       for (const m of rows) {
         let extracted: { text: string; typeLabel: string | null }
         try {
@@ -270,6 +279,16 @@ export function indexMessages(mid: number, messages: IndexedMessageInput[]): voi
           searchable_text: extracted.text || null,
           type_label: extracted.typeLabel,
           raw_json: m.content ?? null,
+        })
+        touched.set(`${m.talkerId}:${m.sessionType}`, { talkerId: m.talkerId, sessionType: m.sessionType })
+      }
+      const now = Date.now()
+      for (const { talkerId, sessionType } of touched.values()) {
+        cursorStmt.run({
+          account_mid: mid,
+          talker_id: talkerId,
+          session_type: sessionType,
+          last_indexed_at: now,
         })
       }
     })
@@ -596,6 +615,29 @@ export function getBackfillStatus(): BackfillStatus {
     lastError: null,
   }
 }
-export function getIndexStats(_mid: number): IndexStats {
-  return { messageCount: 0, conversationCount: 0, sizeBytes: 0, lastUpdatedAt: null }
+export function getIndexStats(mid: number): IndexStats {
+  if (!db) {
+    return { messageCount: 0, conversationCount: 0, sizeBytes: 0, lastUpdatedAt: null }
+  }
+
+  const msgRow = db.prepare('SELECT COUNT(*) AS n FROM messages WHERE account_mid = ?').get(mid) as
+    | { n: number }
+    | undefined
+  const convRow = db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE account_mid = ?').get(mid) as
+    | { n: number }
+    | undefined
+
+  const pageCount = (db.prepare('PRAGMA page_count').get() as { page_count: number } | undefined)?.page_count ?? 0
+  const pageSize = (db.prepare('PRAGMA page_size').get() as { page_size: number } | undefined)?.page_size ?? 0
+
+  const lastRow = db.prepare('SELECT MAX(last_indexed_at) AS ts FROM conv_cursors WHERE account_mid = ?').get(mid) as
+    | { ts: number | null }
+    | undefined
+
+  return {
+    messageCount: msgRow?.n ?? 0,
+    conversationCount: convRow?.n ?? 0,
+    sizeBytes: pageCount * pageSize,
+    lastUpdatedAt: lastRow?.ts ?? null,
+  }
 }
