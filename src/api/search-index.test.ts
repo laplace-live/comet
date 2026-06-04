@@ -149,9 +149,9 @@ describe('indexMessages', () => {
     ])
 
     const h = await db()
-    const row = h.prepare('SELECT searchable_text, type_label, raw_json FROM messages WHERE msg_key = ?').get(
-      '7400000000000000099'
-    ) as { searchable_text: string | null; type_label: string | null; raw_json: string }
+    const row = h
+      .prepare('SELECT searchable_text, type_label, raw_json FROM messages WHERE msg_key = ?')
+      .get('7400000000000000099') as { searchable_text: string | null; type_label: string | null; raw_json: string }
     expect(row.type_label).toBe('[已撤回的消息]')
     expect(row.raw_json).toContain('机密内容') // raw kept for re-render
     const ftsHit = (
@@ -171,9 +171,9 @@ describe('indexMessages', () => {
       }),
     ])
     const h = await db()
-    const row = h.prepare('SELECT searchable_text, type_label FROM messages WHERE msg_key = ?').get(
-      '7400000000000000002'
-    ) as {
+    const row = h
+      .prepare('SELECT searchable_text, type_label FROM messages WHERE msg_key = ?')
+      .get('7400000000000000002') as {
       searchable_text: string | null
       type_label: string | null
     }
@@ -185,5 +185,130 @@ describe('indexMessages', () => {
     await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
     // missing required fields / bad content must be swallowed internally
     expect(() => indexMessages(42, [{ ...textMsg({}), content: undefined as unknown as string }])).not.toThrow()
+  })
+})
+
+describe('indexSessions', () => {
+  async function db() {
+    const mod = await import('@/api/search-index')
+    return (
+      mod as unknown as {
+        __getDbForTest(): { prepare(sql: string): { get(...a: unknown[]): unknown; all(...a: unknown[]): unknown[] } }
+      }
+    ).__getDbForTest()
+  }
+
+  function session(over: Record<string, unknown>) {
+    return {
+      talker_id: 2002,
+      session_type: 1,
+      group_name: '',
+      group_cover: '',
+      session_ts: '1700000000000000',
+      unread_count: 3,
+      last_msg: {
+        sender_uid: 2002,
+        receiver_type: 1,
+        receiver_id: 42,
+        msg_type: 1,
+        content: JSON.stringify({ content: '最后一条会话预览消息' }),
+        msg_seqno: 1,
+        timestamp: 1700000000,
+        at_uids: null,
+        msg_key: '7400000000000000500',
+        msg_status: 0,
+        notify_code: '',
+        msg_source: 0,
+      },
+      ...over,
+    } as unknown as import('@/types/bilibili').BilibiliSession
+  }
+
+  it('upserts a session row with TEXT session_ts and extracted last_msg_text', async () => {
+    const { initSearchIndex, indexSessions } = await import('@/api/search-index')
+    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    indexSessions(42, [session({})])
+
+    const h = await db()
+    const row = h.prepare('SELECT * FROM sessions WHERE account_mid = ? AND talker_id = ?').get(42, 2002) as Record<
+      string,
+      unknown
+    >
+    expect(row.session_ts).toBe('1700000000000000') // TEXT, full precision
+    expect(row.unread_count).toBe(3)
+    expect(String(row.last_msg_text)).toContain('会话预览')
+  })
+
+  it('is idempotent on (account_mid, talker_id, session_type)', async () => {
+    const { initSearchIndex, indexSessions } = await import('@/api/search-index')
+    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    indexSessions(42, [session({ unread_count: 1 })])
+    indexSessions(42, [session({ unread_count: 9 })])
+    const h = await db()
+    const count = (h.prepare('SELECT count(*) c FROM sessions WHERE account_mid = ?').get(42) as { c: number }).c
+    expect(count).toBe(1)
+    const row = h.prepare('SELECT unread_count u FROM sessions WHERE account_mid = ?').get(42) as { u: number }
+    expect(row.u).toBe(9) // updated in place
+  })
+})
+
+describe('clearAccountIndex', () => {
+  async function db() {
+    const mod = await import('@/api/search-index')
+    return (
+      mod as unknown as {
+        __getDbForTest(): { prepare(sql: string): { get(...a: unknown[]): unknown; all(...a: unknown[]): unknown[] } }
+      }
+    ).__getDbForTest()
+  }
+
+  it('purges only the target account from messages, fts, and sessions', async () => {
+    const { initSearchIndex, indexMessages, clearAccountIndex } = await import('@/api/search-index')
+    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    indexMessages(42, [
+      {
+        talkerId: 1,
+        sessionType: 1,
+        msgSeqno: '1',
+        msgKey: '7400000000000001000',
+        senderUid: 1,
+        msgType: 1,
+        msgSource: 0,
+        timestamp: 1,
+        msgStatus: 0,
+        content: JSON.stringify({ content: '账号四十二的消息' }),
+      },
+    ])
+    indexMessages(99, [
+      {
+        talkerId: 1,
+        sessionType: 1,
+        msgSeqno: '1',
+        msgKey: '7400000000000002000',
+        senderUid: 1,
+        msgType: 1,
+        msgSource: 0,
+        timestamp: 1,
+        msgStatus: 0,
+        content: JSON.stringify({ content: '账号九十九的消息' }),
+      },
+    ])
+
+    const { clearAccountIndex: clear } = await import('@/api/search-index')
+    clear(42)
+
+    const h = await db()
+    const left42 = (h.prepare('SELECT count(*) c FROM messages WHERE account_mid = ?').get(42) as { c: number }).c
+    const left99 = (h.prepare('SELECT count(*) c FROM messages WHERE account_mid = ?').get(99) as { c: number }).c
+    expect(left42).toBe(0)
+    expect(left99).toBe(1)
+    // FTS for account 99 still matches; account 42's content is gone.
+    expect(
+      (h.prepare('SELECT count(*) c FROM messages_fts WHERE messages_fts MATCH ?').get('四十二') as { c: number }).c
+    ).toBe(0)
+    expect(
+      (h.prepare('SELECT count(*) c FROM messages_fts WHERE messages_fts MATCH ?').get('九十九') as { c: number }).c
+    ).toBe(1)
+    void clearAccountIndex // keep both import forms referenced
   })
 })

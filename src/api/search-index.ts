@@ -1,12 +1,12 @@
 import { createRequire } from 'node:module'
-
 import { app, safeStorage } from 'electron'
 
 import type { BilibiliSession } from '@/types/bilibili'
 
+import { extractSearchableText } from '@/lib/search-text'
+
 import { resolveKeyHex } from '@/api/search-index-key'
 import { SCHEMA_SQL, SCHEMA_VERSION } from '@/api/search-index-schema'
-import { extractSearchableText } from '@/lib/search-text'
 
 // ---------------------------------------------------------------------------
 // Native driver (loaded outside Vite's bundle via createRequire — see spec 6.2)
@@ -252,8 +252,73 @@ export function indexMessages(mid: number, messages: IndexedMessageInput[]): voi
     console.error('search-index: indexMessages failed', err)
   }
 }
-export function indexSessions(_mid: number, _sessions: BilibiliSession[]): void {}
-export function clearAccountIndex(_mid: number): void {}
+// Upsert session metadata for offline conversation search. Idempotent on
+// (account_mid, talker_id, session_type). Fire-and-forget: never throws.
+export function indexSessions(mid: number, sessions: BilibiliSession[]): void {
+  try {
+    if (!db || sessions.length === 0) return
+    const stmt = db.prepare(`
+      INSERT INTO sessions (
+        account_mid, talker_id, session_type, name, group_name,
+        last_msg_text, session_ts, unread_count
+      ) VALUES (
+        @account_mid, @talker_id, @session_type, @name, @group_name,
+        @last_msg_text, @session_ts, @unread_count
+      )
+      ON CONFLICT (account_mid, talker_id, session_type) DO UPDATE SET
+        group_name    = excluded.group_name,
+        last_msg_text = excluded.last_msg_text,
+        session_ts    = excluded.session_ts,
+        unread_count  = excluded.unread_count
+    `)
+    const runAll = db.transaction((rows: BilibiliSession[]) => {
+      for (const s of rows) {
+        let lastMsgText: string | null = null
+        if (s.last_msg) {
+          try {
+            const e = extractSearchableText(
+              s.last_msg.content ?? '',
+              s.last_msg.msg_type ?? 0,
+              s.last_msg.msg_status ?? 0
+            )
+            lastMsgText = e.text || e.typeLabel || null
+          } catch {
+            lastMsgText = null
+          }
+        }
+        stmt.run({
+          account_mid: mid,
+          talker_id: s.talker_id,
+          session_type: s.session_type,
+          name: null,
+          group_name: s.group_name || null,
+          last_msg_text: lastMsgText,
+          session_ts: s.session_ts != null ? String(s.session_ts) : null,
+          unread_count: s.unread_count ?? null,
+        })
+      }
+    })
+    runAll(sessions)
+  } catch (err) {
+    console.error('search-index: indexSessions failed', err)
+  }
+}
+
+// Remove all rows for one account (account removal, or rebuild). Deleting from
+// messages fires the AFTER DELETE trigger that keeps messages_fts in sync.
+export function clearAccountIndex(mid: number): void {
+  try {
+    if (!db) return
+    const purge = db.transaction((accountMid: number) => {
+      for (const table of ['messages', 'sessions', 'users', 'account_cursors', 'conv_cursors']) {
+        getDb().prepare(`DELETE FROM ${table} WHERE account_mid = ?`).run(accountMid)
+      }
+    })
+    purge(mid)
+  } catch (err) {
+    console.error('search-index: clearAccountIndex failed', err)
+  }
+}
 export function querySearch(_mid: number, _params: SearchQueryParams): SearchQueryResult {
   return { conversationHits: [], messageHits: [], total: 0 }
 }
