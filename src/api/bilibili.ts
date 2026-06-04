@@ -437,6 +437,117 @@ export function cookieStringFromCredentials(credentials: BilibiliCredentials): s
     .join('; ')
 }
 
+/**
+ * In-process raw fetch of the conversation list (same logic as the
+ * BILIBILI_FETCH_SESSIONS IPC handler), callable by the backfill crawler.
+ * Returns the parsed response (large integers preserved as strings) or an
+ * ErrorResponse-shaped object on auth/network failure.
+ */
+export async function fetchSessionsRaw(params: {
+  sessionType?: string
+  size?: string
+  endTs?: string
+}): Promise<BilibiliSessionsResponse | { error: string; code: number }> {
+  const { sessionType = '1', size = '100', endTs } = params
+  const credentials = getCredentials()
+  if (!credentials) {
+    return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
+  }
+
+  try {
+    const cookieHeader = cookieStringFromCredentials(credentials)
+    const url = new URL(BILIBILI_ENDPOINTS.GET_SESSIONS)
+    url.searchParams.set('session_type', sessionType)
+    url.searchParams.set('group_fold', '0')
+    url.searchParams.set('unfollow_fold', '0')
+    url.searchParams.set('sort_rule', '2')
+    url.searchParams.set('size', size)
+    url.searchParams.set('build', '0')
+    url.searchParams.set('mobi_app', 'web')
+    if (endTs) {
+      url.searchParams.set('end_ts', endTs)
+    }
+
+    const resp = await fetch(url.toString(), {
+      headers: {
+        Cookie: cookieHeader,
+        ...COMMON_HEADERS,
+        Referer: BILIBILI_HEADERS.REFERER,
+        Origin: BILIBILI_HEADERS.ORIGIN,
+      },
+    })
+
+    const responseText = await resp.text()
+    // A -412 block page is HTML, not JSON: surface it as code -412 so the crawler
+    // can classify it as `blocked` rather than crashing on JSON.parse.
+    try {
+      return JSON.parse(preserveLargeIntegers(responseText)) as BilibiliSessionsResponse
+    } catch {
+      return { error: 'blocked', code: -412 }
+    }
+  } catch (error) {
+    console.error('Failed to fetch sessions (raw):', error)
+    return { error: 'Failed to fetch sessions from Bilibili', code: 500 }
+  }
+}
+
+/**
+ * In-process raw fetch of a conversation's message page (same logic as the
+ * BILIBILI_FETCH_MESSAGES IPC handler), callable by the backfill crawler.
+ */
+export async function fetchSessionMsgsRaw(params: {
+  talkerId: string
+  sessionType?: string
+  size?: string
+  beginSeqno?: string
+  endSeqno?: string
+}): Promise<BilibiliMessagesResponse | { error: string; code: number }> {
+  const { talkerId, sessionType = '1', size = '200', beginSeqno, endSeqno } = params
+  const credentials = getCredentials()
+  if (!credentials) {
+    return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
+  }
+  if (!talkerId) {
+    return { error: 'Missing talker_id parameter', code: 400 }
+  }
+
+  try {
+    const cookieHeader = cookieStringFromCredentials(credentials)
+    const url = new URL(BILIBILI_ENDPOINTS.FETCH_MESSAGES)
+    url.searchParams.set('talker_id', talkerId)
+    url.searchParams.set('session_type', sessionType)
+    url.searchParams.set('size', size)
+    url.searchParams.set('sender_device_id', '1')
+    url.searchParams.set('build', '0')
+    url.searchParams.set('mobi_app', 'web')
+    if (beginSeqno) {
+      url.searchParams.set('begin_seqno', beginSeqno)
+    }
+    if (endSeqno) {
+      url.searchParams.set('end_seqno', endSeqno)
+    }
+
+    const resp = await fetch(url.toString(), {
+      headers: {
+        Cookie: cookieHeader,
+        ...COMMON_HEADERS,
+        Referer: BILIBILI_HEADERS.REFERER,
+        Origin: BILIBILI_HEADERS.ORIGIN,
+      },
+    })
+
+    const responseText = await resp.text()
+    try {
+      return JSON.parse(preserveLargeIntegers(responseText)) as BilibiliMessagesResponse
+    } catch {
+      return { error: 'blocked', code: -412 }
+    }
+  } catch (error) {
+    console.error('Failed to fetch messages (raw):', error)
+    return { error: 'Failed to fetch messages from Bilibili', code: 500 }
+  }
+}
+
 // Snake_case message shape shared by BilibiliMessage, BilibiliLastMessage, and the
 // synthetic object the send-hook builds. Only the fields toIndexedMessage reads.
 type SnakeCaseMessage = {
