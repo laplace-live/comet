@@ -948,6 +948,33 @@ export function registerBilibiliIpcHandlers() {
           return { error: data.message || 'Failed to fetch messages', code: data.code }
         }
 
+        // Fire-and-forget: index the fetched message page. fetchMessages auto-loads a
+        // conversation's entire history, so this fully indexes any chat the user opens.
+        // Scoped via getActiveAccountMid(); never let indexing break message delivery.
+        try {
+          const mid = getActiveAccountMid()
+          const messages = data.data?.messages
+          if (mid && messages && messages.length > 0) {
+            const talkerIdNum = Number(talkerId)
+            const sessionTypeNum = Number(sessionType)
+            const mapped: IndexedMessageInput[] = messages.map(m => ({
+              talkerId: talkerIdNum,
+              sessionType: sessionTypeNum,
+              msgSeqno: String(m.msg_seqno),
+              msgKey: String(m.msg_key),
+              senderUid: m.sender_uid ?? null,
+              msgType: m.msg_type ?? null,
+              msgSource: m.msg_source ?? null,
+              timestamp: m.timestamp ?? null,
+              msgStatus: m.msg_status ?? null,
+              content: m.content ?? '',
+            }))
+            indexMessages(mid, mapped)
+          }
+        } catch (indexError) {
+          console.error('[SearchIndex] Failed to index messages:', indexError)
+        }
+
         return data
       } catch (error) {
         console.error('Failed to fetch messages:', error)
