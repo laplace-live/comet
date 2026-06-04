@@ -94,6 +94,13 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
       return { text: joinParts([title, text, ...moduleParts]), typeLabel: null }
     }
 
+    case MSG_TYPE.VIDEO_PUSH: {
+      const title = extractTextContent(obj.title)
+      const desc = extractTextContent(obj.desc)
+      const attachMsg = extractTextContent(obj.attach_msg)
+      return { text: joinParts([title, desc, attachMsg]), typeLabel: null }
+    }
+
     case MSG_TYPE.REVOKE:
       return { text: '', typeLabel: null }
 

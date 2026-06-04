@@ -111,3 +111,25 @@ describe('extractSearchableText — NOTIFICATION', () => {
     expect(result.text).toContain('仅正文')
   })
 })
+
+describe('extractSearchableText — VIDEO_PUSH', () => {
+  it('joins title, desc, and attach_msg', () => {
+    const content = JSON.stringify({
+      title: '视频标题',
+      desc: '视频简介',
+      attach_msg: 'UP主赠言内容',
+      bvid: 'BV1xx411',
+    })
+    const result = extractSearchableText(content, MSG_TYPE.VIDEO_PUSH)
+    expect(result.typeLabel).toBeNull()
+    expect(result.text).toContain('视频标题')
+    expect(result.text).toContain('视频简介')
+    expect(result.text).toContain('UP主赠言内容')
+  })
+
+  it('handles null attach_msg', () => {
+    const content = JSON.stringify({ title: '只有标题', desc: '', attach_msg: null })
+    const result = extractSearchableText(content, MSG_TYPE.VIDEO_PUSH)
+    expect(result.text).toContain('只有标题')
+  })
+})
