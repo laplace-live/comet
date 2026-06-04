@@ -6,6 +6,7 @@ import type { BilibiliSession } from '@/types/bilibili'
 
 import { resolveKeyHex } from '@/api/search-index-key'
 import { SCHEMA_SQL, SCHEMA_VERSION } from '@/api/search-index-schema'
+import { extractSearchableText } from '@/lib/search-text'
 
 // ---------------------------------------------------------------------------
 // Native driver (loaded outside Vite's bundle via createRequire — see spec 6.2)
@@ -193,7 +194,64 @@ function writeKeyBlob(value: string): void {
 // Stubs for sibling tasks (upsert/clear filled in by db-core's next tasks;
 // query + backfill by other owners). Present so the module type-checks now.
 // ---------------------------------------------------------------------------
-export function indexMessages(_mid: number, _messages: IndexedMessageInput[]): void {}
+// Upsert messages for the given account. Idempotent on (account_mid, talker_id,
+// session_type, msg_key). Recalled (msg_status===1) content is excluded from FTS;
+// only its [已撤回的消息] label is stored. Fire-and-forget: never throws to caller.
+export function indexMessages(mid: number, messages: IndexedMessageInput[]): void {
+  try {
+    if (!db || messages.length === 0) return
+    const stmt = db.prepare(`
+      INSERT INTO messages (
+        account_mid, talker_id, session_type, msg_seqno, msg_key,
+        sender_uid, msg_type, msg_source, timestamp, msg_status,
+        searchable_text, type_label, raw_json
+      ) VALUES (
+        @account_mid, @talker_id, @session_type, @msg_seqno, @msg_key,
+        @sender_uid, @msg_type, @msg_source, @timestamp, @msg_status,
+        @searchable_text, @type_label, @raw_json
+      )
+      ON CONFLICT (account_mid, talker_id, session_type, msg_key) DO UPDATE SET
+        msg_seqno       = excluded.msg_seqno,
+        sender_uid      = excluded.sender_uid,
+        msg_type        = excluded.msg_type,
+        msg_source      = excluded.msg_source,
+        timestamp       = excluded.timestamp,
+        msg_status      = excluded.msg_status,
+        searchable_text = excluded.searchable_text,
+        type_label      = excluded.type_label,
+        raw_json        = excluded.raw_json
+    `)
+    const runAll = db.transaction((rows: IndexedMessageInput[]) => {
+      for (const m of rows) {
+        let extracted: { text: string; typeLabel: string | null }
+        try {
+          extracted = extractSearchableText(m.content ?? '', m.msgType ?? 0, m.msgStatus ?? 0)
+        } catch {
+          extracted = { text: '', typeLabel: null }
+        }
+        stmt.run({
+          account_mid: mid,
+          talker_id: m.talkerId,
+          session_type: m.sessionType,
+          msg_seqno: String(m.msgSeqno),
+          msg_key: String(m.msgKey),
+          sender_uid: m.senderUid ?? null,
+          msg_type: m.msgType ?? null,
+          msg_source: m.msgSource ?? null,
+          timestamp: m.timestamp ?? null,
+          msg_status: m.msgStatus ?? null,
+          // extractSearchableText already excludes recalled text (returns '' + the recall label).
+          searchable_text: extracted.text || null,
+          type_label: extracted.typeLabel,
+          raw_json: m.content ?? null,
+        })
+      }
+    })
+    runAll(messages)
+  } catch (err) {
+    console.error('search-index: indexMessages failed', err)
+  }
+}
 export function indexSessions(_mid: number, _sessions: BilibiliSession[]): void {}
 export function clearAccountIndex(_mid: number): void {}
 export function querySearch(_mid: number, _params: SearchQueryParams): SearchQueryResult {
