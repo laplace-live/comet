@@ -26,6 +26,11 @@ function extractTextContent(value: unknown): string {
   return ''
 }
 
+// Join non-empty parts with spaces into a single indexable string.
+function joinParts(parts: Array<string | undefined>): string {
+  return parts.filter((p): p is string => typeof p === 'string' && p.length > 0).join(' ')
+}
+
 /**
  * Extract indexable plain text and a synthetic type label from a raw message content blob.
  *
@@ -62,6 +67,14 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
 
     case MSG_TYPE.CUSTOM_EMOJI:
       return { text: '', typeLabel: '[表情]' }
+
+    case MSG_TYPE.SHARE: {
+      const sketch = (obj.sketch && typeof obj.sketch === 'object' ? obj.sketch : {}) as Record<string, unknown>
+      const title = extractTextContent(sketch.title) || extractTextContent(obj.title)
+      const desc = extractTextContent(sketch.desc_text) || extractTextContent(obj.desc)
+      const source = extractTextContent(obj.source)
+      return { text: joinParts([title, desc, source]), typeLabel: null }
+    }
 
     case MSG_TYPE.REVOKE:
       return { text: '', typeLabel: null }

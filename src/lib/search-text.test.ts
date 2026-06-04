@@ -58,3 +58,28 @@ describe('extractSearchableText — recall & revoke', () => {
     expect(result).toEqual({ text: '正常消息', typeLabel: null })
   })
 })
+
+describe('extractSearchableText — SHARE', () => {
+  it('prefers sketch.title and sketch.desc_text, includes source', () => {
+    const content = JSON.stringify({
+      title: 'outer title',
+      desc: 'outer desc',
+      source: '来自哔哩哔哩',
+      sketch: { title: '分享标题', desc_text: '分享描述', target_url: 'https://b23.tv/x' },
+    })
+    const result = extractSearchableText(content, MSG_TYPE.SHARE)
+    expect(result.typeLabel).toBeNull()
+    expect(result.text).toContain('分享标题')
+    expect(result.text).toContain('分享描述')
+    expect(result.text).toContain('来自哔哩哔哩')
+    expect(result.text).not.toContain('outer title')
+  })
+
+  it('falls back to top-level title/desc when sketch is absent', () => {
+    const content = JSON.stringify({ title: '顶层标题', desc: '顶层描述', source: '来源' })
+    const result = extractSearchableText(content, MSG_TYPE.SHARE)
+    expect(result.text).toContain('顶层标题')
+    expect(result.text).toContain('顶层描述')
+    expect(result.text).toContain('来源')
+  })
+})
