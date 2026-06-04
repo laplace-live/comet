@@ -76,6 +76,24 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
       return { text: joinParts([title, desc, source]), typeLabel: null }
     }
 
+    case MSG_TYPE.NOTIFICATION: {
+      const title = extractTextContent(obj.title)
+      const text = extractTextContent(obj.text)
+      const moduleParts: string[] = []
+      if (Array.isArray(obj.modules)) {
+        for (const mod of obj.modules) {
+          if (mod && typeof mod === 'object') {
+            const m = mod as Record<string, unknown>
+            const mTitle = extractTextContent(m.title)
+            const mDetail = extractTextContent(m.detail)
+            if (mTitle) moduleParts.push(mTitle)
+            if (mDetail) moduleParts.push(mDetail)
+          }
+        }
+      }
+      return { text: joinParts([title, text, ...moduleParts]), typeLabel: null }
+    }
+
     case MSG_TYPE.REVOKE:
       return { text: '', typeLabel: null }
 

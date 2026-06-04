@@ -83,3 +83,31 @@ describe('extractSearchableText — SHARE', () => {
     expect(result.text).toContain('来源')
   })
 })
+
+describe('extractSearchableText — NOTIFICATION', () => {
+  it('joins title, text, and each module title/detail', () => {
+    const content = JSON.stringify({
+      title: '系统通知标题',
+      text: '通知正文内容',
+      modules: [
+        { title: '字段一', detail: '详情一' },
+        { title: '字段二', detail: '详情二' },
+      ],
+    })
+    const result = extractSearchableText(content, MSG_TYPE.NOTIFICATION)
+    expect(result.typeLabel).toBeNull()
+    expect(result.text).toContain('系统通知标题')
+    expect(result.text).toContain('通知正文内容')
+    expect(result.text).toContain('字段一')
+    expect(result.text).toContain('详情一')
+    expect(result.text).toContain('字段二')
+    expect(result.text).toContain('详情二')
+  })
+
+  it('handles missing modules gracefully', () => {
+    const content = JSON.stringify({ title: '仅标题', text: '仅正文' })
+    const result = extractSearchableText(content, MSG_TYPE.NOTIFICATION)
+    expect(result.text).toContain('仅标题')
+    expect(result.text).toContain('仅正文')
+  })
+})
