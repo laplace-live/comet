@@ -8,6 +8,7 @@ import type { ShowNotificationParams, UpdateStatusInfo } from './types/electron'
 
 import { registerBilibiliIpcHandlers } from './api/bilibili'
 import { cleanupBroadcastWebSocket, initBroadcastWebSocket } from './api/broadcast-websocket'
+import { closeSearchIndex, initSearchIndex } from './api/search-index'
 import { UPDATE_BASE_URL } from './lib/const'
 import { IpcChannel, IpcEvent } from './lib/ipc'
 
@@ -515,14 +516,28 @@ app.on('web-contents-created', (_event, contents) => {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.on('ready', () => {
+app.on('ready', async () => {
   createApplicationMenu()
   createWindow()
+
+  // Initialize the encrypted full-text search index. initSearchIndex() resolves the
+  // DB path from userData and the encryption key from safeStorage internally. A failure
+  // here must never block the app — the index degrades to "unavailable", not a crash.
+  try {
+    await initSearchIndex()
+  } catch (error) {
+    console.error('[SearchIndex] Failed to initialize search index:', error)
+  }
 })
 
-// Cleanup WebSocket on quit
+// Cleanup WebSocket and search index on quit
 app.on('before-quit', () => {
   cleanupBroadcastWebSocket()
+  try {
+    closeSearchIndex()
+  } catch (error) {
+    console.error('[SearchIndex] Failed to close search index:', error)
+  }
 })
 
 // Quit when all windows are closed, except on macOS. There, it's common
