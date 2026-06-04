@@ -7,6 +7,7 @@ import { BrowserWindow, ipcMain } from 'electron'
 import type protobuf from 'protobufjs'
 import { WebSocket } from 'ws'
 
+import type { IndexedMessageInput } from '@/api/search-index'
 import type { NewMessageNotification, SessionUpdateNotification } from '@/types/electron'
 
 import { IGNORED_WS_MSG_TYPES } from '@/types/bilibili'
@@ -14,7 +15,8 @@ import { IGNORED_WS_MSG_TYPES } from '@/types/bilibili'
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, USER_AGENT, WEBSOCKET_CONFIG } from '@/lib/const'
 import { IpcChannel, IpcEvent } from '@/lib/ipc'
 
-import { cookieStringFromCredentials, getCredentials } from '@/api/bilibili'
+import { cookieStringFromCredentials, getActiveAccountMid, getCredentials } from '@/api/bilibili'
+import { indexMessages } from '@/api/search-index'
 import { getMessageType, MessageTypes, TargetPaths } from '@/proto/broadcast'
 
 // Generate UUID v1-like identifier
@@ -545,6 +547,33 @@ export function initBroadcastWebSocket(): void {
           const windows = BrowserWindow.getAllWindows()
           for (const win of windows) {
             win.webContents.send(IpcEvent.BILIBILI_NEW_MESSAGE, notification)
+          }
+
+          // Fire-and-forget: index the real-time inbound message (forward coverage).
+          // Only when instantMsg is present; IGNORED_WS_MSG_TYPES already filtered upstream.
+          // Scoped via getActiveAccountMid(); never let indexing break notification delivery.
+          try {
+            const instantMsg = notification.instantMsg
+            if (instantMsg?.msgKey) {
+              const mid = getActiveAccountMid()
+              if (mid) {
+                const input: IndexedMessageInput = {
+                  talkerId: notification.talkerId,
+                  sessionType: notification.sessionType,
+                  msgSeqno: String(instantMsg.msgSeqno),
+                  msgKey: String(instantMsg.msgKey),
+                  senderUid: instantMsg.senderUid,
+                  msgType: instantMsg.msgType,
+                  msgSource: null,
+                  timestamp: instantMsg.timestamp,
+                  msgStatus: null,
+                  content: instantMsg.content,
+                }
+                indexMessages(mid, [input])
+              }
+            }
+          } catch (indexError) {
+            console.error('[SearchIndex] Failed to index inbound WS message:', indexError)
           }
         },
         onSessionUpdate: notification => {
