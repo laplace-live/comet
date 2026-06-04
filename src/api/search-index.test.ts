@@ -1,7 +1,9 @@
 import { createRequire } from 'node:module'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
-import { closeSearchIndex, initSearchIndex } from '@/api/search-index'
+import type { IndexedMessageInput } from '@/api/search-index'
+
+import { closeSearchIndex, indexMessages, initSearchIndex, querySearch } from '@/api/search-index'
 
 const require = createRequire(import.meta.url)
 const Database = require('better-sqlite3-multiple-ciphers')
@@ -310,5 +312,123 @@ describe('clearAccountIndex', () => {
       (h.prepare('SELECT count(*) c FROM messages_fts WHERE messages_fts MATCH ?').get('九十九') as { c: number }).c
     ).toBe(1)
     void clearAccountIndex // keep both import forms referenced
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Area D: query layer (FTS message hits, conversation hits, fallback, stats)
+// ---------------------------------------------------------------------------
+
+// MSG_TYPE.TEXT = 1
+const TEXT = 1
+const MID = 1001
+
+function msg(overrides: Partial<IndexedMessageInput>): IndexedMessageInput {
+  return {
+    talkerId: 200,
+    sessionType: 1,
+    msgSeqno: '1',
+    msgKey: 'k1',
+    senderUid: 200,
+    msgType: TEXT,
+    msgSource: 0,
+    timestamp: 1000,
+    msgStatus: 0,
+    content: JSON.stringify({ content: 'hello' }),
+    ...overrides,
+  }
+}
+
+describe('querySearch message hits (FTS trigram)', () => {
+  beforeEach(async () => {
+    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+  })
+
+  afterEach(() => {
+    closeSearchIndex()
+  })
+
+  it('returns CJK message hits with snippet sentinels and account scoping', () => {
+    indexMessages(MID, [
+      msg({ talkerId: 200, msgSeqno: '10', msgKey: 'k10', content: JSON.stringify({ content: '今天天气很好我们去公园散步' }) }),
+      msg({ talkerId: 201, msgSeqno: '11', msgKey: 'k11', content: JSON.stringify({ content: '明天会下雨吗' }) }),
+    ])
+    // Different account must NOT leak into MID's results.
+    indexMessages(9999, [
+      msg({ talkerId: 200, msgSeqno: '12', msgKey: 'k12', content: JSON.stringify({ content: '今天天气很好别的账号' }) }),
+    ])
+
+    const res = querySearch(MID, { query: '天气', scope: 'all', limit: 50, offset: 0 })
+
+    expect(res.messageHits.length).toBe(1)
+    const hit = res.messageHits[0]
+    expect(hit.talkerId).toBe(200)
+    expect(hit.msgSeqno).toBe('10')
+    expect(hit.msgKey).toBe('k10')
+    // Snippet must contain the contract sentinels around the matched run.
+    expect(hit.snippet).toContain('\u0001')
+    expect(hit.snippet).toContain('\u0002')
+    expect(hit.snippet).toContain('天气')
+    expect(res.total).toBe(1)
+  })
+
+  it('ranks more relevant rows first via bm25', () => {
+    indexMessages(MID, [
+      // Low relevance: long doc, one occurrence.
+      msg({ talkerId: 300, msgSeqno: '20', msgKey: 'k20', content: JSON.stringify({ content: '苹果' + '其他内容'.repeat(20) }) }),
+      // High relevance: short doc, repeated term.
+      msg({ talkerId: 301, msgSeqno: '21', msgKey: 'k21', content: JSON.stringify({ content: '苹果苹果苹果' }) }),
+    ])
+
+    const res = querySearch(MID, { query: '苹果', scope: 'all', limit: 50, offset: 0 })
+
+    expect(res.messageHits.length).toBe(2)
+    // bm25 (smaller = better) should rank the short repeated doc first.
+    expect(res.messageHits[0].msgKey).toBe('k21')
+    expect(res.messageHits[1].msgKey).toBe('k20')
+  })
+
+  it('respects scope=current talkerId filtering', () => {
+    indexMessages(MID, [
+      msg({ talkerId: 400, msgSeqno: '30', msgKey: 'k30', content: JSON.stringify({ content: '会议记录abc' }) }),
+      msg({ talkerId: 401, msgSeqno: '31', msgKey: 'k31', content: JSON.stringify({ content: '会议记录abc' }) }),
+    ])
+
+    const all = querySearch(MID, { query: '会议记录', scope: 'all', limit: 50, offset: 0 })
+    expect(all.messageHits.length).toBe(2)
+
+    const current = querySearch(MID, { query: '会议记录', scope: 'current', talkerId: 400, limit: 50, offset: 0 })
+    expect(current.messageHits.length).toBe(1)
+    expect(current.messageHits[0].talkerId).toBe(400)
+    expect(current.total).toBe(1)
+  })
+
+  it('paginates message hits via limit/offset while total stays full', () => {
+    const inputs: IndexedMessageInput[] = []
+    for (let i = 0; i < 5; i++) {
+      inputs.push(
+        msg({
+          talkerId: 500,
+          msgSeqno: String(40 + i),
+          msgKey: `k4${i}`,
+          timestamp: 1000 + i,
+          content: JSON.stringify({ content: `订单编号${i}` }),
+        })
+      )
+    }
+    indexMessages(MID, inputs)
+
+    const page1 = querySearch(MID, { query: '订单编号', scope: 'all', limit: 2, offset: 0 })
+    expect(page1.messageHits.length).toBe(2)
+    expect(page1.total).toBe(5)
+
+    const page2 = querySearch(MID, { query: '订单编号', scope: 'all', limit: 2, offset: 2 })
+    expect(page2.messageHits.length).toBe(2)
+    expect(page2.total).toBe(5)
+
+    // No overlap between pages.
+    const keys1 = page1.messageHits.map(h => h.msgKey)
+    const keys2 = page2.messageHits.map(h => h.msgKey)
+    expect(keys1.some(k => keys2.includes(k))).toBe(false)
   })
 })

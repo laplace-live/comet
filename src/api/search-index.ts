@@ -347,8 +347,99 @@ export function clearAccountIndex(mid: number): void {
     console.error('search-index: clearAccountIndex failed', err)
   }
 }
-export function querySearch(_mid: number, _params: SearchQueryParams): SearchQueryResult {
-  return { conversationHits: [], messageHits: [], total: 0 }
+// FTS5 trigram tokenizer cannot index-match queries shorter than 3 characters.
+// Count by code points so 1-2 CJK chars (each 1 code point) correctly fall back.
+function isTrigramEligible(query: string): boolean {
+  return [...query.trim()].length >= 3
+}
+
+// Escape an FTS5 MATCH string by wrapping it in double quotes and doubling any
+// embedded double quotes, so user punctuation can never be parsed as FTS syntax.
+function toFtsMatch(query: string): string {
+  return `"${query.trim().replace(/"/g, '""')}"`
+}
+
+export function querySearch(mid: number, params: SearchQueryParams): SearchQueryResult {
+  if (!db) return { conversationHits: [], messageHits: [], total: 0 }
+
+  const conversationHits: ConversationHit[] = []
+  const messageHits: MessageHit[] = []
+  let total = 0
+
+  const q = params.query.trim()
+  if (q.length === 0) {
+    return { conversationHits, messageHits, total }
+  }
+
+  const scopeCurrent = params.scope === 'current' && typeof params.talkerId === 'number'
+
+  if (isTrigramEligible(q)) {
+    const match = toFtsMatch(q)
+
+    // total count (no limit/offset)
+    const countSql = `
+      SELECT COUNT(*) AS n
+      FROM messages_fts
+      JOIN messages ON messages.rowid = messages_fts.rowid
+      WHERE messages_fts MATCH ?
+        AND messages.account_mid = ?
+        ${scopeCurrent ? 'AND messages.talker_id = ?' : ''}
+    `
+    const countArgs: Array<string | number> = scopeCurrent ? [match, mid, params.talkerId as number] : [match, mid]
+    const countRow = db.prepare(countSql).get(...countArgs) as { n: number } | undefined
+    total = countRow?.n ?? 0
+
+    const hitsSql = `
+      SELECT
+        messages.talker_id   AS talkerId,
+        messages.session_type AS sessionType,
+        messages.msg_seqno   AS msgSeqno,
+        messages.msg_key     AS msgKey,
+        messages.sender_uid  AS senderUid,
+        messages.msg_type    AS msgType,
+        messages.timestamp   AS timestamp,
+        messages.type_label  AS typeLabel,
+        snippet(messages_fts, 0, char(1), char(2), '…', 32) AS snippet
+      FROM messages_fts
+      JOIN messages ON messages.rowid = messages_fts.rowid
+      WHERE messages_fts MATCH ?
+        AND messages.account_mid = ?
+        ${scopeCurrent ? 'AND messages.talker_id = ?' : ''}
+      ORDER BY bm25(messages_fts) ASC
+      LIMIT ? OFFSET ?
+    `
+    const hitsArgs: Array<string | number> = scopeCurrent
+      ? [match, mid, params.talkerId as number, params.limit, params.offset]
+      : [match, mid, params.limit, params.offset]
+
+    const rows = db.prepare(hitsSql).all(...hitsArgs) as Array<{
+      talkerId: number
+      sessionType: number
+      msgSeqno: string
+      msgKey: string
+      senderUid: number | null
+      msgType: number | null
+      timestamp: number | null
+      typeLabel: string | null
+      snippet: string
+    }>
+
+    for (const r of rows) {
+      messageHits.push({
+        talkerId: r.talkerId,
+        sessionType: r.sessionType,
+        msgSeqno: String(r.msgSeqno),
+        msgKey: String(r.msgKey),
+        senderUid: r.senderUid,
+        msgType: r.msgType,
+        timestamp: r.timestamp,
+        typeLabel: r.typeLabel,
+        snippet: r.snippet,
+      })
+    }
+  }
+
+  return { conversationHits, messageHits, total }
 }
 export function startBackfill(_mid: number, _opts?: { sessionType?: number }): void {}
 export function pauseBackfill(): void {}
