@@ -123,6 +123,33 @@ export function extractSearchableText(content: string, msgType: number, msgStatu
       }
     }
 
+    case MSG_TYPE.AI_GENERATED: {
+      const paragraphs = obj.paragraphs
+      if (!Array.isArray(paragraphs)) {
+        return { text: '', typeLabel: null }
+      }
+      const paragraphTexts: string[] = []
+      for (const paragraph of paragraphs) {
+        if (!paragraph || typeof paragraph !== 'object') continue
+        const textObj = (paragraph as Record<string, unknown>).text
+        const nodes = textObj && typeof textObj === 'object' ? (textObj as Record<string, unknown>).nodes : null
+        if (!Array.isArray(nodes)) continue
+        const nodeTexts: string[] = []
+        for (const node of nodes) {
+          if (!node || typeof node !== 'object') continue
+          const n = node as Record<string, unknown>
+          const rawText = typeof n.raw_text === 'string' ? n.raw_text : ''
+          const word = n.word && typeof n.word === 'object' ? (n.word as Record<string, unknown>) : null
+          const words = word && typeof word.words === 'string' ? word.words : ''
+          const nodeText = rawText || words
+          if (nodeText) nodeTexts.push(nodeText)
+        }
+        const paragraphText = nodeTexts.join('')
+        if (paragraphText) paragraphTexts.push(paragraphText)
+      }
+      return { text: paragraphTexts.join('\n'), typeLabel: null }
+    }
+
     case MSG_TYPE.REVOKE:
       return { text: '', typeLabel: null }
 

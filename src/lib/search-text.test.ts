@@ -153,3 +153,35 @@ describe('extractSearchableText — SYSTEM_TIP', () => {
     expect(result).toEqual({ text: '', typeLabel: null })
   })
 })
+
+describe('extractSearchableText — AI_GENERATED', () => {
+  it('walks paragraphs[].text.nodes[] preferring raw_text, falling back to word.words', () => {
+    const content = JSON.stringify({
+      sub_type: 1,
+      paragraphs: [
+        {
+          para_type: 1,
+          text: {
+            nodes: [
+              { node_type: 1, raw_text: '你好，' },
+              { node_type: 1, raw_text: '', word: { words: '世界' } },
+            ],
+          },
+        },
+        {
+          para_type: 1,
+          text: { nodes: [{ node_type: 1, raw_text: '第二段' }] },
+        },
+      ],
+    })
+    const result = extractSearchableText(content, MSG_TYPE.AI_GENERATED)
+    expect(result.typeLabel).toBeNull()
+    expect(result.text).toBe('你好，世界\n第二段')
+  })
+
+  it('returns empty text when paragraphs are missing or empty', () => {
+    const content = JSON.stringify({ sub_type: 4, paragraphs: [] })
+    const result = extractSearchableText(content, MSG_TYPE.AI_GENERATED)
+    expect(result).toEqual({ text: '', typeLabel: null })
+  })
+})
