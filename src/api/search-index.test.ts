@@ -14,9 +14,7 @@ import {
 } from '@/api/search-index'
 
 const require = createRequire(import.meta.url)
-const Database = require('better-sqlite3-multiple-ciphers')
-
-const KEY = 'a'.repeat(64) // 64 hex chars = 32-byte raw key
+const { Database } = require('node-sqlite3-wasm')
 
 // Re-open the same file/handle the module opened, to read sqlite_master back out.
 // Since the module owns the connection, we expose a tiny test accessor below.
@@ -36,7 +34,7 @@ async function objectNames(): Promise<Set<string>> {
 
 describe('initSearchIndex', () => {
   it('creates all tables, the fts table, and sync triggers', async () => {
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: KEY })
+    await initSearchIndex({ dbPath: ':memory:' })
     const names = await objectNames()
     for (const t of [
       'messages',
@@ -56,7 +54,7 @@ describe('initSearchIndex', () => {
   })
 
   it('records the schema version', async () => {
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: KEY })
+    await initSearchIndex({ dbPath: ':memory:' })
     const mod = await import('@/api/search-index')
     const db = (mod as unknown as { __getDbForTest(): InstanceType<typeof Database> }).__getDbForTest()
     const row = db.prepare('SELECT MAX(version) AS v FROM schema_version').get() as { v: number }
@@ -64,18 +62,18 @@ describe('initSearchIndex', () => {
   })
 
   it('is idempotent: a second init on a fresh handle does not throw', async () => {
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: KEY })
+    await initSearchIndex({ dbPath: ':memory:' })
     closeSearchIndex()
-    await expect(initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: KEY })).resolves.toBeUndefined()
+    await expect(initSearchIndex({ dbPath: ':memory:' })).resolves.toBeUndefined()
   })
 
-  it('opens a real temp file with the cipher key and round-trips a row', async () => {
+  it('opens a real temp file and round-trips a row', async () => {
     const { mkdtempSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
     const { join } = await import('node:path')
     const dir = mkdtempSync(join(tmpdir(), 'comet-index-'))
     const file = join(dir, 'index.db')
-    await initSearchIndex({ dbPath: file, encryptionKeyHex: KEY })
+    await initSearchIndex({ dbPath: file })
     const mod = await import('@/api/search-index')
     const db = (mod as unknown as { __getDbForTest(): InstanceType<typeof Database> }).__getDbForTest()
     db.prepare('INSERT INTO schema_version (version, applied_at) VALUES (?, ?)').run(999, Date.now())
@@ -114,7 +112,7 @@ describe('indexMessages', () => {
 
   it('inserts a message row and populates the FTS index', async () => {
     const { initSearchIndex, indexMessages } = await import('@/api/search-index')
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
     indexMessages(42, [textMsg({})])
 
     const h = await db()
@@ -132,7 +130,7 @@ describe('indexMessages', () => {
 
   it('is idempotent on the primary key (re-index updates, never duplicates)', async () => {
     const { initSearchIndex, indexMessages } = await import('@/api/search-index')
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
     indexMessages(42, [textMsg({ content: JSON.stringify({ content: '第一版内容' }) })])
     indexMessages(42, [textMsg({ content: JSON.stringify({ content: '第二版内容修订' }) })])
 
@@ -149,7 +147,7 @@ describe('indexMessages', () => {
 
   it('excludes recalled message content from FTS but stores the recall label', async () => {
     const { initSearchIndex, indexMessages } = await import('@/api/search-index')
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
     indexMessages(42, [
       textMsg({
         msgKey: '7400000000000000099',
@@ -172,7 +170,7 @@ describe('indexMessages', () => {
 
   it('stores type_label for image messages without polluting text ranking', async () => {
     const { initSearchIndex, indexMessages } = await import('@/api/search-index')
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
     indexMessages(42, [
       textMsg({
         msgKey: '7400000000000000002',
@@ -192,7 +190,7 @@ describe('indexMessages', () => {
 
   it('never throws to the caller on malformed input', async () => {
     const { initSearchIndex, indexMessages } = await import('@/api/search-index')
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
     // missing required fields / bad content must be swallowed internally
     expect(() => indexMessages(42, [{ ...textMsg({}), content: undefined as unknown as string }])).not.toThrow()
   })
@@ -236,7 +234,7 @@ describe('indexSessions', () => {
 
   it('upserts a session row with TEXT session_ts and extracted last_msg_text', async () => {
     const { initSearchIndex, indexSessions } = await import('@/api/search-index')
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
     indexSessions(42, [session({})])
 
     const h = await db()
@@ -251,7 +249,7 @@ describe('indexSessions', () => {
 
   it('is idempotent on (account_mid, talker_id, session_type)', async () => {
     const { initSearchIndex, indexSessions } = await import('@/api/search-index')
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
     indexSessions(42, [session({ unread_count: 1 })])
     indexSessions(42, [session({ unread_count: 9 })])
     const h = await db()
@@ -274,7 +272,7 @@ describe('clearAccountIndex', () => {
 
   it('purges only the target account from messages, fts, and sessions', async () => {
     const { initSearchIndex, indexMessages, clearAccountIndex } = await import('@/api/search-index')
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
     indexMessages(42, [
       {
         talkerId: 1,
@@ -349,7 +347,7 @@ function msg(overrides: Partial<IndexedMessageInput>): IndexedMessageInput {
 
 describe('querySearch message hits (FTS trigram)', () => {
   beforeEach(async () => {
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
   })
 
   afterEach(() => {
@@ -561,7 +559,7 @@ function session(overrides: Partial<BilibiliSession>): BilibiliSession {
 
 describe('querySearch conversation hits', () => {
   beforeEach(async () => {
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
   })
 
   afterEach(() => {
@@ -632,7 +630,7 @@ describe('querySearch conversation hits', () => {
 
 describe('querySearch short-query fallback (<3 chars)', () => {
   beforeEach(async () => {
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
   })
 
   afterEach(() => {
@@ -745,7 +743,7 @@ describe('querySearch short-query fallback (<3 chars)', () => {
 
 describe('getIndexStats', () => {
   beforeEach(async () => {
-    await initSearchIndex({ dbPath: ':memory:', encryptionKeyHex: 'a'.repeat(64) })
+    await initSearchIndex({ dbPath: ':memory:' })
   })
 
   afterEach(() => {
