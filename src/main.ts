@@ -526,9 +526,9 @@ app.on('ready', async () => {
   createApplicationMenu()
   createWindow()
 
-  // Initialize the encrypted full-text search index. initSearchIndex() resolves the
-  // DB path from userData and the encryption key from safeStorage internally. A failure
-  // here must never block the app — the index degrades to "unavailable", not a crash.
+  // Initialize the full-text search index. initSearchIndex() resolves the DB path from
+  // userData internally (a plaintext SQLite file via the node-sqlite3-wasm engine). A
+  // failure here must never block the app — the index degrades to "unavailable", not a crash.
   try {
     await initSearchIndex()
     // Inject the bilibili fetchers + progress broadcaster into the backfill crawler.

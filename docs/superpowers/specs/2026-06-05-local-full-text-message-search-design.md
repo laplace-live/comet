@@ -1,8 +1,34 @@
 # Design: Local Encrypted Full-Text Message Search
 
 **Date:** 2026-06-05
-**Status:** Approved design — ready for implementation planning
+**Status:** Implemented (see amendment below)
 **Scope:** All three phases in one spec (backbone + backfill + jump-to-message polish)
+
+## Amendment (2026-06-05): storage engine pivot — WASM SQLite, encryption deferred
+
+> The original design (sections 6, 7.5, 16) specified an **encrypted on-disk SQLite** via the native
+> `better-sqlite3-multiple-ciphers` (SQLCipher-style `PRAGMA key`). During implementation the runtime
+> smoke check revealed this **does not build against Electron 42's V8**: Electron 42 changed
+> `v8::External::New` / `External::Value()` to require an `ExternalPointerTypeTag`, and no release of
+> `better-sqlite3-multiple-ciphers` (or mainline `better-sqlite3`) supports it yet — so the app could
+> not launch. Prebuilt binaries for that package only cover Electron 29–41.
+>
+> **Resolution (decided with the project owner):** switch the engine to **`node-sqlite3-wasm`** — a
+> WASM SQLite with a synchronous, better-sqlite3-style API, FTS5 + trigram compiled in, and a real
+> Node file-VFS for on-disk persistence. It needs **no native build**, so it is immune to Electron
+> ABI/V8 churn. The swap is isolated behind a thin adapter that satisfies the existing
+> `DatabaseHandle` interface, so the schema, query layer, progressive hooks, backfill crawler, and
+> renderer are all unchanged.
+>
+> **Encryption is deferred.** No WASM SQLite offers transparent `PRAGMA key` with a synchronous Node
+> file VFS, and FTS5 requires the searchable text to be plaintext in the index regardless. The index
+> is therefore a **plaintext SQLite file** under `app.getPath('userData')` with `0600` permissions.
+> The SQLCipher key machinery (`search-index-key.ts`, the `safeStorage`-wrapped key, the degraded-mode
+> warning) was removed. At-rest encryption is **future work** — options: an encrypting VFS, a
+> compiled `sqlite3mc` WASM build, or switching back to a native engine once one supports Electron 42.
+> Sections 6, 7.5 (`encryptionKeyHex`), 16 (encryption-at-rest), and the related tests/build config
+> below describe the original SQLCipher design and are retained for historical context; the shipped
+> implementation follows this amendment.
 
 ## 1. Problem
 
