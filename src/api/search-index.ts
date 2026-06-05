@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module'
-import { app, safeStorage } from 'electron'
+import { app } from 'electron'
 
 import type { BackfillCrawler, CrawlerDeps } from '@/api/backfill-crawler'
 import type { ConvCursor } from '@/lib/backfill-cursor'
@@ -8,16 +8,47 @@ import type { BilibiliSession } from '@/types/bilibili'
 import { extractSearchableText } from '@/lib/search-text'
 
 import { createBackfillCrawler } from '@/api/backfill-crawler'
-import { resolveKeyHex } from '@/api/search-index-key'
 import { SCHEMA_SQL, SCHEMA_VERSION } from '@/api/search-index-schema'
 
 // ---------------------------------------------------------------------------
-// Native driver (loaded outside Vite's bundle via createRequire — see spec 6.2)
+// WASM SQLite driver (node-sqlite3-wasm).
+//
+// Loaded outside Vite's bundle via createRequire so its sibling .wasm file is
+// resolved relative to node_modules (the package does `__dirname + readFileSync`
+// to load dist/node-sqlite3-wasm.wasm). It is pure CommonJS with a synchronous,
+// already-instantiated `Database` constructor, so it loads in BOTH the Electron
+// main process and plain Node (vitest) with no native addon / node-gyp build.
+//
+// Required lazily inside initSearchIndex so merely importing this module never
+// instantiates the wasm runtime (keeps unrelated unit tests cheap).
 // ---------------------------------------------------------------------------
 const require = createRequire(import.meta.url)
-// Lazily required inside initSearchIndex so importing this module never dlopen()s
-// the native binding (keeps unit tests that don't init from needing the build).
-type DatabaseCtor = new (path: string, options?: Record<string, unknown>) => DatabaseHandle
+
+// --- node-sqlite3-wasm surface (subset we use; see node-sqlite3-wasm.d.ts). ---
+type WasmBindValue = number | bigint | string | Uint8Array | boolean | null
+type WasmBindValues = WasmBindValue | WasmBindValue[] | Record<string, WasmBindValue>
+interface WasmRunResult {
+  changes: number
+  lastInsertRowid: number | bigint
+}
+interface WasmStatement {
+  run(values?: WasmBindValues): WasmRunResult
+  get(values?: WasmBindValues): Record<string, unknown> | null
+  all(values?: WasmBindValues): Array<Record<string, unknown>>
+  finalize(): void
+}
+interface WasmDatabase {
+  exec(sql: string): void
+  prepare(sql: string): WasmStatement
+  get(sql: string, values?: WasmBindValues): Record<string, unknown> | null
+  close(): void
+}
+type WasmDatabaseCtor = new (path: string, options?: Record<string, unknown>) => WasmDatabase
+
+// --- Stable internal contract the rest of this module is written against. -----
+// (Mirrors a better-sqlite3-style handle; the adapter below maps it onto the
+// node-sqlite3-wasm API, which has no .pragma()/.transaction() and requires
+// manual Statement.finalize().)
 interface PreparedStatement {
   run(...params: unknown[]): unknown
   get(...params: unknown[]): unknown
@@ -29,6 +60,104 @@ interface DatabaseHandle {
   prepare(sql: string): PreparedStatement
   transaction<T extends (...args: never[]) => unknown>(fn: T): T
   close(): void
+}
+
+// ---------------------------------------------------------------------------
+// Adapter: wrap a node-sqlite3-wasm `Database` as a `DatabaseHandle`.
+//
+// Param binding: callers pass either a single plain object (named `@param`
+// binding — the existing upsert SQL uses `@named`) or positional varargs (`?`).
+// node-sqlite3-wasm wants named keys WITH their `@`/`:`/`$` prefix and positional
+// values as an array, so we translate the call shape here.
+//
+// Statement lifetime: each prepared wrapper re-prepares + finalizes the
+// underlying wasm Statement per call. node-sqlite3-wasm requires manual
+// finalize() to avoid WASM-heap leaks, and a non-finalized statement left "in
+// progress" can block a later COMMIT. Re-prepare-per-call keeps every statement
+// leak-free and reusable (the two cached upsert wrappers re-prepare safely on
+// the hot path), so there is no per-statement finalize bookkeeping to leak.
+// ---------------------------------------------------------------------------
+function translateBindings(params: unknown[]): WasmBindValues | undefined {
+  if (params.length === 0) return undefined
+  const first = params[0]
+  // A single plain object (not an array, not null) means named-parameter binding.
+  if (params.length === 1 && typeof first === 'object' && first !== null && !Array.isArray(first)) {
+    const named: Record<string, WasmBindValue> = {}
+    for (const [key, value] of Object.entries(first as Record<string, unknown>)) {
+      // node-sqlite3-wasm requires the bind-parameter prefix in the key. Our SQL
+      // uses `@name`, and callers pass bare keys, so prefix unprefixed keys.
+      const prefixed = /^[@:$]/.test(key) ? key : `@${key}`
+      named[prefixed] = value as WasmBindValue
+    }
+    return named
+  }
+  // Otherwise: positional varargs -> array.
+  return params as WasmBindValue[]
+}
+
+function createWasmHandle(wasmDb: WasmDatabase): DatabaseHandle {
+  return {
+    pragma(source: string): unknown {
+      // Use exec() (auto-finalizes internally) for write pragmas. For the read
+      // pragmas this module needs a value from, callers go through prepare().get();
+      // they aren't routed here, so a plain exec is sufficient.
+      wasmDb.exec(`PRAGMA ${source}`)
+      return undefined
+    },
+    exec(sql: string): void {
+      wasmDb.exec(sql)
+    },
+    prepare(sql: string): PreparedStatement {
+      return {
+        run(...params: unknown[]): unknown {
+          const stmt = wasmDb.prepare(sql)
+          try {
+            return stmt.run(translateBindings(params))
+          } finally {
+            stmt.finalize()
+          }
+        },
+        get(...params: unknown[]): unknown {
+          const stmt = wasmDb.prepare(sql)
+          try {
+            return stmt.get(translateBindings(params)) ?? undefined
+          } finally {
+            stmt.finalize()
+          }
+        },
+        all(...params: unknown[]): unknown[] {
+          const stmt = wasmDb.prepare(sql)
+          try {
+            return stmt.all(translateBindings(params))
+          } finally {
+            stmt.finalize()
+          }
+        },
+      }
+    },
+    transaction<T extends (...args: never[]) => unknown>(fn: T): T {
+      // Single shared handle, synchronous callbacks. BEGIN/COMMIT around fn,
+      // ROLLBACK on throw (swallowing any rollback error so the original throws).
+      return ((...args: Parameters<T>): ReturnType<T> => {
+        wasmDb.exec('BEGIN')
+        try {
+          const result = fn(...args) as ReturnType<T>
+          wasmDb.exec('COMMIT')
+          return result
+        } catch (err) {
+          try {
+            wasmDb.exec('ROLLBACK')
+          } catch {
+            // ignore rollback failure; surface the original error
+          }
+          throw err
+        }
+      }) as T
+    },
+    close(): void {
+      wasmDb.close()
+    },
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -101,7 +230,6 @@ export interface IndexStats {
 
 export interface InitOptions {
   dbPath?: string
-  encryptionKeyHex?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -109,14 +237,11 @@ export interface InitOptions {
 // ---------------------------------------------------------------------------
 let db: DatabaseHandle | null = null
 
-// Cached upsert statements (bound to the live `db` handle). These run on hot
-// fetch paths, so we prepare once and reuse; closeSearchIndex() resets them to
-// null so a re-init re-binds them to the new handle.
+// Cached upsert statement wrappers (bound to the live `db` handle). These run on
+// hot fetch paths, so we build the wrapper once and reuse it; closeSearchIndex()
+// resets them to null so a re-init re-binds them to the new handle.
 let upsertMsgStmt: PreparedStatement | null = null
 let upsertSessionStmt: PreparedStatement | null = null
-
-// One-time guard so the degraded-mode (no OS keychain) warning is logged once.
-let degradedKeyWarned = false
 
 function getDb(): DatabaseHandle {
   if (!db) throw new Error('search-index: DB not initialized; call initSearchIndex() first')
@@ -137,47 +262,24 @@ function runMigrations(handle: DatabaseHandle): void {
 }
 
 /**
- * Open the encrypted index DB and run migrations.
- * Tests pass dbPath (':memory:' or a temp file) + encryptionKeyHex directly.
- * Production: dbPath = userData/comet-index.db; key from safeStorage via key helper.
+ * Open the (plaintext) index DB and run migrations.
+ *
+ * The DB is a plaintext SQLite file under app.getPath('userData') — at-rest
+ * encryption was dropped in the WASM-SQLite migration (no WASM SQLite offers a
+ * transparent `PRAGMA key` with a synchronous Node VFS, and FTS requires
+ * plaintext text in the index). Tests pass dbPath (':memory:' or a temp file).
  */
 export async function initSearchIndex(opts?: InitOptions): Promise<void> {
   if (db) return // already open
 
-  const Database = require('better-sqlite3-multiple-ciphers') as DatabaseCtor
+  const Database = require('node-sqlite3-wasm').Database as WasmDatabaseCtor
 
   const dbPath = opts?.dbPath ?? `${app.getPath('userData')}/comet-index.db`
-  let keyHex = opts?.encryptionKeyHex
-  if (keyHex == null) {
-    // Production key-resolution path. When the OS keychain is unavailable
-    // (e.g. Linux without a keyring) the key helper falls back to a plaintext
-    // (v0:) wrapped blob — warn once that the index key is stored without
-    // keychain protection (spec degraded-mode requirement).
-    if (!safeStorage.isEncryptionAvailable() && !degradedKeyWarned) {
-      degradedKeyWarned = true
-      console.warn(
-        'search-index: OS keychain encryption is unavailable; the index encryption key will be stored WITHOUT keychain protection (degraded mode).'
-      )
-    }
-    keyHex = resolveKeyHex(safeStorage, {
-      read: () => readKeyBlob(),
-      write: (_k, v) => writeKeyBlob(v),
-    })
-  }
 
-  const handle = new Database(dbPath)
-  // In-memory/temp DBs (tests only) cannot be keyed — the driver rejects
-  // `PRAGMA key` on them, and there is no at-rest file to protect anyway.
-  // Production always opens a real file path and is fully encrypted.
-  const isInMemory = dbPath === ':memory:' || dbPath === ''
-  if (!isInMemory) {
-    // Cipher selection + raw key (SQLCipher-compatible) per spec 6.5.
-    handle.pragma("cipher='sqlcipher'")
-    handle.pragma(`key="x'${keyHex}'"`)
-    // Probe to confirm key correctness before use (spec 6.5 step 3).
-    handle.prepare('SELECT count(*) AS c FROM sqlite_master').get()
-    handle.pragma('journal_mode = WAL')
-  }
+  const handle = createWasmHandle(new Database(dbPath))
+  // NOTE: WAL is intentionally NOT enabled. node-sqlite3-wasm's file VFS does not
+  // honour `PRAGMA journal_mode = WAL` (it silently falls back to 'delete'), so we
+  // keep the default rollback-journal mode rather than issue a no-op pragma.
   handle.pragma('foreign_keys = ON')
 
   runMigrations(handle)
@@ -185,37 +287,16 @@ export async function initSearchIndex(opts?: InitOptions): Promise<void> {
 }
 
 export function closeSearchIndex(): void {
+  // Cached wrappers are bound to the live handle; drop them BEFORE closing so a
+  // re-init re-prepares against the fresh connection. The wrappers re-prepare +
+  // finalize their underlying wasm Statement per call, so there is nothing to
+  // finalize here beyond closing the connection itself.
+  upsertMsgStmt = null
+  upsertSessionStmt = null
   if (db) {
     db.close()
     db = null
   }
-  // Cached statements are bound to the now-closed handle; drop them so a
-  // re-init re-prepares against the fresh connection.
-  upsertMsgStmt = null
-  upsertSessionStmt = null
-}
-
-// ---------------------------------------------------------------------------
-// Key-blob persistence (production path; userData file). Defined here so the
-// production init path is self-contained; tests bypass via injected key.
-// ---------------------------------------------------------------------------
-function keyBlobPath(): string {
-  return `${app.getPath('userData')}/comet-index.key`
-}
-
-function readKeyBlob(): string | null {
-  try {
-    // Lazy fs require keeps this module importable in non-Node-fs contexts.
-    const fs = require('node:fs') as typeof import('node:fs')
-    return fs.existsSync(keyBlobPath()) ? fs.readFileSync(keyBlobPath(), 'utf-8') : null
-  } catch {
-    return null
-  }
-}
-
-function writeKeyBlob(value: string): void {
-  const fs = require('node:fs') as typeof import('node:fs')
-  fs.writeFileSync(keyBlobPath(), value, 'utf-8')
 }
 
 // ---------------------------------------------------------------------------
