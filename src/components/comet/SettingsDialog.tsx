@@ -14,17 +14,31 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Check, GripVertical } from 'lucide-react'
+import { Check, Database, GripVertical, Pause, Play, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
+import type { BackfillStatus, IndexStats } from '@/api/search-index'
 import type { StoredAccountInfo } from '@/types/electron'
 
 import { enforceHttps } from '@/utils/enforceHttps'
 import { modifierKey } from '@/utils/platform'
 
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Button } from '@/components/ui/button'
 import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '@/components/ui/dialog'
+import { Progress, ProgressIndicator, ProgressTrack } from '@/components/ui/progress'
 import { Separator } from '@/components/ui/separator'
+import { Spinner } from '@/components/ui/spinner'
 import { Switch } from '@/components/ui/switch'
 
 import { useSettings } from '@/stores/useSettings'
@@ -83,17 +97,92 @@ function SortableAccountItem({ account, index, activeAccountMid }: SortableAccou
   )
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB']
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
+  return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+function backfillStatePill(status: BackfillStatus | null | undefined): { label: string; spinning: boolean } {
+  switch (status?.state) {
+    case 'running':
+      return { label: '索引中…', spinning: true }
+    case 'paused':
+      return { label: '已暂停', spinning: false }
+    case 'done':
+      return { label: '已完成', spinning: false }
+    case 'error':
+      return { label: '索引失败', spinning: false }
+    default:
+      return { label: '未开始', spinning: false }
+  }
+}
+
 interface SettingsDialogProps {
   accounts?: StoredAccountInfo[]
   activeAccountMid?: number | null
   onReorderAccounts?: (mids: number[]) => Promise<boolean>
+  backfillStatus?: BackfillStatus | null
 }
 
-export function SettingsDialog({ accounts = [], activeAccountMid, onReorderAccounts }: SettingsDialogProps) {
-  const { developerMode, setDeveloperMode, settingsOpen, openSettings, closeSettings } = useSettings()
+export function SettingsDialog({
+  accounts = [],
+  activeAccountMid,
+  onReorderAccounts,
+  backfillStatus,
+}: SettingsDialogProps) {
+  const {
+    developerMode,
+    setDeveloperMode,
+    fullTextIndexEnabled,
+    setFullTextIndexEnabled,
+    settingsOpen,
+    openSettings,
+    closeSettings,
+  } = useSettings()
 
   // Local state for accounts during drag (for optimistic update)
   const [localAccounts, setLocalAccounts] = useState(accounts)
+  const [indexStats, setIndexStats] = useState<IndexStats | null>(null)
+
+  // Refresh index stats whenever the dialog opens or backfill progresses.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: backfillStatus intentionally re-runs stats as backfill advances
+  useEffect(() => {
+    if (!settingsOpen) return
+    window.electronAPI.search
+      .stats()
+      .then(setIndexStats)
+      .catch(err => console.error('[SettingsDialog] Failed to load index stats:', err))
+  }, [settingsOpen, backfillStatus])
+
+  const handleToggleIndex = useCallback(
+    (enabled: boolean) => {
+      setFullTextIndexEnabled(enabled)
+      if (enabled) {
+        window.electronAPI.search.backfillStart({}).catch(err => console.error('[SettingsDialog] backfillStart:', err))
+      } else {
+        window.electronAPI.search.backfillPause().catch(err => console.error('[SettingsDialog] backfillPause:', err))
+      }
+    },
+    [setFullTextIndexEnabled]
+  )
+
+  const handlePauseResume = useCallback(() => {
+    if (backfillStatus?.state === 'running') {
+      window.electronAPI.search.backfillPause().catch(err => console.error('[SettingsDialog] backfillPause:', err))
+    } else {
+      window.electronAPI.search.backfillResume().catch(err => console.error('[SettingsDialog] backfillResume:', err))
+    }
+  }, [backfillStatus])
+
+  const handleClearIndex = useCallback(() => {
+    window.electronAPI.search
+      .backfillClear({})
+      .then(() => window.electronAPI.search.stats())
+      .then(setIndexStats)
+      .catch(err => console.error('[SettingsDialog] backfillClear:', err))
+  }, [])
 
   // Sync local accounts with prop when it changes (e.g., after reorder is confirmed)
   useEffect(() => {
@@ -194,6 +283,126 @@ export function SettingsDialog({ accounts = [], activeAccountMid, onReorderAccou
                 </div>
                 <Switch id='developer-mode' checked={developerMode} onCheckedChange={setDeveloperMode} />
               </div>
+            </div>
+
+            {/* Full-Text Index Section */}
+            <div className='space-y-4'>
+              <Separator />
+              <div className='flex items-center justify-between gap-4'>
+                <div className='space-y-0.5'>
+                  <label htmlFor='full-text-index' className='font-medium text-sm'>
+                    索引全部历史消息
+                  </label>
+                  <p className='text-muted-foreground text-xs'>
+                    开启后在本地加密索引全部会话与消息，以便全文搜索。仅搜索已加载/已索引的消息。
+                  </p>
+                </div>
+                <Switch id='full-text-index' checked={fullTextIndexEnabled} onCheckedChange={handleToggleIndex} />
+              </div>
+
+              {fullTextIndexEnabled && (
+                <div className='space-y-3 rounded-lg border bg-background p-3'>
+                  {/* State pill + progress */}
+                  <div className='flex items-center justify-between gap-2'>
+                    <div className='flex items-center gap-2 text-muted-foreground text-xs'>
+                      {(() => {
+                        const pill = backfillStatePill(backfillStatus)
+                        return (
+                          <>
+                            {pill.spinning && <Spinner className='size-3.5' aria-hidden='true' />}
+                            <span>{pill.label}</span>
+                          </>
+                        )
+                      })()}
+                    </div>
+                    {(backfillStatus?.state === 'running' || backfillStatus?.state === 'paused') && (
+                      <Button variant='ghost' size='sm' onClick={handlePauseResume}>
+                        {backfillStatus.state === 'running' ? (
+                          <>
+                            <Pause className='size-4' aria-hidden='true' />
+                            暂停
+                          </>
+                        ) : (
+                          <>
+                            <Play className='size-4' aria-hidden='true' />
+                            继续
+                          </>
+                        )}
+                      </Button>
+                    )}
+                  </div>
+
+                  <Progress
+                    value={
+                      backfillStatus && backfillStatus.totalConversations > 0
+                        ? Math.round((backfillStatus.processedConversations / backfillStatus.totalConversations) * 100)
+                        : 0
+                    }
+                  >
+                    <ProgressTrack>
+                      <ProgressIndicator
+                        style={{
+                          width: `${
+                            backfillStatus && backfillStatus.totalConversations > 0
+                              ? Math.round(
+                                  (backfillStatus.processedConversations / backfillStatus.totalConversations) * 100
+                                )
+                              : 0
+                          }%`,
+                        }}
+                      />
+                    </ProgressTrack>
+                  </Progress>
+
+                  <p className='text-muted-foreground text-xs'>
+                    已索引 {backfillStatus?.processedConversations ?? 0} / {backfillStatus?.totalConversations ?? 0}{' '}
+                    个会话 · 约{' '}
+                    {(backfillStatus?.indexedMessages ?? indexStats?.messageCount ?? 0).toLocaleString('zh-CN')} 条消息
+                  </p>
+
+                  {/* Last updated + storage */}
+                  <div className='flex items-center gap-4 text-muted-foreground text-xs'>
+                    <span className='inline-flex items-center gap-1'>
+                      <Database className='size-3.5' aria-hidden='true' />
+                      占用 {formatBytes(indexStats?.sizeBytes ?? 0)}
+                    </span>
+                    <span>
+                      最后更新{' '}
+                      {indexStats?.lastUpdatedAt ? new Date(indexStats.lastUpdatedAt).toLocaleString('zh-CN') : '—'}
+                    </span>
+                  </div>
+
+                  {/* Clear index */}
+                  <AlertDialog>
+                    <AlertDialogTrigger
+                      render={
+                        <Button variant='outline' size='sm' className='text-destructive'>
+                          <Trash2 className='size-4' aria-hidden='true' />
+                          清除索引
+                        </Button>
+                      }
+                    />
+                    <AlertDialogPopup>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>清除索引？</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          将删除本账号的全部本地搜索索引数据。此操作不可撤销，但可重新开启索引以重建。
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogClose render={<Button variant='outline'>取消</Button>} />
+                        <AlertDialogClose
+                          render={
+                            <Button variant='destructive' onClick={handleClearIndex}>
+                              清除
+                            </Button>
+                          }
+                        />
+                      </AlertDialogFooter>
+                    </AlertDialogPopup>
+                  </AlertDialog>
+                </div>
+              )}
             </div>
           </div>
         </DialogPanel>

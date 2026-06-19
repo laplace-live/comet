@@ -11,6 +11,10 @@ interface SettingsState {
   developerMode: boolean
   setDeveloperMode: (enabled: boolean) => void
 
+  /** Full-text search index over all message history (off by default, privacy-first) */
+  fullTextIndexEnabled: boolean
+  setFullTextIndexEnabled: (enabled: boolean) => void
+
   // UI state (not persisted)
   /** Whether the settings modal is open */
   settingsOpen: boolean
@@ -35,6 +39,9 @@ export const useSettings = create<SettingsState>()(
       developerMode: false,
       setDeveloperMode: enabled => set({ developerMode: enabled }),
 
+      fullTextIndexEnabled: false,
+      setFullTextIndexEnabled: enabled => set({ fullTextIndexEnabled: enabled }),
+
       // UI state
       settingsOpen: false,
       openSettings: () => set({ settingsOpen: true }),
@@ -48,7 +55,10 @@ export const useSettings = create<SettingsState>()(
     {
       name: 'laplace-comet-settings',
       // Only persist settings, not UI state
-      partialize: state => ({ developerMode: state.developerMode }),
+      partialize: state => ({
+        developerMode: state.developerMode,
+        fullTextIndexEnabled: state.fullTextIndexEnabled,
+      }),
     }
   )
 )

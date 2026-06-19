@@ -42,6 +42,8 @@ interface MessageBubbleProps {
   userCache: UserCache
   userInfo: CheckLoginResult | null
   onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
+  /** Flash an amber ring when this message was jumped to from search. */
+  isHighlighted?: boolean
 }
 
 // Get message source label
@@ -726,6 +728,7 @@ export function MessageBubble({
   userCache,
   userInfo,
   onRecall,
+  isHighlighted,
 }: MessageBubbleProps) {
   const { developerMode } = useSettings()
   const sourceLabel = getMessageSourceLabel(message.msg_source)
@@ -1009,7 +1012,9 @@ export function MessageBubble({
                           : 'rounded-tl-none bg-white shadow-xs dark:bg-zinc-800',
                       ],
                   // Show recalled indicator styling in developer mode
-                  isRecalledInDevMode && 'ring-2 ring-amber-500/50 ring-offset-1'
+                  isRecalledInDevMode && 'ring-2 ring-amber-500/50 ring-offset-1',
+                  // Flash an amber ring when jumped to from search
+                  isHighlighted && 'animate-pulse ring-2 ring-amber-400 ring-offset-2'
                 )}
               >
                 {renderMessageContent(message, emojiInfoMap)}

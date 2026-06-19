@@ -9,7 +9,10 @@ import { UPDATE_BASE_URL } from './src/lib/const'
 
 const config: ForgeConfig = {
   packagerConfig: {
-    asar: true,
+    // Unpack node-sqlite3-wasm's .wasm from the asar so the engine can read it
+    // off disk at runtime (it loads via __dirname + fs.readFileSync, which cannot
+    // read through an asar archive). The pure-JS loader itself stays packed.
+    asar: { unpack: '**/node-sqlite3-wasm/dist/*.wasm' },
     // Environment-specific icon configuration
     icon: (() => {
       const isDev = process.env.NODE_ENV === 'development'
@@ -33,6 +36,7 @@ const config: ForgeConfig = {
           }
         : undefined,
   },
+  // No native modules to rebuild — node-sqlite3-wasm is a pure-JS + .wasm package.
   rebuildConfig: {},
   makers: [
     new MakerSquirrel({

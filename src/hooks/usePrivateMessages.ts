@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import type { BackfillStatus, SearchQueryParams, SearchQueryResult } from '@/api/search-index'
 import type { UserCache } from '@/lib/message-utils'
 import type {
   BilibiliEmojiInfo,
@@ -58,6 +59,15 @@ export interface UsePrivateMessagesReturn {
   userInfo: CheckLoginResult | null
   wsConnected: boolean
 
+  // Search state
+  searchResults: SearchQueryResult | null
+  searchLoading: boolean
+  backfillStatus: BackfillStatus | null
+
+  // Jump-to-message state
+  jumpToIndex: number | null
+  highlightedSeqno: number | null
+
   // Multi-account state
   accounts: StoredAccountInfo[]
   activeAccountMid: number | null
@@ -72,6 +82,9 @@ export interface UsePrivateMessagesReturn {
   fetchMessages: (session: BilibiliSession) => Promise<void>
   selectSession: (session: BilibiliSession) => void
   clearSelectedSession: () => void
+  runSearch: (params: SearchQueryParams) => void
+  clearSearch: () => void
+  selectSessionAndJump: (session: BilibiliSession, msgSeqno: number) => void
   sendMessage: (content: string) => Promise<boolean>
   sendImageMessage: (imageData: string, mimeType: string) => Promise<boolean>
   recallMessage: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
@@ -110,6 +123,15 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const [wsConnected, setWsConnected] = useState(false)
   const [emojiInfoMap, setEmojiInfoMap] = useState<EmojiInfoMap>({})
 
+  // Search state
+  const [searchResults, setSearchResults] = useState<SearchQueryResult | null>(null)
+  const [searchLoading, setSearchLoading] = useState(false)
+  const [backfillStatus, setBackfillStatus] = useState<BackfillStatus | null>(null)
+
+  // Jump-to-message state
+  const [jumpToIndex, setJumpToIndex] = useState<number | null>(null)
+  const [highlightedSeqno, setHighlightedSeqno] = useState<number | null>(null)
+
   // Multi-account state
   const [accounts, setAccounts] = useState<StoredAccountInfo[]>([])
   const [activeAccountMid, setActiveAccountMid] = useState<number | null>(null)
@@ -138,6 +160,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const messagesRef = useRef<BilibiliMessage[]>([])
   const selectedSessionRef = useRef<BilibiliSession | null>(null)
 
+  // Search debounce timer and stale-response request-id guard
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const searchRequestIdRef = useRef(0)
+
+  // Pending jump target seqno, resolved to an index once messages load
+  const pendingJumpSeqnoRef = useRef<number | null>(null)
+  const highlightClearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // Track window focus state to decide when to mark messages as read vs show notifications
   const windowFocusedRef = useRef(document.hasFocus())
 
@@ -157,6 +187,15 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   useEffect(() => {
     selectedSessionRef.current = selectedSession
   }, [selectedSession])
+
+  // Clear any pending search-debounce timer on unmount so it can't setState
+  // after the component is gone.
+  useEffect(
+    () => () => {
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+    },
+    []
+  )
 
   // Track window focus state and mark current session as read when regaining focus
   useEffect(() => {
@@ -656,11 +695,106 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     [mergeEmojiInfos, userInfo, fetchUserInfoBatch]
   )
 
+  // Debounced (200ms) full-text search over the local index, with a request-id
+  // stale guard so out-of-order IPC responses can't overwrite newer results.
+  const runSearch = useCallback((params: SearchQueryParams) => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current)
+    }
+
+    const trimmed = params.query.trim()
+    // Trigram needs >=2 chars; below that, clear results without querying.
+    if (trimmed.length < 2) {
+      searchRequestIdRef.current += 1 // invalidate any in-flight response
+      setSearchLoading(false)
+      setSearchResults(null)
+      return
+    }
+
+    setSearchLoading(true)
+    searchDebounceRef.current = setTimeout(async () => {
+      const requestId = ++searchRequestIdRef.current
+      try {
+        const result = await window.electronAPI.search.query({ ...params, query: trimmed })
+        // Guard: ignore responses that arrive after a newer query was issued
+        if (requestId !== searchRequestIdRef.current) return
+        // offset > 0 is a "load more" page: append the new message hits to the
+        // existing list (keeping the prior conversation hits). offset === 0 is a
+        // fresh query and fully replaces, resetting the list for a new term.
+        setSearchResults(prev =>
+          params.offset > 0 && prev
+            ? {
+                ...result,
+                conversationHits: prev.conversationHits,
+                messageHits: [...prev.messageHits, ...result.messageHits],
+              }
+            : result
+        )
+      } catch (err) {
+        console.error('[usePrivateMessages] Search query failed:', err)
+        if (requestId === searchRequestIdRef.current) {
+          setSearchResults(null)
+        }
+      } finally {
+        if (requestId === searchRequestIdRef.current) {
+          setSearchLoading(false)
+        }
+      }
+    }, 200)
+  }, [])
+
+  const clearSearch = useCallback(() => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current)
+      searchDebounceRef.current = null
+    }
+    searchRequestIdRef.current += 1
+    setSearchLoading(false)
+    setSearchResults(null)
+  }, [])
+
   const selectSession = useCallback(
     (session: BilibiliSession) => {
       setSelectedSession(session)
       setMessages([])
       fetchMessages(session)
+    },
+    [fetchMessages]
+  )
+
+  // Select a session and jump to a specific message once its history loads.
+  // Works even for conversations not in the loaded sessions[] window, mirroring
+  // the notification-navigation resolution below.
+  const selectSessionAndJump = useCallback(
+    async (session: BilibiliSession, msgSeqno: number) => {
+      const alreadySelected =
+        selectedSessionRef.current?.talker_id === session.talker_id &&
+        selectedSessionRef.current?.session_type === session.session_type
+
+      // Arm the pending jump before any refetch so the resolution effect can pick it up.
+      pendingJumpSeqnoRef.current = msgSeqno
+
+      if (alreadySelected) {
+        // Same conversation already open and fully loaded: resolve against current messages.
+        const index = messagesRef.current.findIndex(m => m.msg_seqno === msgSeqno)
+        if (index >= 0) {
+          pendingJumpSeqnoRef.current = null
+          setJumpToIndex(index)
+          setHighlightedSeqno(msgSeqno)
+        } else {
+          // Target not in the already-loaded window: clear the armed jump so a
+          // later unrelated setMessages (WS message, recall, emoji merge) can't
+          // re-fire the resolution effect and pop a spurious toast. The full
+          // history is already loaded here, so notify immediately.
+          pendingJumpSeqnoRef.current = null
+          toastManager.add({ type: 'info', title: '未找到该消息', description: '可能已被撤回或超出已加载范围' })
+        }
+        return
+      }
+
+      setSelectedSession(session)
+      setMessages([])
+      await fetchMessages(session)
     },
     [fetchMessages]
   )
@@ -1553,6 +1687,25 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [handleNewMessage, handleSessionUpdate])
 
+  // Subscribe to backfill progress events from the main process
+  useEffect(() => {
+    const cleanup = window.electronAPI.search.onBackfillProgress(status => {
+      setBackfillStatus(status)
+    })
+    return () => {
+      cleanup()
+    }
+  }, [])
+
+  // Load the current backfill status once on mount so the UI reflects an
+  // already-running/paused crawl after a renderer reload.
+  useEffect(() => {
+    window.electronAPI.search
+      .backfillStatus()
+      .then(setBackfillStatus)
+      .catch(err => console.error('[usePrivateMessages] Failed to load backfill status:', err))
+  }, [])
+
   // Handle navigation from notification clicks
   useEffect(() => {
     const handleNavigateToSession = async (params: NavigateToSessionParams) => {
@@ -1595,6 +1748,48 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [fetchMessages, refreshSessionsQuietly])
 
+  // Resolve a pending jump target once the (complete, sorted) messages array is set.
+  useEffect(() => {
+    const target = pendingJumpSeqnoRef.current
+    if (target === null) return
+    if (messages.length === 0) return
+
+    const index = messages.findIndex(m => m.msg_seqno === target)
+    if (index >= 0) {
+      pendingJumpSeqnoRef.current = null
+      setJumpToIndex(index)
+      setHighlightedSeqno(target)
+    } else {
+      // Seqno not present (recalled / aged out): fall back to nearest by index and notify.
+      pendingJumpSeqnoRef.current = null
+      toastManager.add({ type: 'info', title: '未找到该消息', description: '可能已被撤回或超出已加载范围' })
+    }
+  }, [messages])
+
+  // Auto-clear the highlight ~2s after it lands.
+  useEffect(() => {
+    if (highlightedSeqno === null) return
+    if (highlightClearTimerRef.current) {
+      clearTimeout(highlightClearTimerRef.current)
+    }
+    highlightClearTimerRef.current = setTimeout(() => {
+      setHighlightedSeqno(null)
+    }, 2000)
+    return () => {
+      if (highlightClearTimerRef.current) {
+        clearTimeout(highlightClearTimerRef.current)
+      }
+    }
+  }, [highlightedSeqno])
+
+  // Reset the jump index after it has been consumed by the messages panel
+  // (one-shot: the panel scrolls, then we clear so re-selecting doesn't re-jump).
+  useEffect(() => {
+    if (jumpToIndex === null) return
+    const t = setTimeout(() => setJumpToIndex(null), 500)
+    return () => clearTimeout(t)
+  }, [jumpToIndex])
+
   // Auto-connect WebSocket when logged in
   useEffect(() => {
     if (isConnected && !wsConnected) {
@@ -1627,6 +1822,15 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     userInfo,
     wsConnected,
 
+    // Search state
+    searchResults,
+    searchLoading,
+    backfillStatus,
+
+    // Jump-to-message state
+    jumpToIndex,
+    highlightedSeqno,
+
     // Multi-account state
     accounts,
     activeAccountMid,
@@ -1641,6 +1845,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     fetchMessages,
     selectSession,
     clearSelectedSession,
+    runSearch,
+    clearSearch,
+    selectSessionAndJump,
     sendMessage,
     sendImageMessage,
     recallMessage,

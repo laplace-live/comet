@@ -1,8 +1,9 @@
 import { Loader2, MessageSquare, RefreshCw, Search, Settings, X } from 'lucide-react'
-import { forwardRef, useMemo, useState } from 'react'
+import { forwardRef, useEffect, useMemo, useState } from 'react'
 import type { ScrollerProps } from 'react-virtuoso'
 import { Virtuoso } from 'react-virtuoso'
 
+import type { BackfillStatus, ConversationHit, MessageHit, SearchQueryResult } from '@/api/search-index'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliSession } from '@/types/bilibili'
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
@@ -26,6 +27,7 @@ import {
 } from '@/components/ui/menu'
 import { Skeleton } from '@/components/ui/skeleton'
 
+import { SearchResults } from './SearchResults'
 import { SessionItem } from './SessionItem'
 import { UserMenu } from './UserMenu'
 
@@ -36,6 +38,7 @@ const CustomScroller = forwardRef<HTMLDivElement, ScrollerProps>(({ children, ..
 ))
 
 type SessionVisibilityFilter = 'all' | 'unread' | 'read'
+type SearchScope = 'current' | 'all'
 
 interface SessionListProps {
   sessions: BilibiliSession[]
@@ -49,6 +52,17 @@ interface SessionListProps {
   userInfo?: CheckLoginResult | null
   accounts?: StoredAccountInfo[]
   activeAccountMid?: number | null
+  // Search
+  searchResults: SearchQueryResult | null
+  searchLoading: boolean
+  backfillStatus: BackfillStatus | null
+  indexEnabled: boolean
+  onSearch: (query: string, scope: SearchScope) => void
+  onClearSearch: () => void
+  onConversationHitClick: (hit: ConversationHit) => void
+  onMessageHitClick: (hit: MessageHit) => void
+  onLoadMoreMessageHits: (query: string, scope: SearchScope, offset: number) => void
+  onOpenSettings: () => void
   onSessionClick: (session: BilibiliSession) => void
   onLoadMore: () => void
   onRefresh: () => void
@@ -71,6 +85,16 @@ export function SessionList({
   userInfo,
   accounts,
   activeAccountMid,
+  searchResults,
+  searchLoading,
+  backfillStatus,
+  indexEnabled,
+  onSearch,
+  onClearSearch,
+  onConversationHitClick,
+  onMessageHitClick,
+  onLoadMoreMessageHits,
+  onOpenSettings,
   onSessionClick,
   onLoadMore,
   onRefresh,
@@ -82,6 +106,20 @@ export function SessionList({
 }: SessionListProps) {
   const [filterText, setFilterText] = useState('')
   const [visibilityFilter, setVisibilityFilter] = useState<SessionVisibilityFilter>('all')
+  const [searchScope, setSearchScope] = useState<SearchScope>('all')
+
+  const trimmedFilter = filterText.trim()
+  const isSearching = trimmedFilter.length > 0
+
+  // Drive the FTS search whenever the query or scope changes; clear when emptied.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: onSearch/onClearSearch are stable callbacks
+  useEffect(() => {
+    if (trimmedFilter.length > 0) {
+      onSearch(trimmedFilter, searchScope)
+    } else {
+      onClearSearch()
+    }
+  }, [trimmedFilter, searchScope])
 
   // Filter sessions based on visibility filter and search text
   const filteredSessions = useMemo(() => {
@@ -148,7 +186,11 @@ export function SessionList({
             />
             <InputGroupAddon align='inline-end'>
               <InputGroupText className='whitespace-nowrap'>
-                {isFiltering ? `${filteredSessions.length} / ${sessions.length}` : `${sessions.length}`}
+                {isSearching
+                  ? `会话 ${searchResults?.conversationHits.length ?? 0} · 消息 ${searchResults?.messageHits.length ?? 0}`
+                  : isFiltering
+                    ? `${filteredSessions.length} / ${sessions.length}`
+                    : `${sessions.length}`}
               </InputGroupText>
 
               {filterText && (
@@ -183,6 +225,14 @@ export function SessionList({
                   <MenuRadioItem value='read'>仅已读</MenuRadioItem>
                 </MenuRadioGroup>
               </MenuGroup>
+              <MenuSeparator />
+              <MenuGroup>
+                <MenuGroupLabel>搜索范围</MenuGroupLabel>
+                <MenuRadioGroup value={searchScope} onValueChange={value => setSearchScope(value as SearchScope)}>
+                  <MenuRadioItem value='current'>当前会话</MenuRadioItem>
+                  <MenuRadioItem value='all'>全部会话</MenuRadioItem>
+                </MenuRadioGroup>
+              </MenuGroup>
             </MenuPopup>
           </Menu>
         </div>
@@ -192,6 +242,26 @@ export function SessionList({
         <div className='flex-1 overflow-hidden'>
           <SessionListSkeleton />
         </div>
+      ) : isSearching ? (
+        <SearchResults
+          results={searchResults}
+          loading={searchLoading}
+          userCache={userCache}
+          selectedTalkerId={selectedSession?.talker_id ?? null}
+          indexEnabled={indexEnabled}
+          backfillRunning={backfillStatus?.state === 'running'}
+          backfillProgress={
+            backfillStatus && backfillStatus.totalConversations > 0
+              ? backfillStatus.processedConversations / backfillStatus.totalConversations
+              : 0
+          }
+          onConversationClick={onConversationHitClick}
+          onMessageClick={onMessageHitClick}
+          onLoadMoreMessages={() =>
+            onLoadMoreMessageHits(trimmedFilter, searchScope, searchResults?.messageHits.length ?? 0)
+          }
+          onOpenSettings={onOpenSettings}
+        />
       ) : filteredSessions.length === 0 ? (
         <div className='flex-1 overflow-hidden'>{isFiltering ? <SessionListNoResults /> : <SessionListEmpty />}</div>
       ) : (

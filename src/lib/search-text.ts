@@ -1,0 +1,164 @@
+import { MSG_TYPE } from '@/types/bilibili'
+
+export interface ExtractedText {
+  text: string
+  typeLabel: string | null
+}
+
+// Safely extract a string from any value, mirroring MessageBubble.extractTextContent
+// precedence: content > text > title > desc > pure_text > abs_text (recurse into nested content).
+function extractTextContent(value: unknown): string {
+  if (typeof value === 'string') {
+    return value
+  }
+  if (value && typeof value === 'object') {
+    const obj = value as Record<string, unknown>
+    if (typeof obj.content === 'string') return obj.content
+    if (typeof obj.text === 'string') return obj.text
+    if (typeof obj.title === 'string') return obj.title
+    if (typeof obj.desc === 'string') return obj.desc
+    if (typeof obj.pure_text === 'string') return obj.pure_text
+    if (typeof obj.abs_text === 'string') return obj.abs_text
+    if (obj.content && typeof obj.content === 'object') {
+      return extractTextContent(obj.content)
+    }
+  }
+  return ''
+}
+
+// Join non-empty parts with spaces into a single indexable string.
+function joinParts(parts: Array<string | undefined>): string {
+  return parts.filter((p): p is string => typeof p === 'string' && p.length > 0).join(' ')
+}
+
+/**
+ * Extract indexable plain text and a synthetic type label from a raw message content blob.
+ *
+ * @param content Raw message.content (JSON string, sometimes a plain string).
+ * @param msgType Numeric MSG_TYPE.
+ * @param msgStatus 1 = recalled.
+ */
+export function extractSearchableText(content: string, msgType: number, msgStatus?: number): ExtractedText {
+  // Recalled messages: content is excluded from the index; only the synthetic label is kept.
+  if (msgStatus === 1) {
+    return { text: '', typeLabel: '[已撤回的消息]' }
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    parsed = content
+  }
+
+  const isObject = parsed !== null && typeof parsed === 'object'
+  const obj = (isObject ? (parsed as Record<string, unknown>) : {}) as Record<string, unknown>
+  // For plain-string / primitive content, extraction must see the raw parsed value.
+  const value: unknown = isObject ? parsed : content
+
+  switch (msgType) {
+    case MSG_TYPE.TEXT: {
+      const text = extractTextContent(obj.content) || extractTextContent(value)
+      return { text, typeLabel: null }
+    }
+
+    case MSG_TYPE.IMAGE:
+      return { text: '', typeLabel: '[图片]' }
+
+    case MSG_TYPE.CUSTOM_EMOJI:
+      return { text: '', typeLabel: '[表情]' }
+
+    case MSG_TYPE.SHARE: {
+      const sketch = (obj.sketch && typeof obj.sketch === 'object' ? obj.sketch : {}) as Record<string, unknown>
+      const title = extractTextContent(sketch.title) || extractTextContent(obj.title)
+      const desc = extractTextContent(sketch.desc_text) || extractTextContent(obj.desc)
+      const source = extractTextContent(obj.source)
+      return { text: joinParts([title, desc, source]), typeLabel: null }
+    }
+
+    case MSG_TYPE.NOTIFICATION: {
+      const title = extractTextContent(obj.title)
+      const text = extractTextContent(obj.text)
+      const moduleParts: string[] = []
+      if (Array.isArray(obj.modules)) {
+        for (const mod of obj.modules) {
+          if (mod && typeof mod === 'object') {
+            const m = mod as Record<string, unknown>
+            const mTitle = extractTextContent(m.title)
+            const mDetail = extractTextContent(m.detail)
+            if (mTitle) moduleParts.push(mTitle)
+            if (mDetail) moduleParts.push(mDetail)
+          }
+        }
+      }
+      return { text: joinParts([title, text, ...moduleParts]), typeLabel: null }
+    }
+
+    case MSG_TYPE.VIDEO_PUSH: {
+      const title = extractTextContent(obj.title)
+      const desc = extractTextContent(obj.desc)
+      const attachMsg = extractTextContent(obj.attach_msg)
+      return { text: joinParts([title, desc, attachMsg]), typeLabel: null }
+    }
+
+    case MSG_TYPE.SYSTEM_TIP: {
+      if (typeof obj.content !== 'string') {
+        return { text: '', typeLabel: null }
+      }
+      try {
+        const items = JSON.parse(obj.content)
+        if (!Array.isArray(items)) {
+          return { text: '', typeLabel: null }
+        }
+        const parts = items.map(item => {
+          if (item && typeof item === 'object') {
+            const t = (item as Record<string, unknown>).text
+            return typeof t === 'string' ? t : ''
+          }
+          return ''
+        })
+        return { text: joinParts(parts), typeLabel: null }
+      } catch {
+        return { text: '', typeLabel: null }
+      }
+    }
+
+    case MSG_TYPE.AI_GENERATED: {
+      const paragraphs = obj.paragraphs
+      if (!Array.isArray(paragraphs)) {
+        return { text: '', typeLabel: null }
+      }
+      const paragraphTexts: string[] = []
+      for (const paragraph of paragraphs) {
+        if (!paragraph || typeof paragraph !== 'object') continue
+        const textObj = (paragraph as Record<string, unknown>).text
+        const nodes = textObj && typeof textObj === 'object' ? (textObj as Record<string, unknown>).nodes : null
+        if (!Array.isArray(nodes)) continue
+        const nodeTexts: string[] = []
+        for (const node of nodes) {
+          if (!node || typeof node !== 'object') continue
+          const n = node as Record<string, unknown>
+          const rawText = typeof n.raw_text === 'string' ? n.raw_text : ''
+          const word = n.word && typeof n.word === 'object' ? (n.word as Record<string, unknown>) : null
+          const words = word && typeof word.words === 'string' ? word.words : ''
+          const nodeText = rawText || words
+          if (nodeText) nodeTexts.push(nodeText)
+        }
+        const paragraphText = nodeTexts.join('')
+        if (paragraphText) paragraphTexts.push(paragraphText)
+      }
+      return { text: paragraphTexts.join('\n'), typeLabel: null }
+    }
+
+    case MSG_TYPE.FAN_GROUP_SYSTEM: {
+      const text = extractTextContent(obj.content) || extractTextContent(value)
+      return { text, typeLabel: null }
+    }
+
+    case MSG_TYPE.REVOKE:
+      return { text: '', typeLabel: null }
+
+    default:
+      return { text: extractTextContent(value), typeLabel: null }
+  }
+}

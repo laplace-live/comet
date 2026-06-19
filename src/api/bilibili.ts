@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { Byte, Encoder } from '@nuintun/qrcode'
-import { ipcMain, safeStorage } from 'electron'
+import { BrowserWindow, ipcMain, safeStorage } from 'electron'
 import Store from 'electron-store'
 
+import type { BackfillStatus, IndexedMessageInput, SearchQueryParams } from '@/api/search-index'
 import type {
   BilibiliCredentials,
   BilibiliImageUploadResponse,
@@ -18,7 +19,19 @@ import type {
 import { SESSION_TYPE } from '@/types/bilibili'
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, COMMON_HEADERS, getImageExtension } from '@/lib/const'
-import { IpcChannel } from '@/lib/ipc'
+import { IpcChannel, IpcEvent } from '@/lib/ipc'
+
+import {
+  clearAccountIndex,
+  getBackfillStatus,
+  getIndexStats,
+  indexMessages,
+  indexSessions,
+  pauseBackfill,
+  querySearch,
+  resumeBackfill,
+  startBackfill,
+} from '@/api/search-index'
 
 /**
  * Preserve large integer fields as strings in JSON response text.
@@ -323,6 +336,13 @@ function removeAccount(mid: number): boolean {
     return false
   }
 
+  // Purge this account's search-index partition (fire-and-forget, never throws to caller).
+  try {
+    clearAccountIndex(mid)
+  } catch (indexError) {
+    console.error('[SearchIndex] Failed to clear index for removed account:', indexError)
+  }
+
   saveAccounts(filteredAccounts)
 
   // If we removed the active account, switch to another one
@@ -389,6 +409,15 @@ function updateAccountCredentials(mid: number, credentials: BilibiliCredentials)
 
 // Clear all accounts (full logout)
 function clearAllAccounts(): void {
+  // Purge each account's search-index partition before dropping account records.
+  try {
+    for (const account of getAccounts()) {
+      clearAccountIndex(account.userInfo.mid)
+    }
+  } catch (indexError) {
+    console.error('[SearchIndex] Failed to clear index on full logout:', indexError)
+  }
+
   store.set('accounts', null)
   store.set('activeAccountMid', null)
 }
@@ -406,6 +435,157 @@ export function cookieStringFromCredentials(credentials: BilibiliCredentials): s
   ]
     .filter(Boolean)
     .join('; ')
+}
+
+/**
+ * In-process raw fetch of the conversation list (same logic as the
+ * BILIBILI_FETCH_SESSIONS IPC handler), callable by the backfill crawler.
+ * Returns the parsed response (large integers preserved as strings) or an
+ * ErrorResponse-shaped object on auth/network failure.
+ */
+export async function fetchSessionsRaw(params: {
+  sessionType?: string
+  size?: string
+  endTs?: string
+}): Promise<BilibiliSessionsResponse | { error: string; code: number }> {
+  const { sessionType = '1', size = '100', endTs } = params
+  const credentials = getCredentials()
+  if (!credentials) {
+    return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
+  }
+
+  try {
+    const cookieHeader = cookieStringFromCredentials(credentials)
+    const url = new URL(BILIBILI_ENDPOINTS.GET_SESSIONS)
+    url.searchParams.set('session_type', sessionType)
+    url.searchParams.set('group_fold', '0')
+    url.searchParams.set('unfollow_fold', '0')
+    url.searchParams.set('sort_rule', '2')
+    url.searchParams.set('size', size)
+    url.searchParams.set('build', '0')
+    url.searchParams.set('mobi_app', 'web')
+    if (endTs) {
+      url.searchParams.set('end_ts', endTs)
+    }
+
+    const resp = await fetch(url.toString(), {
+      headers: {
+        Cookie: cookieHeader,
+        ...COMMON_HEADERS,
+        Referer: BILIBILI_HEADERS.REFERER,
+        Origin: BILIBILI_HEADERS.ORIGIN,
+      },
+    })
+
+    const responseText = await resp.text()
+    // A -412 block page is HTML, not JSON: surface it as code -412 so the crawler
+    // can classify it as `blocked` rather than crashing on JSON.parse.
+    try {
+      return JSON.parse(preserveLargeIntegers(responseText)) as BilibiliSessionsResponse
+    } catch {
+      return { error: 'blocked', code: -412 }
+    }
+  } catch (error) {
+    console.error('Failed to fetch sessions (raw):', error)
+    return { error: 'Failed to fetch sessions from Bilibili', code: 500 }
+  }
+}
+
+/**
+ * In-process raw fetch of a conversation's message page (same logic as the
+ * BILIBILI_FETCH_MESSAGES IPC handler), callable by the backfill crawler.
+ */
+export async function fetchSessionMsgsRaw(params: {
+  talkerId: string
+  sessionType?: string
+  size?: string
+  beginSeqno?: string
+  endSeqno?: string
+}): Promise<BilibiliMessagesResponse | { error: string; code: number }> {
+  const { talkerId, sessionType = '1', size = '200', beginSeqno, endSeqno } = params
+  const credentials = getCredentials()
+  if (!credentials) {
+    return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
+  }
+  if (!talkerId) {
+    return { error: 'Missing talker_id parameter', code: 400 }
+  }
+
+  try {
+    const cookieHeader = cookieStringFromCredentials(credentials)
+    const url = new URL(BILIBILI_ENDPOINTS.FETCH_MESSAGES)
+    url.searchParams.set('talker_id', talkerId)
+    url.searchParams.set('session_type', sessionType)
+    url.searchParams.set('size', size)
+    url.searchParams.set('sender_device_id', '1')
+    url.searchParams.set('build', '0')
+    url.searchParams.set('mobi_app', 'web')
+    if (beginSeqno) {
+      url.searchParams.set('begin_seqno', beginSeqno)
+    }
+    if (endSeqno) {
+      url.searchParams.set('end_seqno', endSeqno)
+    }
+
+    const resp = await fetch(url.toString(), {
+      headers: {
+        Cookie: cookieHeader,
+        ...COMMON_HEADERS,
+        Referer: BILIBILI_HEADERS.REFERER,
+        Origin: BILIBILI_HEADERS.ORIGIN,
+      },
+    })
+
+    const responseText = await resp.text()
+    try {
+      return JSON.parse(preserveLargeIntegers(responseText)) as BilibiliMessagesResponse
+    } catch {
+      return { error: 'blocked', code: -412 }
+    }
+  } catch (error) {
+    console.error('Failed to fetch messages (raw):', error)
+    return { error: 'Failed to fetch messages from Bilibili', code: 500 }
+  }
+}
+
+// Snake_case message shape shared by BilibiliMessage, BilibiliLastMessage, and the
+// synthetic object the send-hook builds. Only the fields toIndexedMessage reads.
+type SnakeCaseMessage = {
+  msg_seqno: number | string
+  msg_key: number | string
+  sender_uid?: number | null
+  msg_type?: number | null
+  msg_source?: number | null
+  timestamp?: number | null
+  msg_status?: number | null
+  content?: string | null
+}
+
+// Map a snake_case Bilibili message (fetched session last_msg, fetched message, or a
+// locally-built sent message) to the IndexedMessageInput shape. Centralizes the coercion
+// rules: msg_key/msg_seqno → String, talker/session ids → number, ?? null for nullable fields.
+function toIndexedMessage(talkerId: number, sessionType: number, m: SnakeCaseMessage): IndexedMessageInput {
+  return {
+    talkerId,
+    sessionType,
+    msgSeqno: String(m.msg_seqno),
+    msgKey: String(m.msg_key),
+    senderUid: m.sender_uid ?? null,
+    msgType: m.msg_type ?? null,
+    msgSource: m.msg_source ?? null,
+    timestamp: m.timestamp ?? null,
+    msgStatus: m.msg_status ?? null,
+    content: m.content ?? '',
+  }
+}
+
+// Broadcast backfill progress to all renderer windows (mirrors BILIBILI_NEW_MESSAGE fan-out).
+// Exported so the search-index backfill loop can push status updates as they happen.
+export function broadcastBackfillProgress(status: BackfillStatus): void {
+  const windows = BrowserWindow.getAllWindows()
+  for (const win of windows) {
+    win.webContents.send(IpcEvent.SEARCH_BACKFILL_PROGRESS, status)
+  }
 }
 
 export function registerBilibiliIpcHandlers() {
@@ -810,6 +990,30 @@ export function registerBilibiliIpcHandlers() {
           return { error: data.message || 'Failed to fetch sessions', code: data.code }
         }
 
+        // Fire-and-forget: index session metadata + each session's last_msg preview.
+        // Never let indexing failures break session delivery; scoped via getActiveAccountMid().
+        try {
+          const mid = getActiveAccountMid()
+          const sessionList = data.data?.session_list
+          if (mid && sessionList) {
+            indexSessions(mid, sessionList)
+
+            // Collect each session's last_msg preview into one flat array; indexMessages
+            // wraps the whole batch in a single transaction and tracks touched conversations.
+            const lastMessages: IndexedMessageInput[] = []
+            for (const session of sessionList) {
+              const lm = session.last_msg
+              if (!lm?.msg_key) continue
+              lastMessages.push(toIndexedMessage(session.talker_id, session.session_type, lm))
+            }
+            if (lastMessages.length > 0) {
+              indexMessages(mid, lastMessages)
+            }
+          }
+        } catch (indexError) {
+          console.error('[SearchIndex] Failed to index sessions:', indexError)
+        }
+
         return data
       } catch (error) {
         console.error('Failed to fetch sessions:', error)
@@ -878,6 +1082,22 @@ export function registerBilibiliIpcHandlers() {
 
         if (data.code !== 0) {
           return { error: data.message || 'Failed to fetch messages', code: data.code }
+        }
+
+        // Fire-and-forget: index the fetched message page. fetchMessages auto-loads a
+        // conversation's entire history, so this fully indexes any chat the user opens.
+        // Scoped via getActiveAccountMid(); never let indexing break message delivery.
+        try {
+          const mid = getActiveAccountMid()
+          const messages = data.data?.messages
+          if (mid && messages && messages.length > 0) {
+            const talkerIdNum = Number(talkerId)
+            const sessionTypeNum = Number(sessionType)
+            const mapped = messages.map(m => toIndexedMessage(talkerIdNum, sessionTypeNum, m))
+            indexMessages(mid, mapped)
+          }
+        } catch (indexError) {
+          console.error('[SearchIndex] Failed to index messages:', indexError)
         }
 
         return data
@@ -1066,6 +1286,33 @@ export function registerBilibiliIpcHandlers() {
         const { data } = result
         if (data.code !== 0) {
           return { error: `[diag] code=${data.code} msg=${data.message || '(empty)'}`, code: data.code }
+        }
+
+        // Fire-and-forget: index the outbound message. The send response only returns
+        // msg_key (no seqno), so use the locally-known content/receiver/sender/timestamp.
+        // msg_type 5 is a recall trigger; record msgStatus=1 so its content is excluded from FTS.
+        try {
+          const mid = getActiveAccountMid()
+          const sentMsgKey = data.data?.msg_key
+          if (mid && sentMsgKey != null && String(sentMsgKey).length > 0) {
+            const msgTypeNum = Number(msgType)
+            const isRecall = msgTypeNum === 5
+            // The send response carries no seqno, so use '' as a placeholder. msg_type 5 is a
+            // recall trigger; msg_status 1 keeps its content out of FTS (handled in indexMessages).
+            const sent = toIndexedMessage(Number(receiverId), Number(receiverType), {
+              msg_seqno: '',
+              msg_key: String(sentMsgKey),
+              sender_uid: Number(credentials.DedeUserID),
+              msg_type: msgTypeNum,
+              msg_source: null,
+              timestamp,
+              msg_status: isRecall ? 1 : 0,
+              content,
+            })
+            indexMessages(mid, [sent])
+          }
+        } catch (indexError) {
+          console.error('[SearchIndex] Failed to index sent message:', indexError)
         }
 
         return data
@@ -1331,4 +1578,64 @@ export function registerBilibiliIpcHandlers() {
       }
     }
   )
+
+  // ============================================================================
+  // Full-text search index handlers
+  // All handlers resolve the active account internally via getActiveAccountMid().
+  // ============================================================================
+
+  // Run a search query against the local index for the active account
+  ipcMain.handle(IpcChannel.SEARCH_QUERY, (_event, params: SearchQueryParams) => {
+    const mid = getActiveAccountMid()
+    if (!mid) {
+      return { conversationHits: [], messageHits: [], total: 0 }
+    }
+    return querySearch(mid, params)
+  })
+
+  // Start the opt-in backfill crawler for the active account
+  ipcMain.handle(IpcChannel.SEARCH_BACKFILL_START, (_event, params: { sessionType?: number }) => {
+    const mid = getActiveAccountMid()
+    if (!mid) {
+      return { success: false }
+    }
+    startBackfill(mid, { sessionType: params?.sessionType })
+    return { success: true }
+  })
+
+  // Pause the running backfill
+  ipcMain.handle(IpcChannel.SEARCH_BACKFILL_PAUSE, () => {
+    pauseBackfill()
+    return { success: true }
+  })
+
+  // Resume a paused backfill
+  ipcMain.handle(IpcChannel.SEARCH_BACKFILL_RESUME, () => {
+    resumeBackfill()
+    return { success: true }
+  })
+
+  // Get the current backfill status snapshot
+  ipcMain.handle(IpcChannel.SEARCH_BACKFILL_STATUS, () => {
+    return getBackfillStatus()
+  })
+
+  // Clear the index partition for an account (defaults to the active account)
+  ipcMain.handle(IpcChannel.SEARCH_BACKFILL_CLEAR, (_event, params: { mid?: number }) => {
+    const mid = params?.mid ?? getActiveAccountMid()
+    if (!mid) {
+      return { success: false }
+    }
+    clearAccountIndex(mid)
+    return { success: true }
+  })
+
+  // Get index storage/coverage stats for the active account
+  ipcMain.handle(IpcChannel.SEARCH_STATS, () => {
+    const mid = getActiveAccountMid()
+    if (!mid) {
+      return { messageCount: 0, conversationCount: 0, sizeBytes: 0, lastUpdatedAt: null }
+    }
+    return getIndexStats(mid)
+  })
 }

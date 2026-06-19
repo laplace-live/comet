@@ -23,8 +23,11 @@ export default defineConfig(({ mode }) => ({
       fileName: 'main',
     },
     rollupOptions: {
-      // Mark optional ws dependencies as external (they're not required)
-      external: ['bufferutil', 'utf-8-validate'],
+      // Mark optional ws dependencies as external (they're not required).
+      // node-sqlite3-wasm loads its sibling .wasm via __dirname + readFileSync and
+      // must never be bundled — it is loaded at runtime via createRequire() so the
+      // .wasm resolves against node_modules.
+      external: ['bufferutil', 'utf-8-validate', 'node-sqlite3-wasm'],
     },
   },
 }))
