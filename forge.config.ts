@@ -44,7 +44,7 @@ const config: ForgeConfig = {
     }),
     new MakerZIP(
       {
-        // Include platform and arch in the URL to match the S3 upload structure
+        // Include platform and arch in the URL to match the R2 upload structure
         // Files are uploaded to: {UPDATE_BASE_URL}/darwin/{arch}/
         macUpdateManifestBaseUrl: `${UPDATE_BASE_URL}/darwin/${process.arch}`,
       },

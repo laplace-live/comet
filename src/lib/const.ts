@@ -150,14 +150,14 @@ export const MAX_IMAGE_SIZE = 20 * 1024 * 1024
 // ============================================================================
 
 /**
- * Base URL for auto-updates served from S3 or CloudFront.
+ * Base URL for auto-updates served from Cloudflare R2.
  *
  * The update server should serve files in this structure:
  * - Windows: {baseUrl}/win32/x64/RELEASES, *.nupkg, *.exe
  * - macOS:   {baseUrl}/darwin/{arch}/RELEASES.json, *.zip
  *
- * Update this URL to your S3 bucket or CloudFront distribution URL.
- * Example: 'https://your-bucket.s3.your-region.amazonaws.com/releases'
- * Or with CloudFront: 'https://d1234567890.cloudfront.net/releases'
+ * Update this URL to your R2 bucket's public URL (custom domain or r2.dev)
+ * plus the key prefix the workflow uploads to.
+ * Example: 'https://downloads.example.com/comet'
  */
-export const UPDATE_BASE_URL = 'https://releases.laplace.live/comet'
+export const UPDATE_BASE_URL = 'https://downloads.vrp.moe/comet'

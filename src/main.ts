@@ -43,8 +43,8 @@ if (process.platform !== 'darwin') {
   })
 }
 
-// Configure auto-updates with S3/CloudFront as the update source
-// Update the UPDATE_BASE_URL in src/lib/const.ts to point to your S3 bucket or CloudFront distribution
+// Configure auto-updates with Cloudflare R2 as the update source
+// Update the UPDATE_BASE_URL in src/lib/const.ts to point to your R2 bucket's public URL
 // The baseUrl must include platform and arch as per update-electron-app docs:
 // https://github.com/electron/update-electron-app#with-static-file-storage
 // Skip if this is a secondary instance (will exit shortly)
