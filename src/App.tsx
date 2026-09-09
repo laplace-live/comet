@@ -137,7 +137,9 @@ export default function App() {
   }, [isConnected, initialLoading, fetchSessions])
 
   const handleLoginSuccess = useCallback(async () => {
-    await checkLogin()
+    if (!(await checkLogin())) {
+      throw new Error('登录验证失败，请重试')
+    }
     await fetchSessions()
   }, [checkLogin, fetchSessions])
 

@@ -17,8 +17,10 @@ import type {
 
 import { SESSION_TYPE } from '@/types/bilibili'
 
-import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, COMMON_HEADERS, getImageExtension } from '@/lib/const'
+import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, COMMON_HEADERS, getImageExtension, LOGIN_CONFIG } from '@/lib/const'
 import { IpcChannel } from '@/lib/ipc'
+
+import { resolveQRCodeCredentials } from './qr-login'
 
 /**
  * Preserve large integer fields as strings in JSON response text.
@@ -408,17 +410,42 @@ export function cookieStringFromCredentials(credentials: BilibiliCredentials): s
     .join('; ')
 }
 
+/**
+ * Look up the account profile the given credentials authenticate as.
+ * Returns null when the response says the credentials are not logged in.
+ * Network, timeout and parse failures reject, so each caller keeps its own policy.
+ * @param signal - share a caller's deadline; omit to use the default login timeout
+ */
+async function fetchNavProfile(
+  credentials: BilibiliCredentials,
+  signal: AbortSignal = AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT)
+): Promise<StoredAccountUserInfo | null> {
+  const resp = await fetch(BILIBILI_ENDPOINTS.NAV, {
+    headers: { Cookie: cookieStringFromCredentials(credentials), ...COMMON_HEADERS },
+    signal,
+  })
+  if (!resp.ok) return null
+
+  const data: BilibiliNavResponse = await resp.json()
+  if (data.code !== 0 || !data.data?.isLogin || !data.data.mid) return null
+
+  return { mid: data.data.mid, uname: data.data.uname || `User ${data.data.mid}`, face: data.data.face }
+}
+
 export function registerBilibiliIpcHandlers() {
   // Generate QR code for login
   ipcMain.handle(IpcChannel.BILIBILI_QR_GENERATE, async () => {
     try {
       const resp = await fetch(BILIBILI_ENDPOINTS.QR_GENERATE, {
         headers: { ...COMMON_HEADERS },
+        signal: AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT),
       })
+
+      if (!resp.ok) return { error: `生成二维码失败（HTTP ${resp.status}），请重试`, code: resp.status }
 
       const data: BilibiliQRCodeGenerateResponse = await resp.json()
 
-      if (data.code !== 0) {
+      if (data.code !== 0 || !data.data?.url || !data.data.qrcode_key) {
         return { error: data.message || 'Failed to generate QR code', code: data.code }
       }
 
@@ -447,74 +474,65 @@ export function registerBilibiliIpcHandlers() {
     }
 
     try {
+      const signal = AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT)
       const url = new URL(BILIBILI_ENDPOINTS.QR_POLL)
       url.searchParams.set('qrcode_key', qrcodeKey)
 
       const resp = await fetch(url.toString(), {
         headers: { ...COMMON_HEADERS },
+        signal,
       })
+
+      if (!resp.ok) return { error: `查询登录状态失败（HTTP ${resp.status}），请刷新二维码重试`, code: resp.status }
 
       const data: BilibiliQRCodePollResponse = await resp.json()
 
+      if (data.code !== 0) {
+        return { error: data.message || '查询登录状态失败，请刷新二维码重试', code: data.code }
+      }
+      if (typeof data.data?.code !== 'number') {
+        return { error: '登录状态响应无效，请刷新二维码重试', code: 502 }
+      }
+
       // If login successful, extract and store credentials
-      if (data.code === 0 && data.data.code === 0 && data.data.url) {
-        const urlParams = new URLSearchParams(data.data.url.split('?')[1])
-
-        const credentials: BilibiliCredentials = {
-          SESSDATA: decodeURIComponent(urlParams.get('SESSDATA') || ''),
-          DedeUserID: Number.parseInt(urlParams.get('DedeUserID') || '0', 10),
-          DedeUserID__ckMd5: urlParams.get('DedeUserID__ckMd5') || undefined,
-          bili_jct: urlParams.get('bili_jct') || '',
-        }
-
-        // Fetch user info to complete the account data
-        const cookieHeader = cookieStringFromCredentials(credentials)
-        const navResp = await fetch(BILIBILI_ENDPOINTS.NAV, {
-          headers: { Cookie: cookieHeader, ...COMMON_HEADERS },
-        })
-        const navData: BilibiliNavResponse = await navResp.json()
-
-        if (navData.code === 0 && navData.data.isLogin && navData.data.mid) {
-          const userInfo: StoredAccountUserInfo = {
-            mid: navData.data.mid,
-            uname: navData.data.uname || `User ${navData.data.mid}`,
-            face: navData.data.face,
-          }
-
-          // Store the complete account (credentials + user info)
-          // Skip saving if skipSave is true (used during re-auth to validate first)
-          if (!skipSave) {
-            saveAccount(credentials, userInfo)
-          }
-
-          return {
-            ...data,
-            credentials,
-            userInfo,
-          }
-        }
-
-        // Fallback: save with basic info from credentials
-        const fallbackUserInfo: StoredAccountUserInfo = {
+      if (data.data.code === 0) {
+        const credentials = await resolveQRCodeCredentials(data.data.url, resp.headers, signal)
+        let userInfo: StoredAccountUserInfo = {
           mid: credentials.DedeUserID,
           uname: `User ${credentials.DedeUserID}`,
         }
-        // Skip saving if skipSave is true
+
+        // A profile lookup must not discard credentials from a one-use login ticket.
+        // Share the poll deadline so a stalled lookup cannot leave confirmation pending.
+        try {
+          const profile = await fetchNavProfile(credentials, signal)
+          // Ignore a profile for anyone but the account the ticket just issued.
+          if (profile?.mid === credentials.DedeUserID) {
+            userInfo = profile
+          }
+        } catch {
+          console.warn('QR login profile lookup failed; keeping the issued credentials')
+        }
+
         if (!skipSave) {
-          saveAccount(credentials, fallbackUserInfo)
+          saveAccount(credentials, userInfo)
         }
 
         return {
           ...data,
           credentials,
-          userInfo: fallbackUserInfo,
+          userInfo,
         }
       }
 
       return data
     } catch (error) {
-      console.error('Failed to poll QR code status:', error)
-      return { error: 'Failed to poll QR code status', code: 500 }
+      // Fetch errors can contain the one-use ticket URL; do not log credentials.
+      const timedOut = error instanceof Error && error.name === 'TimeoutError'
+      return {
+        error: timedOut ? '登录请求超时，请检查网络后刷新二维码重试' : '无法完成登录，请刷新二维码重试',
+        code: timedOut ? 504 : 500,
+      }
     }
   })
 
@@ -540,24 +558,8 @@ export function registerBilibiliIpcHandlers() {
       credentials: BilibiliCredentials
     ): Promise<{ isLogin: boolean; mid?: number; uname?: string; face?: string }> => {
       try {
-        const cookieHeader = cookieStringFromCredentials(credentials)
-
-        const resp = await fetch(BILIBILI_ENDPOINTS.NAV, {
-          headers: { Cookie: cookieHeader, ...COMMON_HEADERS },
-        })
-
-        const data: BilibiliNavResponse = await resp.json()
-
-        if (data.code === 0 && data.data.isLogin) {
-          return {
-            isLogin: true,
-            mid: data.data.mid,
-            uname: data.data.uname,
-            face: data.data.face,
-          }
-        }
-
-        return { isLogin: false }
+        const profile = await fetchNavProfile(credentials)
+        return profile ? { isLogin: true, ...profile } : { isLogin: false }
       } catch (error) {
         console.error('Failed to check login status:', error)
         return { isLogin: false }
@@ -724,37 +726,25 @@ export function registerBilibiliIpcHandlers() {
       }
 
       // Verify the new credentials are valid
-      const cookieHeader = cookieStringFromCredentials(credentials)
-      const resp = await fetch(BILIBILI_ENDPOINTS.NAV, {
-        headers: { Cookie: cookieHeader, ...COMMON_HEADERS },
-      })
+      const profile = await fetchNavProfile(credentials)
 
-      const data: BilibiliNavResponse = await resp.json()
-
-      if (data.code !== 0 || !data.data.isLogin) {
+      if (!profile) {
         return { success: false, error: 'Invalid credentials' }
       }
 
       // Verify the mid matches the expected account
-      if (data.data.mid !== mid) {
+      if (profile.mid !== mid) {
         return {
           success: false,
           error: 'Credentials are for a different account',
-          actualMid: data.data.mid,
+          actualMid: profile.mid,
         }
       }
 
       // Update the account credentials
       updateAccountCredentials(mid, credentials)
 
-      return {
-        success: true,
-        userInfo: {
-          mid: data.data.mid,
-          uname: data.data.uname,
-          face: data.data.face,
-        },
-      }
+      return { success: true, userInfo: profile }
     }
   )
 

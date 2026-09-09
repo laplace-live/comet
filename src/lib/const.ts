@@ -15,6 +15,8 @@ export const BILIBILI_API = {
   MAIN: 'https://api.bilibili.com',
   /** Passport/authentication API */
   PASSPORT: 'https://passport.bilibili.com',
+  /** Biligame passport API for QR login ticket exchange */
+  PASSPORT_GAME: 'https://passport.biligame.com',
   /** VC (Video Community) API - used for messaging */
   VC: 'https://api.vc.bilibili.com',
   /** Message center */
@@ -22,6 +24,9 @@ export const BILIBILI_API = {
   /** Broadcast WebSocket */
   BROADCAST_WS: 'wss://broadcast.chat.bilibili.com:7826',
 } as const
+
+/** Allowed origins for QR login ticket exchange and redirects. */
+export const BILIBILI_LOGIN_ORIGINS: ReadonlySet<string> = new Set([BILIBILI_API.PASSPORT, BILIBILI_API.PASSPORT_GAME])
 
 // ============================================================================
 // HTTP Headers
@@ -118,6 +123,17 @@ export const WEBSOCKET_CONFIG = {
   HEARTBEAT_INTERVAL: 20000,
   /** Reconnect delay in milliseconds (5 seconds) */
   RECONNECT_DELAY: 5000,
+} as const
+
+// ============================================================================
+// Login Configuration
+// ============================================================================
+
+export const LOGIN_CONFIG = {
+  /** Deadline for a single login-related request in milliseconds (15 seconds) */
+  REQUEST_TIMEOUT: 15_000,
+  /** Delay between QR code status polls in milliseconds (3 seconds) */
+  QR_POLL_INTERVAL: 3000,
 } as const
 
 // ============================================================================
