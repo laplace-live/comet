@@ -340,6 +340,11 @@ export const SESSION_TYPE = {
   FAN_GROUP: 2,
 } as const
 
+// System session type constants (session.system_msg_type)
+export const SYSTEM_MSG_TYPE = {
+  CUSTOMER_SERVICE: 8, // 客服消息 (backed by customerservice.bilibili.com, talker_id is 0)
+} as const
+
 // QR Code Login Types
 export interface BilibiliQRCodeGenerateResponse {
   code: number

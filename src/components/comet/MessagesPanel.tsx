@@ -19,7 +19,7 @@ import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliMessage, BilibiliSession } from '@/types/bilibili'
 import type { CheckLoginResult } from '@/types/electron'
 
-import { SESSION_TYPE } from '@/types/bilibili'
+import { SESSION_TYPE, SYSTEM_MSG_TYPE } from '@/types/bilibili'
 
 import { MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MIME_TYPES } from '@/lib/const'
 import { getSessionAvatar, getSessionName } from '@/lib/message-utils'
@@ -137,6 +137,9 @@ function ChatView({
   const sessionName = getSessionName(session, userCache)
   const isDnd = session.is_dnd === 1
   const isSticky = session.top_ts > 0
+  // The customer service session has no talker uid, so set_msg_dnd can't target it.
+  // Bilibili's own client doesn't offer DND for it either.
+  const canToggleDnd = session.system_msg_type !== SYSTEM_MSG_TYPE.CUSTOMER_SERVICE
 
   const copyUsername = useCallback(() => {
     navigator.clipboard.writeText(sessionName)
@@ -298,14 +301,16 @@ function ChatView({
               )}
               {isSticky ? '取消置顶' : '置顶'}
             </MenuItem>
-            <MenuItem onClick={handleToggleDnd}>
-              {isDnd ? (
-                <Bell className='size-4' aria-hidden='true' />
-              ) : (
-                <BellOff className='size-4' aria-hidden='true' />
-              )}
-              {isDnd ? '开启通知' : '免打扰'}
-            </MenuItem>
+            {canToggleDnd && (
+              <MenuItem onClick={handleToggleDnd}>
+                {isDnd ? (
+                  <Bell className='size-4' aria-hidden='true' />
+                ) : (
+                  <BellOff className='size-4' aria-hidden='true' />
+                )}
+                {isDnd ? '开启通知' : '免打扰'}
+              </MenuItem>
+            )}
             <MenuSeparator />
             <MenuItem onClick={copyUsername}>
               <Copy className='size-4' aria-hidden='true' />
