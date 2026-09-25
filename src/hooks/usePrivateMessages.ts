@@ -240,7 +240,20 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (userInfo?.mid && senderUid === userInfo.mid) return
 
       // Check if session is in DND mode - suppress notifications
-      const session = sessionsRef.current.find(s => s.talker_id === talkerId && s.session_type === sessionType)
+      // The WS payload has no DND flag and only loaded pages are in state. A session that just
+      // received a message sorts to the top of the first page, so fetch that when it's missing.
+      const isTargetSession = (s: BilibiliSession) => s.talker_id === talkerId && s.session_type === sessionType
+      let session = sessionsRef.current.find(isTargetSession)
+      if (!session) {
+        try {
+          const data = await window.electronAPI.bilibili.fetchSessions({})
+          if (!isErrorResponse(data) && data.code === 0) {
+            session = data.data?.session_list?.find(isTargetSession)
+          }
+        } catch (err) {
+          console.error('[usePrivateMessages] Failed to look up session for notification:', err)
+        }
+      }
       if (session?.is_dnd === 1) {
         console.log('[usePrivateMessages] Notification suppressed for DND session:', talkerId)
         return
@@ -1603,8 +1616,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   }, [isConnected, wsConnected, connectWebSocket])
 
   // Update dock badge with total unread count (macOS)
+  // DND sessions don't count, matching Bilibili's own unread reminder
   useEffect(() => {
-    const totalUnread = sessions.reduce((sum, session) => sum + (session.unread_count || 0), 0)
+    const totalUnread = sessions
+      .filter(session => session.is_dnd !== 1)
+      .reduce((sum, session) => sum + (session.unread_count || 0), 0)
     window.electronAPI.setBadgeCount(totalUnread).catch(err => {
       console.error('[usePrivateMessages] Failed to update dock badge:', err)
     })
