@@ -46,8 +46,7 @@ export function SessionItem({ session, draftKey, isSelected, userCache, onClick 
   const cachedUser = userCache[session.talker_id]
   const vipNicknameColor = getVipNicknameColor(userCache, session.talker_id)
   // Only mark sessions the user has left; the open one is being edited in the input
-  const draft = useDrafts(state => (isSelected ? undefined : state.drafts[draftKey]))
-  const hasDraft = !!draft?.trim()
+  const draft = useDrafts(state => (isSelected ? undefined : state.drafts[draftKey]?.trim()))
 
   return (
     <button
@@ -99,7 +98,7 @@ export function SessionItem({ session, draftKey, isSelected, userCache, onClick 
 
         <div className='flex items-center justify-between gap-2'>
           <p className='truncate text-muted-foreground text-sm'>
-            {hasDraft ? (
+            {draft ? (
               <>
                 <span className='text-destructive'>[草稿]</span> {draft}
               </>

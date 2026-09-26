@@ -15,6 +15,10 @@ interface DraftsState {
   clearAccountDrafts: (accountMid: number) => void
 }
 
+// ============================================================================
+// Draft Keys
+// ============================================================================
+
 /** Drafts are scoped per account, since two logged-in accounts can talk to the same user */
 export function getDraftKey(accountMid: number, session: Pick<BilibiliSession, 'session_type' | 'talker_id'>): string {
   return `${accountMid}:${session.session_type}:${session.talker_id}`

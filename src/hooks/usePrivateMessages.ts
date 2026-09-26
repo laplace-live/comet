@@ -237,25 +237,21 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
   // Show system notification for a new message
   const showNotificationForMessage = useCallback(
-    async (message: BilibiliMessage, senderUid: number, talkerId: number, sessionType: number) => {
+    async (
+      message: BilibiliMessage,
+      senderUid: number,
+      talkerId: number,
+      sessionType: number,
+      refreshedSessions: Promise<BilibiliSession[]>
+    ) => {
       // Don't notify for our own messages
       if (userInfo?.mid && senderUid === userInfo.mid) return
 
       // Check if session is in DND mode - suppress notifications
       // The WS payload has no DND flag and only loaded pages are in state. A session that just
-      // received a message sorts to the top of the first page, so fetch that when it's missing.
+      // received a message sorts to the top of the first page, so use this message's refresh when it's missing.
       const isTargetSession = (s: BilibiliSession) => s.talker_id === talkerId && s.session_type === sessionType
-      let session = sessionsRef.current.find(isTargetSession)
-      if (!session) {
-        try {
-          const data = await window.electronAPI.bilibili.fetchSessions({})
-          if (!isErrorResponse(data) && data.code === 0) {
-            session = data.data?.session_list?.find(isTargetSession)
-          }
-        } catch (err) {
-          console.error('[usePrivateMessages] Failed to look up session for notification:', err)
-        }
-      }
+      const session = sessionsRef.current.find(isTargetSession) ?? (await refreshedSessions).find(isTargetSession)
       if (session?.is_dnd === 1) {
         console.log('[usePrivateMessages] Notification suppressed for DND session:', talkerId)
         return
@@ -361,9 +357,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       await window.electronAPI.bilibili.logout()
 
       // Logout removes the active account, so forget its drafts too
-      const loggedOutMid = userInfo?.mid
-      if (loggedOutMid) {
-        useDrafts.getState().clearAccountDrafts(loggedOutMid)
+      if (userInfo?.mid) {
+        useDrafts.getState().clearAccountDrafts(userInfo.mid)
       }
 
       // Clear current session state
@@ -1337,7 +1332,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
   // Fetch latest message for notification purposes (when instantMsg not available)
   const fetchLatestMessageForNotification = useCallback(
-    async (talkerId: number, sessionType: number) => {
+    async (talkerId: number, sessionType: number, refreshedSessions: Promise<BilibiliSession[]>) => {
       try {
         const data = await window.electronAPI.bilibili.fetchMessages({
           talkerId: String(talkerId),
@@ -1350,7 +1345,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         const messages = data.data?.messages || []
         if (messages.length > 0) {
           const latestMsg = messages[0] // Newest message is first
-          showNotificationForMessage(latestMsg, latestMsg.sender_uid, talkerId, sessionType)
+          showNotificationForMessage(latestMsg, latestMsg.sender_uid, talkerId, sessionType, refreshedSessions)
         }
       } catch (err) {
         console.error('[usePrivateMessages] Failed to fetch message for notification:', err)
@@ -1363,6 +1358,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const handleNewMessage = useCallback(
     (notification: NewMessageNotification) => {
       console.log('[usePrivateMessages] New message notification:', notification)
+
+      // Silent background refresh to get the authoritative sort order from the server
+      // (respects sticky sessions, custom sorting, new conversations, etc.).
+      // Notifications reuse it to look up sessions that aren't in state yet.
+      const refreshedSessions = refreshSessionsQuietly()
 
       const isCurrentSession =
         selectedSession?.talker_id === notification.talkerId &&
@@ -1410,14 +1410,20 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           }
 
           // Show notification (main process will suppress if window is focused)
-          showNotificationForMessage(newMessage, instantMsg.senderUid, notification.talkerId, notification.sessionType)
+          showNotificationForMessage(
+            newMessage,
+            instantMsg.senderUid,
+            notification.talkerId,
+            notification.sessionType,
+            refreshedSessions
+          )
         } else {
           // No instant message data available - do a silent fetch to get new messages
           fetchMessagesQuietly(selectedSession)
 
           // When window is not focused, also show a notification (fetch the latest message for it)
           if (!isWindowFocused) {
-            fetchLatestMessageForNotification(notification.talkerId, notification.sessionType)
+            fetchLatestMessageForNotification(notification.talkerId, notification.sessionType, refreshedSessions)
           }
         }
       } else {
@@ -1440,10 +1446,16 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
             new_face_version: 1,
             msg_source: 1,
           }
-          showNotificationForMessage(tempMessage, instantMsg.senderUid, notification.talkerId, notification.sessionType)
+          showNotificationForMessage(
+            tempMessage,
+            instantMsg.senderUid,
+            notification.talkerId,
+            notification.sessionType,
+            refreshedSessions
+          )
         } else {
           // No instant message data - fetch the latest message for notification
-          fetchLatestMessageForNotification(notification.talkerId, notification.sessionType)
+          fetchLatestMessageForNotification(notification.talkerId, notification.sessionType, refreshedSessions)
         }
       }
 
@@ -1497,10 +1509,6 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         return prev
       })
-
-      // Silent background refresh to get the authoritative sort order from the server
-      // (respects sticky sessions, custom sorting, new conversations, etc.)
-      refreshSessionsQuietly()
 
       // Keep selectedSession in sync so handleFocus and other consumers see the latest max_seqno
       if (isCurrentSession && notification.latestSeqno) {

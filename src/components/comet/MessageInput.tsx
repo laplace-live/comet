@@ -51,11 +51,9 @@ export function MessageInput({
   onMessageSent,
   onDroppedFileProcessed,
 }: MessageInputProps) {
-  // Input text lives in the drafts store so it survives switching sessions.
-  // setInputValue binds the key at render time, so a failed send restores to the session it was sent from.
+  // Input text lives in the drafts store so it survives switching sessions
   const inputValue = useDrafts(state => state.drafts[draftKey] ?? '')
   const setDraft = useDrafts(state => state.setDraft)
-  const setInputValue = (text: string) => setDraft(draftKey, text)
   const [pendingImage, setPendingImage] = useState<ImageToSend | null>(null)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isSendingImage, setIsSendingImage] = useState(false)
@@ -196,15 +194,16 @@ export function MessageInput({
     if (!messageToSend || sendingMessage) return
 
     // Clear input immediately and keep focus for typing next message
-    setInputValue('')
+    setDraft(draftKey, '')
     textareaRef.current?.focus()
 
     const success = await onSendMessage(messageToSend)
     if (success) {
       onMessageSent()
     } else {
-      // Restore the message if sending failed
-      setInputValue(messageToSend)
+      // Restore the message if sending failed. draftKey was captured at send time,
+      // so it goes back to the session it was sent from even if the user switched away.
+      setDraft(draftKey, messageToSend)
     }
   }
 
@@ -319,7 +318,7 @@ export function MessageInput({
             <InputGroupTextarea
               ref={textareaRef}
               value={inputValue}
-              onChange={e => setInputValue(e.target.value.slice(0, MAX_MESSAGE_LENGTH))}
+              onChange={e => setDraft(draftKey, e.target.value.slice(0, MAX_MESSAGE_LENGTH))}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder='输入消息…'
