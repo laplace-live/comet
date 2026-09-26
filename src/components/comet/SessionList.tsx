@@ -26,6 +26,7 @@ import {
 } from '@/components/ui/menu'
 import { Skeleton } from '@/components/ui/skeleton'
 
+import { getDraftKey } from '@/stores/useDrafts'
 import { SessionItem } from './SessionItem'
 import { UserMenu } from './UserMenu'
 
@@ -203,6 +204,7 @@ export function SessionList({
           itemContent={(_, session) => (
             <SessionItem
               session={session}
+              draftKey={getDraftKey(userInfo?.mid ?? 0, session)}
               isSelected={selectedSession?.talker_id === session.talker_id}
               userCache={userCache}
               onClick={() => onSessionClick(session)}

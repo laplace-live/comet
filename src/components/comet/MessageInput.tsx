@@ -9,6 +9,8 @@ import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogT
 import { InputGroup, InputGroupAddon, InputGroupTextarea } from '@/components/ui/input-group'
 import { Spinner } from '@/components/ui/spinner'
 
+import { useDrafts } from '@/stores/useDrafts'
+
 const MAX_MESSAGE_LENGTH = 1000
 
 /** Format file size in bytes to human readable string */
@@ -30,7 +32,8 @@ export interface ImageToSend {
 }
 
 export interface MessageInputProps {
-  sessionId: number
+  /** Draft store key for the current session, from getDraftKey() */
+  draftKey: string
   sendingMessage: boolean
   droppedFile?: File | null
   onSendMessage: (content: string) => Promise<boolean>
@@ -40,7 +43,7 @@ export interface MessageInputProps {
 }
 
 export function MessageInput({
-  sessionId,
+  draftKey,
   sendingMessage,
   droppedFile,
   onSendMessage,
@@ -48,7 +51,11 @@ export function MessageInput({
   onMessageSent,
   onDroppedFileProcessed,
 }: MessageInputProps) {
-  const [inputValue, setInputValue] = useState('')
+  // Input text lives in the drafts store so it survives switching sessions.
+  // setInputValue binds the key at render time, so a failed send restores to the session it was sent from.
+  const inputValue = useDrafts(state => state.drafts[draftKey] ?? '')
+  const setDraft = useDrafts(state => state.setDraft)
+  const setInputValue = (text: string) => setDraft(draftKey, text)
   const [pendingImage, setPendingImage] = useState<ImageToSend | null>(null)
   const [isPreviewOpen, setIsPreviewOpen] = useState(false)
   const [isSendingImage, setIsSendingImage] = useState(false)
@@ -123,12 +130,11 @@ export function MessageInput({
     return true
   }, [])
 
-  // Clear input when session changes
-  // biome-ignore lint/correctness/useExhaustiveDependencies: we intentionally trigger on sessionId change
+  // Drop any pending image when session changes (text is kept as a draft)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: we intentionally trigger on draftKey change
   useEffect(() => {
-    setInputValue('')
     clearPendingImage()
-  }, [sessionId])
+  }, [draftKey])
 
   // Handle externally dropped file (from drag and drop on chat area)
   useEffect(() => {

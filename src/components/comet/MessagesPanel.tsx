@@ -34,6 +34,7 @@ import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/compone
 import { Spinner } from '@/components/ui/spinner'
 import { toastManager } from '@/components/ui/toast'
 
+import { getDraftKey } from '@/stores/useDrafts'
 import { MessageInput } from './MessageInput'
 import { MessagesList } from './MessagesList'
 
@@ -348,7 +349,7 @@ function ChatView({
 
       {/* Message Input - isolated component to prevent re-renders of messages */}
       <MessageInput
-        sessionId={session.talker_id}
+        draftKey={getDraftKey(userInfo?.mid ?? 0, session)}
         sendingMessage={sendingMessage}
         droppedFile={droppedFile}
         onSendMessage={onSendMessage}

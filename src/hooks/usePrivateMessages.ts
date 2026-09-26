@@ -26,6 +26,8 @@ import { parseMessageContent } from '@/lib/message-utils'
 
 import { toastManager } from '@/components/ui/toast'
 
+import { useDrafts } from '@/stores/useDrafts'
+
 // Helper to check if response is an error
 function isErrorResponse(
   response:
@@ -358,6 +360,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       await window.electronAPI.bilibili.logout()
 
+      // Logout removes the active account, so forget its drafts too
+      const loggedOutMid = userInfo?.mid
+      if (loggedOutMid) {
+        useDrafts.getState().clearAccountDrafts(loggedOutMid)
+      }
+
       // Clear current session state
       setSessions([])
       setSelectedSession(null)
@@ -405,7 +413,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     } catch (err) {
       console.error('Failed to logout:', err)
     }
-  }, [fetchUserInfoBatch])
+  }, [fetchUserInfoBatch, userInfo?.mid])
 
   const fetchSessions = useCallback(async () => {
     setLoading(true)
@@ -1176,6 +1184,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         const result = await window.electronAPI.bilibili.removeAccount({ mid })
         if (result.success) {
+          useDrafts.getState().clearAccountDrafts(mid)
           setAccounts(result.remainingAccounts)
           setActiveAccountMid(result.activeAccountMid)
 

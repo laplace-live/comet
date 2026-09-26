@@ -14,10 +14,13 @@ import { timeFromNow } from '@/utils/timeFromNow'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 
+import { useDrafts } from '@/stores/useDrafts'
 import { VerifiedBadge } from './VerifiedBadge'
 
 interface SessionItemProps {
   session: BilibiliSession
+  /** Draft store key for this session, from getDraftKey() */
+  draftKey: string
   isSelected: boolean
   userCache: UserCache
   onClick: () => void
@@ -38,10 +41,13 @@ function getVipNicknameColor(userCache: UserCache, talkerId: number): string | u
   return undefined
 }
 
-export function SessionItem({ session, isSelected, userCache, onClick }: SessionItemProps) {
+export function SessionItem({ session, draftKey, isSelected, userCache, onClick }: SessionItemProps) {
   const avatar = getSessionAvatar(session, userCache)
   const cachedUser = userCache[session.talker_id]
   const vipNicknameColor = getVipNicknameColor(userCache, session.talker_id)
+  // Only mark sessions the user has left; the open one is being edited in the input
+  const draft = useDrafts(state => (isSelected ? undefined : state.drafts[draftKey]))
+  const hasDraft = !!draft?.trim()
 
   return (
     <button
@@ -92,7 +98,15 @@ export function SessionItem({ session, isSelected, userCache, onClick }: Session
         </div>
 
         <div className='flex items-center justify-between gap-2'>
-          <p className='truncate text-muted-foreground text-sm'>{getLastMessagePreview(session)}</p>
+          <p className='truncate text-muted-foreground text-sm'>
+            {hasDraft ? (
+              <>
+                <span className='text-destructive'>[草稿]</span> {draft}
+              </>
+            ) : (
+              getLastMessagePreview(session)
+            )}
+          </p>
           {session.unread_count > 0 && (
             <Badge variant='destructive' size='sm' className='flex-none'>
               {session.unread_count > 99 ? '99+' : session.unread_count}
