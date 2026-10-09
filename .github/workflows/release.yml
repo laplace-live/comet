@@ -1,0 +1,73 @@
+name: Release
+
+# Changesets flow (laplace-persona / laplace-jupiter pattern): while changesets
+# exist on master, keep a "chore: version packages" PR open (version bump +
+# CHANGELOG.md). Once it merges, `changeset git-tag` tags v<version>, and the
+# action pushes the tag and creates the GitHub Release from the CHANGELOG
+# entry. The tag fires build.yml, which signs, uploads to R2 and attaches the
+# installers to that release.
+#
+# A GitHub App token (not the default GITHUB_TOKEN) authenticates the action:
+# events caused by GITHUB_TOKEN don't start other workflows, so the tag would
+# never build, and checks on the version PR would wait for manual approval.
+
+on:
+  push:
+    branches: [master]
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # Full history so each CHANGELOG line can link the commit that added its changeset
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6.1.0
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Requires the laplace-release-bot GitHub App installed on this repo with
+      # Contents and Pull requests read & write, its Client ID and private key
+      # stored in the `RELEASE_APP_CLIENT_ID` and `RELEASE_APP_PRIVATE_KEY` org
+      # secrets.
+      - name: Create GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ secrets.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Create version PR or tag release
+        uses: changesets/action@v2
+        with:
+          version-script: pnpm exec changeset version
+          # Nothing is published to npm: `changeset git-tag` only creates the
+          # v<version> tag locally (skipping one that already exists), and the
+          # action pushes it through the API.
+          publish-script: pnpm exec changeset git-tag
+          commit-message: "chore: version packages"
+          pr-title: "chore: version packages"
+          create-github-releases: true
+          # Must be passed as an input: v2 doesn't read the `GITHUB_TOKEN` env var.
+          github-token: ${{ steps.app-token.outputs.token }}

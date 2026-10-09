@@ -14,6 +14,7 @@ pnpm make           # Create distributable packages for current platform
 pnpm package        # Package app without creating installers
 pnpm lint           # Run ESLint
 pnpm generate-icons # Generate app icons (uses bun)
+pnpm exec changeset # Add a changeset for a user-facing change (see Releases)
 ```
 
 ## Architecture
@@ -78,6 +79,34 @@ The IPC system uses:
 - **Formatting**: Biome (2-space indent, single quotes, no semicolons, 120 char line width)
 - **Import ordering**: Biome organizes imports by groups (node/packages, types, components, etc.)
 - **Tailwind class sorting**: Use `cn()` from `@/lib/utils` for conditional classes (Biome auto-sorts)
+
+## Releases
+
+Releases are changesets-driven (the laplace-persona / laplace-jupiter pattern):
+
+1. User-facing changes land on master with a changeset in `.changeset/`.
+2. `.github/workflows/release.yml` keeps a "chore: version packages" PR open that bumps `package.json` and writes `CHANGELOG.md`.
+3. Merging that PR runs `changeset git-tag`; the action pushes `v<version>` and creates the GitHub Release from the CHANGELOG entry. It authenticates as the `laplace-release-bot` GitHub App because tags pushed with `GITHUB_TOKEN` don't trigger other workflows.
+4. The tag fires `build.yml`, which signs, uploads to R2 (the auto-update feed), and attaches the installers to that release.
+
+Never bump `version`, edit `CHANGELOG.md`, or push a `v*` tag by hand.
+
+### Writing a changeset
+
+`.changeset/<name>.md`, via `pnpm exec changeset` or by hand:
+
+```md
+---
+'laplace-comet': minor
+---
+
+feat: Mute notifications for individual fan group chats
+```
+
+- `minor` for new features and substantial behavior changes, `patch` for fixes and small changes. Size decides the bump, not visibility.
+- Start the summary with a kind prefix (`feat:`, `fix:`, `perf:`, `chore:`, `refactor:`, `docs:`); `.changeset/changelog.mjs` strips it. The rest ships verbatim as the release notes, so write one capitalized plain sentence under ~80 chars for users: no internal vocabulary, rationale, or mechanism.
+- No changeset for CI, docs, tests, or refactors with no user-visible effect.
+- Check with `pnpm exec changeset status`.
 
 ## Important Files
 

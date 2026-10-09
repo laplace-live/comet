@@ -3,6 +3,7 @@
   "productName": "LAPLACE Comet",
   "type": "module",
   "version": "1.1.9",
+  "private": true,
   "description": "Privacy-first Bilibili Private Message Manager",
   "main": ".vite/build/main.cjs",
   "scripts": {
@@ -10,7 +11,6 @@
     "start:debug": "electron-forge start -- --remote-debugging-port=9229",
     "package": "electron-forge package",
     "make": "electron-forge make",
-    "release": "electron-forge release",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs && node scripts/run-renderer-tests.mjs",
@@ -50,6 +50,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
+    "@changesets/cli": "^3.0.3",
     "@electron-forge/cli": "^8.0.1",
     "@electron-forge/maker-squirrel": "^8.0.1",
     "@electron-forge/maker-zip": "^8.0.1",
