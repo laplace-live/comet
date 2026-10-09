@@ -52,6 +52,7 @@ Get the latest development builds with cutting-edge features:
 
 - [Node.js](https://nodejs.org/) v22.13 or later
 - [pnpm](https://pnpm.io/)
+- To package the macOS app: macOS 26 and Xcode 26 or later, which compile its Icon Composer app icon
 
 #### Steps
 

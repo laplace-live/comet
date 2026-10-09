@@ -19,6 +19,8 @@
       "!public",
       "!references",
       "!src/assets/tray-icons.generated.ts",
+      // Icon Composer document: Xcode-owned JSON, replaced wholesale on re-export.
+      "!src/assets/icons/prod/icon.icon",
       "!storybook-static"
     ]
   },

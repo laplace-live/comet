@@ -10,7 +10,9 @@ import { UPDATE_BASE_URL } from './src/lib/const'
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    // Environment-specific icon configuration
+    // Environment-specific icon configuration. Packager picks the extension per platform; prod also has
+    // icon.icon, an Icon Composer document it compiles into Assets.car with actool, which needs macOS 26
+    // and Xcode 26. icon.icns stays as the fallback for older macOS.
     icon: (() => {
       const isDev = process.env.NODE_ENV === 'development'
       const environment = isDev ? 'dev' : 'prod'
