@@ -7,18 +7,14 @@ import type { ForgeConfig } from '@electron-forge/shared-types'
 
 import { UPDATE_BASE_URL } from './src/lib/const'
 
+// Environment-specific app icon without extension: Packager picks the format per platform, and
+// the Windows installer reuses the .ico
+const APP_ICON = `src/assets/icons/${process.env.NODE_ENV === 'development' ? 'dev' : 'prod'}/icon`
+
 const config: ForgeConfig = {
   packagerConfig: {
     asar: true,
-    // Environment-specific icon configuration. Packager picks the extension per platform; prod also has
-    // icon.icon, an Icon Composer document it compiles into Assets.car with actool, which needs macOS 26
-    // and Xcode 26. icon.icns stays as the fallback for older macOS.
-    icon: (() => {
-      const isDev = process.env.NODE_ENV === 'development'
-      const environment = isDev ? 'dev' : 'prod'
-
-      return `src/assets/icons/${environment}/icon`
-    })(),
+    icon: APP_ICON,
     executableName: 'comet',
     appBundleId: 'live.laplace.comet',
     osxSign: process.env.APPLE_IDENTITY
@@ -42,7 +38,7 @@ const config: ForgeConfig = {
       name: 'LAPLACEComet',
       authors: 'LAPLACE Live!',
       description: 'Privacy-first Bilibili Private Message Manager',
-      setupIcon: 'src/assets/icons/installer/icon.ico',
+      setupIcon: `${APP_ICON}.ico`,
     }),
     new MakerZIP(
       {

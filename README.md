@@ -52,7 +52,6 @@ Get the latest development builds with cutting-edge features:
 
 - [Node.js](https://nodejs.org/) v22.13 or later
 - [pnpm](https://pnpm.io/)
-- To package the macOS app: macOS 26 and Xcode 26 or later, which compile its Icon Composer app icon
 
 #### Steps
 
@@ -78,6 +77,8 @@ Get the latest development builds with cutting-edge features:
    ```
 
    Built packages will be available in the `out/make` directory.
+
+   Packaging for macOS needs macOS 26 or later with Xcode 26 or later: the app icon is an Icon Composer document (`src/assets/icons/prod/icon.icon`), which Electron Packager compiles with `actool` into `Assets.car`. Re-export it from Icon Composer rather than editing it, then run `pnpm generate-icons prod` to re-render the `icon.icns` fallback from it. Development builds keep the PNG-based dev icon.
 
 ## Development
 

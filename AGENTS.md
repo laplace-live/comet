@@ -94,7 +94,7 @@ The IPC system uses:
 ## Important Files
 
 - `forge.config.ts` - Electron Forge build configuration
-- `src/assets/icons/prod/icon.icon` - macOS app icon, an Icon Composer document replaced wholesale on re-export (don't edit by hand). Packaging compiles it with `actool`, so a production `pnpm package`/`pnpm make` on macOS needs macOS 26 and Xcode 26; `icon.icns` next to it is the fallback for older macOS
+- `src/assets/icons/prod/icon.icon` - macOS app icon, an Icon Composer document replaced wholesale on re-export (don't edit by hand). Packaging compiles it with `actool`, so a production `pnpm package`/`pnpm make` on macOS needs macOS 26 and Xcode 26; `icon.icns` next to it is the fallback for older macOS, re-rendered from it by `pnpm generate-icons prod` after a re-export
 - `vite.main.config.ts` / `vite.renderer.config.ts` - Vite configs for each process
 - `src/lib/const.ts` - Centralized constants (MSG_TYPE, MSG_SOURCE, SESSION_TYPE, image formats, API endpoints)
 - `src/lib/ipc.ts` - IPC contract (channel names and type definitions for all IPC communication)
