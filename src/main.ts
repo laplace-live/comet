@@ -1,6 +1,16 @@
-import path, { dirname } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { app, autoUpdater, BrowserWindow, clipboard, ipcMain, Menu, Notification, nativeImage, shell } from 'electron'
+import path from 'node:path'
+import {
+  app,
+  autoUpdater,
+  BrowserWindow,
+  ClipboardItem,
+  clipboard,
+  ipcMain,
+  Menu,
+  Notification,
+  nativeImage,
+  shell,
+} from 'electron'
 import started from 'electron-squirrel-startup'
 import { UpdateSourceType, updateElectronApp } from 'update-electron-app'
 
@@ -11,10 +21,6 @@ import { cleanupBroadcastWebSocket, initBroadcastWebSocket } from './api/broadca
 import { UPDATE_BASE_URL } from './lib/const'
 import { IpcChannel, IpcEvent } from './lib/ipc'
 import { createTray, destroyTray, focusMainWindow, maybeShowTrayHint, updateTrayUnread } from './tray'
-
-// https://github.com/electron/forge/issues/3439#issuecomment-3197027877
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
 
 // Set to true once the user explicitly quits (tray menu, Ctrl+Q, or an update
 // install) so the window 'close' handler stops hiding to the tray and lets the
@@ -292,7 +298,9 @@ ipcMain.handle(IpcChannel.CLIPBOARD_COPY_IMAGE, async (_event, params: CopyImage
       return { success: false, error: 'Invalid image data' }
     }
 
-    clipboard.writeImage(image)
+    // Copy into a plain Uint8Array: Node's Buffer isn't assignable to the DOM BlobPart type
+    const png = new Blob([new Uint8Array(image.toPNG())], { type: 'image/png' })
+    await clipboard.write([new ClipboardItem({ 'image/png': png })])
     return { success: true }
   } catch (err) {
     console.error('[Clipboard] Failed to copy image:', err)
@@ -311,7 +319,7 @@ const createWindow = () => {
     trafficLightPosition: { x: 16, y: 16 },
     autoHideMenuBar: true,
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
     },

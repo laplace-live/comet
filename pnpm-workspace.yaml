@@ -2,12 +2,5 @@ nodeLinker: hoisted
 blockExoticSubdeps: false
 allowBuilds:
   electron-winstaller: true
-  esbuild: true
   protobufjs: true
   unrs-resolver: true
-onlyBuiltDependencies:
-  - electron
-  - electron-winstaller
-  - esbuild
-  - protobufjs
-  - unrs-resolver

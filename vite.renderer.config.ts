@@ -16,9 +16,10 @@ export default defineConfig(({ mode }) => ({
       '@': path.resolve(__dirname, './src'),
     },
   },
-  esbuild: {
-    // Strip console.log and debugger statements in production
-    drop: mode === 'production' ? ['debugger'] : [],
-    pure: mode === 'production' ? ['console.log'] : [],
+  build: {
+    rolldownOptions: {
+      // Strip console.log calls in production (the minifier already drops debugger statements)
+      treeshake: mode === 'production' ? { manualPureFunctions: ['console.log'] } : undefined,
+    },
   },
 }))

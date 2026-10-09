@@ -35,7 +35,7 @@ let qrStatus
 before(async () => {
   const bundle = await build({
     configFile: false,
-    envFile: false,
+    envDir: false,
     root: fileURLToPath(new URL('..', import.meta.url)),
     logLevel: 'error',
     resolve: { alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) } },
@@ -44,7 +44,7 @@ before(async () => {
       minify: false,
       target: 'esnext',
       lib: { entry: '\0qr-login-test:entry', formats: ['es'] },
-      rollupOptions: { input: '\0qr-login-test:entry', external: /^node:/, output: { inlineDynamicImports: true } },
+      rolldownOptions: { input: '\0qr-login-test:entry', external: /^node:/, output: { codeSplitting: false } },
     },
     plugins: [
       {

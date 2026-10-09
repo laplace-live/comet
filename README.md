@@ -50,7 +50,7 @@ Get the latest development builds with cutting-edge features:
 
 #### Prerequisites
 
-- [Node.js](https://nodejs.org/) v22 or later
+- [Node.js](https://nodejs.org/) v22.13 or later
 - [pnpm](https://pnpm.io/)
 
 #### Steps
