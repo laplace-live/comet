@@ -14,7 +14,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "node --test tests/*.test.mjs && node scripts/run-renderer-tests.mjs",
-    "generate-icons": "bun run scripts/generate-icons.ts"
+    "generate-icons": "bun run scripts/generate-icons.ts",
+    "screenshots": "node scripts/screenshots.ts"
   },
   "keywords": [],
   "author": {

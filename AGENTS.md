@@ -14,7 +14,10 @@ pnpm make           # Create distributable packages for current platform
 pnpm package        # Package app without creating installers
 pnpm lint           # Run ESLint
 pnpm generate-icons # Generate app icons (uses bun)
+pnpm screenshots    # Capture laplace.live's screenshots of the app into screenshots/
 ```
+
+`pnpm screenshots` runs the real app against a made-up Bilibili and takes focus for each capture; how it works, and when to rerun it, is in [docs/screenshots.md](docs/screenshots.md).
 
 ## Architecture
 

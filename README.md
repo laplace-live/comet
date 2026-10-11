@@ -50,7 +50,7 @@ Get the latest development builds with cutting-edge features:
 
 #### Prerequisites
 
-- [Node.js](https://nodejs.org/) v22.13 or later
+- [Node.js](https://nodejs.org/) v22.13 or later (v22.18 or later for `pnpm screenshots`, which runs TypeScript directly)
 - [pnpm](https://pnpm.io/)
 
 #### Steps
@@ -91,6 +91,7 @@ Get the latest development builds with cutting-edge features:
 | `pnpm make` | Create distributable packages for current platform |
 | `pnpm lint` | Run ESLint on the codebase |
 | `pnpm generate-icons` | Generate app icons for all platforms |
+| `pnpm screenshots` | Capture the website's screenshots of the app into `screenshots/` ([how it works](docs/screenshots.md)) |
 
 ## Security
 
@@ -118,6 +119,7 @@ Versions and the changelog are managed by [Changesets](https://changesets.dev). 
    Use `minor` for new features and substantial behavior changes, `patch` for fixes and small changes. Start the summary with `feat:`, `fix:`, `perf:` or `chore:`, then one capitalized sentence written for users — the prefix is stripped, and the rest lands verbatim in `CHANGELOG.md` and the GitHub Release. CI, docs, and refactors with no user-visible effect need no changeset; `pnpm exec changeset status` lists what is pending.
 2. While changesets sit on `master`, the Release workflow keeps a `chore: version packages` PR open that bumps the version and updates `CHANGELOG.md`.
 3. Merging that PR tags `v<version>` and creates the GitHub Release from the new changelog entry. The tag triggers Build and Release, which signs the macOS and Windows builds, uploads them to the auto-update feed, and attaches the installers to that release.
+4. Then refresh the website's screenshots on the updated `master` with `pnpm screenshots` and commit the PNGs it rewrites. The About shot shows the version, which only that merge bumps, so they change with every release ([docs/screenshots.md](docs/screenshots.md)).
 
 ## Contributing
 
