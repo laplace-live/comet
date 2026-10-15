@@ -39,7 +39,7 @@
     "electron-squirrel-startup": "^1.0.1",
     "electron-store": "^11.0.2",
     "lucide-react": "^1.53.0",
-    "protobufjs": "^8.8.0",
+    "protobufjs": "^8.8.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "react-resizable-panels": "^4.14.3",
