@@ -12,9 +12,9 @@ const mockModules = {
     export const handlers = new Map()
     export const ipcMain = { handle: (channel, handler) => handlers.set(channel, handler) }
     export const safeStorage = {
-      isEncryptionAvailable: () => true,
-      encryptString: value => Buffer.from(value),
-      decryptString: value => value.toString('utf8'),
+      isAsyncEncryptionAvailable: async () => true,
+      encryptStringAsync: async value => Buffer.from(value),
+      decryptStringAsync: async value => ({ result: value.toString('utf8'), shouldReEncrypt: false }),
     }
   `,
   'electron-store': `

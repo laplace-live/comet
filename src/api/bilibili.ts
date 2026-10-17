@@ -273,10 +273,10 @@ function getOrCreateDevId(mid: number | string): string {
 }
 
 // Helper to encrypt data
-function encryptData(data: unknown): string {
+async function encryptData(data: unknown): Promise<string> {
   const jsonString = JSON.stringify(data)
-  if (safeStorage.isEncryptionAvailable()) {
-    const encrypted = safeStorage.encryptString(jsonString)
+  if (await safeStorage.isAsyncEncryptionAvailable()) {
+    const encrypted = await safeStorage.encryptStringAsync(jsonString)
     return encrypted.toString('base64')
   }
   // Fallback to unencrypted storage if safeStorage is not available
@@ -284,62 +284,88 @@ function encryptData(data: unknown): string {
   return Buffer.from(jsonString).toString('base64')
 }
 
-// Helper to decrypt data
-function decryptData<T>(encrypted: string): T | null {
+// Helper to decrypt data. shouldReEncrypt means it was sealed with a key safeStorage has since replaced
+async function decryptData<T>(encrypted: string): Promise<{ value: T; shouldReEncrypt: boolean } | null> {
   try {
-    if (safeStorage.isEncryptionAvailable()) {
-      const decrypted = safeStorage.decryptString(Buffer.from(encrypted, 'base64'))
-      return JSON.parse(decrypted)
+    if (await safeStorage.isAsyncEncryptionAvailable()) {
+      const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(Buffer.from(encrypted, 'base64'))
+      return { value: JSON.parse(result), shouldReEncrypt }
     }
     // Fallback for unencrypted storage
-    return JSON.parse(Buffer.from(encrypted, 'base64').toString('utf-8'))
+    return { value: JSON.parse(Buffer.from(encrypted, 'base64').toString('utf-8')), shouldReEncrypt: false }
   } catch (error) {
     console.error('Failed to decrypt data:', error)
     return null
   }
 }
 
+// A change to the accounts decrypts the list, edits it and encrypts it again, waiting on safeStorage in between, so
+// changes run one at a time: two at once would each edit their own copy, and the later save would drop the other's.
+let accountChanges: Promise<unknown> = Promise.resolve()
+
+function changeAccounts<T>(change: () => Promise<T>): Promise<T> {
+  const result = accountChanges.then(change)
+  accountChanges = result.catch(() => undefined)
+  return result
+}
+
 // Get all stored accounts
-function getAccounts(): StoredAccount[] {
+async function getAccounts(): Promise<StoredAccount[]> {
   const encrypted = store.get('accounts')
   if (!encrypted) return []
 
-  const accounts = decryptData<StoredAccount[]>(encrypted)
-  return accounts || []
+  const decrypted = await decryptData<StoredAccount[]>(encrypted)
+  if (decrypted?.shouldReEncrypt) {
+    resealAccounts(encrypted)
+  }
+  return decrypted?.value || []
+}
+
+// Seal the accounts again with safeStorage's current key, unless a save has replaced them by then
+function resealAccounts(encrypted: string): void {
+  changeAccounts(async () => {
+    if (store.get('accounts') !== encrypted) return
+    const decrypted = await decryptData<StoredAccount[]>(encrypted)
+    if (decrypted?.shouldReEncrypt) {
+      await saveAccounts(decrypted.value)
+    }
+  }).catch(error => console.error('Failed to re-encrypt accounts:', error))
 }
 
 // Save all accounts (replaces existing)
-function saveAccounts(accounts: StoredAccount[]): void {
+async function saveAccounts(accounts: StoredAccount[]): Promise<void> {
   if (accounts.length === 0) {
     store.set('accounts', null)
     store.set('activeAccountMid', null)
     return
   }
-  store.set('accounts', encryptData(accounts))
+  store.set('accounts', await encryptData(accounts))
 }
 
 // Add or update an account
-function saveAccount(credentials: BilibiliCredentials, userInfo: StoredAccountUserInfo): void {
-  const accounts = getAccounts()
-  const existingIndex = accounts.findIndex(a => a.userInfo.mid === userInfo.mid)
+function saveAccount(credentials: BilibiliCredentials, userInfo: StoredAccountUserInfo): Promise<void> {
+  return changeAccounts(async () => {
+    const accounts = await getAccounts()
+    const existingIndex = accounts.findIndex(a => a.userInfo.mid === userInfo.mid)
 
-  const newAccount: StoredAccount = { credentials, userInfo, isExpired: false }
+    const newAccount: StoredAccount = { credentials, userInfo, isExpired: false }
 
-  if (existingIndex >= 0) {
-    // Update existing account - preserve userInfo but update credentials and clear expired
-    accounts[existingIndex] = newAccount
-  } else {
-    // Add new account
-    accounts.push(newAccount)
-  }
+    if (existingIndex >= 0) {
+      // Update existing account - preserve userInfo but update credentials and clear expired
+      accounts[existingIndex] = newAccount
+    } else {
+      // Add new account
+      accounts.push(newAccount)
+    }
 
-  saveAccounts(accounts)
+    await saveAccounts(accounts)
 
-  // If this is the first account or no active account, set it as active
-  const activeAccountMid = store.get('activeAccountMid')
-  if (!activeAccountMid || accounts.length === 1) {
-    store.set('activeAccountMid', userInfo.mid)
-  }
+    // If this is the first account or no active account, set it as active
+    const activeAccountMid = store.get('activeAccountMid')
+    if (!activeAccountMid || accounts.length === 1) {
+      store.set('activeAccountMid', userInfo.mid)
+    }
+  })
 }
 
 // Get the active account's mid
@@ -348,112 +374,124 @@ function getActiveAccountMid(): number | null {
 }
 
 // Set the active account by mid
-function setActiveAccount(mid: number): boolean {
-  const accounts = getAccounts()
-  const account = accounts.find(a => a.userInfo.mid === mid)
-  if (!account) return false
+function setActiveAccount(mid: number): Promise<boolean> {
+  return changeAccounts(async () => {
+    const accounts = await getAccounts()
+    const account = accounts.find(a => a.userInfo.mid === mid)
+    if (!account) return false
 
-  store.set('activeAccountMid', mid)
-  return true
+    store.set('activeAccountMid', mid)
+    return true
+  })
 }
 
 // Get credentials for the active account
-function getCredentials(): BilibiliCredentials | null {
+async function getCredentials(): Promise<BilibiliCredentials | null> {
   const activeAccountMid = getActiveAccountMid()
   if (!activeAccountMid) return null
 
-  const accounts = getAccounts()
+  const accounts = await getAccounts()
   const account = accounts.find(a => a.userInfo.mid === activeAccountMid)
   return account?.credentials || null
 }
 
 // Get the active account (credentials + userInfo)
-function getActiveAccount(): StoredAccount | null {
+async function getActiveAccount(): Promise<StoredAccount | null> {
   const activeAccountMid = getActiveAccountMid()
   if (!activeAccountMid) return null
 
-  const accounts = getAccounts()
+  const accounts = await getAccounts()
   return accounts.find(a => a.userInfo.mid === activeAccountMid) || null
 }
 
 // Remove an account by mid
-function removeAccount(mid: number): boolean {
-  const accounts = getAccounts()
-  const filteredAccounts = accounts.filter(a => a.userInfo.mid !== mid)
+function removeAccount(mid: number): Promise<boolean> {
+  return changeAccounts(async () => {
+    const accounts = await getAccounts()
+    const filteredAccounts = accounts.filter(a => a.userInfo.mid !== mid)
 
-  if (filteredAccounts.length === accounts.length) {
-    // Account not found
-    return false
-  }
-
-  saveAccounts(filteredAccounts)
-
-  // If we removed the active account, switch to another one
-  const activeAccountMid = getActiveAccountMid()
-  if (activeAccountMid === mid) {
-    if (filteredAccounts.length > 0) {
-      store.set('activeAccountMid', filteredAccounts[0].userInfo.mid)
-    } else {
-      store.set('activeAccountMid', null)
+    if (filteredAccounts.length === accounts.length) {
+      // Account not found
+      return false
     }
-  }
 
-  return true
+    await saveAccounts(filteredAccounts)
+
+    // If we removed the active account, switch to another one
+    const activeAccountMid = getActiveAccountMid()
+    if (activeAccountMid === mid) {
+      if (filteredAccounts.length > 0) {
+        store.set('activeAccountMid', filteredAccounts[0].userInfo.mid)
+      } else {
+        store.set('activeAccountMid', null)
+      }
+    }
+
+    return true
+  })
 }
 
 // Reorder accounts by an array of mids
-function reorderAccounts(mids: number[]): boolean {
-  const accounts = getAccounts()
+function reorderAccounts(mids: number[]): Promise<boolean> {
+  return changeAccounts(async () => {
+    const accounts = await getAccounts()
 
-  // Create a map for quick lookup
-  const accountMap = new Map(accounts.map(a => [a.userInfo.mid, a]))
+    // Create a map for quick lookup
+    const accountMap = new Map(accounts.map(a => [a.userInfo.mid, a]))
 
-  // Build reordered list
-  const reordered: StoredAccount[] = []
-  for (const mid of mids) {
-    const account = accountMap.get(mid)
-    if (account) {
-      reordered.push(account)
-      accountMap.delete(mid) // Remove to track any missing
+    // Build reordered list
+    const reordered: StoredAccount[] = []
+    for (const mid of mids) {
+      const account = accountMap.get(mid)
+      if (account) {
+        reordered.push(account)
+        accountMap.delete(mid) // Remove to track any missing
+      }
     }
-  }
 
-  // Add any remaining accounts that weren't in the mids list (shouldn't happen, but safety)
-  for (const account of accountMap.values()) {
-    reordered.push(account)
-  }
+    // Add any remaining accounts that weren't in the mids list (shouldn't happen, but safety)
+    for (const account of accountMap.values()) {
+      reordered.push(account)
+    }
 
-  saveAccounts(reordered)
-  return true
+    await saveAccounts(reordered)
+    return true
+  })
 }
 
 // Mark an account as expired
-function markAccountExpired(mid: number): boolean {
-  const accounts = getAccounts()
-  const account = accounts.find(a => a.userInfo.mid === mid)
-  if (!account) return false
+function markAccountExpired(mid: number): Promise<boolean> {
+  return changeAccounts(async () => {
+    const accounts = await getAccounts()
+    const account = accounts.find(a => a.userInfo.mid === mid)
+    if (!account) return false
 
-  account.isExpired = true
-  saveAccounts(accounts)
-  return true
+    account.isExpired = true
+    await saveAccounts(accounts)
+    return true
+  })
 }
 
 // Update credentials for an existing account (re-authentication)
-function updateAccountCredentials(mid: number, credentials: BilibiliCredentials): boolean {
-  const accounts = getAccounts()
-  const account = accounts.find(a => a.userInfo.mid === mid)
-  if (!account) return false
+function updateAccountCredentials(mid: number, credentials: BilibiliCredentials): Promise<boolean> {
+  return changeAccounts(async () => {
+    const accounts = await getAccounts()
+    const account = accounts.find(a => a.userInfo.mid === mid)
+    if (!account) return false
 
-  account.credentials = credentials
-  account.isExpired = false // Clear expired flag on successful re-auth
-  saveAccounts(accounts)
-  return true
+    account.credentials = credentials
+    account.isExpired = false // Clear expired flag on successful re-auth
+    await saveAccounts(accounts)
+    return true
+  })
 }
 
 // Clear all accounts (full logout)
-function clearAllAccounts(): void {
-  store.set('accounts', null)
-  store.set('activeAccountMid', null)
+function clearAllAccounts(): Promise<void> {
+  return changeAccounts(async () => {
+    store.set('accounts', null)
+    store.set('activeAccountMid', null)
+  })
 }
 
 // Export for use by other modules (like WebSocket)
@@ -519,7 +557,7 @@ async function uploadImage(
   fields: (csrf: string) => Record<string, string>,
   label: string
 ): Promise<UploadImageResult> {
-  const credentials = getCredentials()
+  const credentials = await getCredentials()
 
   if (!credentials) {
     return { success: false, error: 'Not logged in. Please scan QR code to login.' }
@@ -649,7 +687,7 @@ export function registerBilibiliIpcHandlers() {
         }
 
         if (!skipSave) {
-          saveAccount(credentials, userInfo)
+          await saveAccount(credentials, userInfo)
         }
 
         return {
@@ -676,10 +714,10 @@ export function registerBilibiliIpcHandlers() {
   })
 
   // Logout current account (removes only the active account)
-  ipcMain.handle(IpcChannel.BILIBILI_LOGOUT, () => {
+  ipcMain.handle(IpcChannel.BILIBILI_LOGOUT, async () => {
     const activeAccountMid = getActiveAccountMid()
     if (activeAccountMid) {
-      removeAccount(activeAccountMid)
+      await removeAccount(activeAccountMid)
     }
     return { success: true }
   })
@@ -701,7 +739,7 @@ export function registerBilibiliIpcHandlers() {
     }
 
     const activeAccountMid = getActiveAccountMid()
-    const credentials = getCredentials()
+    const credentials = await getCredentials()
 
     if (!credentials || !activeAccountMid) {
       return { isLogin: false }
@@ -712,39 +750,41 @@ export function registerBilibiliIpcHandlers() {
 
     if (result.isLogin) {
       // Active account is valid - clear any expired flag and update user info (avatar, etc.)
-      const accounts = getAccounts()
-      const account = accounts.find(a => a.userInfo.mid === activeAccountMid)
-      if (account) {
-        let needsSave = false
+      await changeAccounts(async () => {
+        const accounts = await getAccounts()
+        const account = accounts.find(a => a.userInfo.mid === activeAccountMid)
+        if (account) {
+          let needsSave = false
 
-        // Clear expired flag if it was set
-        if (account.isExpired) {
-          account.isExpired = false
-          needsSave = true
-        }
+          // Clear expired flag if it was set
+          if (account.isExpired) {
+            account.isExpired = false
+            needsSave = true
+          }
 
-        // Update user info if changed (e.g., avatar, username)
-        if (result.face && result.face !== account.userInfo.face) {
-          account.userInfo.face = result.face
-          needsSave = true
-        }
-        if (result.uname && result.uname !== account.userInfo.uname) {
-          account.userInfo.uname = result.uname
-          needsSave = true
-        }
+          // Update user info if changed (e.g., avatar, username)
+          if (result.face && result.face !== account.userInfo.face) {
+            account.userInfo.face = result.face
+            needsSave = true
+          }
+          if (result.uname && result.uname !== account.userInfo.uname) {
+            account.userInfo.uname = result.uname
+            needsSave = true
+          }
 
-        if (needsSave) {
-          saveAccounts(accounts)
+          if (needsSave) {
+            await saveAccounts(accounts)
+          }
         }
-      }
+      })
       return result
     }
 
     // Active account is expired - mark it as expired instead of removing
-    markAccountExpired(activeAccountMid)
+    await markAccountExpired(activeAccountMid)
 
     // Try to find another non-expired account with valid credentials
-    const accounts = getAccounts()
+    const accounts = await getAccounts()
     for (const account of accounts) {
       if (account.userInfo.mid === activeAccountMid) continue // Skip the one we just marked expired
       if (account.isExpired) continue // Skip already-expired accounts
@@ -752,32 +792,34 @@ export function registerBilibiliIpcHandlers() {
       const accountResult = await checkAccountCredentials(account.credentials)
       if (accountResult.isLogin) {
         // Found a valid account - switch to it and update user info
-        setActiveAccount(account.userInfo.mid)
+        await setActiveAccount(account.userInfo.mid)
 
         // Re-fetch accounts to get fresh state (previous markAccountExpired calls may have modified the store)
-        const freshAccounts = getAccounts()
-        const freshAccount = freshAccounts.find(a => a.userInfo.mid === account.userInfo.mid)
+        await changeAccounts(async () => {
+          const freshAccounts = await getAccounts()
+          const freshAccount = freshAccounts.find(a => a.userInfo.mid === account.userInfo.mid)
 
-        // Update user info if changed (e.g., avatar, username)
-        if (freshAccount) {
-          let needsSave = false
-          if (accountResult.face && accountResult.face !== freshAccount.userInfo.face) {
-            freshAccount.userInfo.face = accountResult.face
-            needsSave = true
+          // Update user info if changed (e.g., avatar, username)
+          if (freshAccount) {
+            let needsSave = false
+            if (accountResult.face && accountResult.face !== freshAccount.userInfo.face) {
+              freshAccount.userInfo.face = accountResult.face
+              needsSave = true
+            }
+            if (accountResult.uname && accountResult.uname !== freshAccount.userInfo.uname) {
+              freshAccount.userInfo.uname = accountResult.uname
+              needsSave = true
+            }
+            if (needsSave) {
+              await saveAccounts(freshAccounts)
+            }
           }
-          if (accountResult.uname && accountResult.uname !== freshAccount.userInfo.uname) {
-            freshAccount.userInfo.uname = accountResult.uname
-            needsSave = true
-          }
-          if (needsSave) {
-            saveAccounts(freshAccounts)
-          }
-        }
+        })
 
         return accountResult
       }
       // This account is also expired - mark it
-      markAccountExpired(account.userInfo.mid)
+      await markAccountExpired(account.userInfo.mid)
     }
 
     // No valid accounts found - return expired state with the active account mid
@@ -786,8 +828,8 @@ export function registerBilibiliIpcHandlers() {
   })
 
   // Get all stored accounts (for account switcher UI)
-  ipcMain.handle(IpcChannel.BILIBILI_GET_ACCOUNTS, () => {
-    const accounts = getAccounts()
+  ipcMain.handle(IpcChannel.BILIBILI_GET_ACCOUNTS, async () => {
+    const accounts = await getAccounts()
     const activeAccountMid = getActiveAccountMid()
 
     // Return accounts without credentials (only user info for display)
@@ -803,17 +845,17 @@ export function registerBilibiliIpcHandlers() {
   })
 
   // Switch to a different account
-  ipcMain.handle(IpcChannel.BILIBILI_SET_ACTIVE_ACCOUNT, (_event, params: { mid: number }) => {
+  ipcMain.handle(IpcChannel.BILIBILI_SET_ACTIVE_ACCOUNT, async (_event, params: { mid: number }) => {
     const { mid } = params
-    const success = setActiveAccount(mid)
+    const success = await setActiveAccount(mid)
     return { success }
   })
 
   // Remove an account
-  ipcMain.handle(IpcChannel.BILIBILI_REMOVE_ACCOUNT, (_event, params: { mid: number }) => {
+  ipcMain.handle(IpcChannel.BILIBILI_REMOVE_ACCOUNT, async (_event, params: { mid: number }) => {
     const { mid } = params
-    const success = removeAccount(mid)
-    const accounts = getAccounts()
+    const success = await removeAccount(mid)
+    const accounts = await getAccounts()
     const activeAccountMid = getActiveAccountMid()
 
     return {
@@ -829,10 +871,10 @@ export function registerBilibiliIpcHandlers() {
   })
 
   // Reorder accounts (for keyboard shortcut ordering)
-  ipcMain.handle(IpcChannel.BILIBILI_REORDER_ACCOUNTS, (_event, params: { mids: number[] }) => {
+  ipcMain.handle(IpcChannel.BILIBILI_REORDER_ACCOUNTS, async (_event, params: { mids: number[] }) => {
     const { mids } = params
-    const success = reorderAccounts(mids)
-    const accounts = getAccounts()
+    const success = await reorderAccounts(mids)
+    const accounts = await getAccounts()
     const activeAccountMid = getActiveAccountMid()
 
     return {
@@ -852,7 +894,7 @@ export function registerBilibiliIpcHandlers() {
     IpcChannel.BILIBILI_REAUTH_ACCOUNT,
     async (_event, params: { mid: number; credentials: BilibiliCredentials }) => {
       const { mid, credentials } = params
-      const accounts = getAccounts()
+      const accounts = await getAccounts()
       const account = accounts.find(a => a.userInfo.mid === mid)
 
       if (!account) {
@@ -876,7 +918,7 @@ export function registerBilibiliIpcHandlers() {
       }
 
       // Update the account credentials
-      updateAccountCredentials(mid, credentials)
+      await updateAccountCredentials(mid, credentials)
 
       return { success: true, userInfo: profile }
     }
@@ -896,7 +938,7 @@ export function registerBilibiliIpcHandlers() {
       }
     ) => {
       const { sessionType = '1', size = '100', endTs } = params
-      const credentials = getCredentials()
+      const credentials = await getCredentials()
 
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
@@ -958,7 +1000,7 @@ export function registerBilibiliIpcHandlers() {
       }
     ) => {
       const { talkerId, sessionType = '1', size = '20', beginSeqno, endSeqno } = params
-      const credentials = getCredentials()
+      const credentials = await getCredentials()
 
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
@@ -1022,7 +1064,7 @@ export function registerBilibiliIpcHandlers() {
       }
     ) => {
       const { uids } = params
-      const credentials = getCredentials()
+      const credentials = await getCredentials()
 
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
@@ -1074,7 +1116,7 @@ export function registerBilibiliIpcHandlers() {
       }
     ) => {
       const { receiverId, receiverType, msgType, content } = params
-      const credentials = getCredentials()
+      const credentials = await getCredentials()
 
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
@@ -1204,7 +1246,7 @@ export function registerBilibiliIpcHandlers() {
       }
     ) => {
       const { talkerId, sessionType, ackSeqno } = params
-      const credentials = getCredentials()
+      const credentials = await getCredentials()
 
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
@@ -1265,7 +1307,7 @@ export function registerBilibiliIpcHandlers() {
       }
     ) => {
       const { dndUid, dndGroupId, sessionType, enabled } = params
-      const credentials = getCredentials()
+      const credentials = await getCredentials()
 
       if (!credentials) {
         return { success: false, error: 'Not logged in. Please scan QR code to login.' }
@@ -1334,7 +1376,7 @@ export function registerBilibiliIpcHandlers() {
       }
     ) => {
       const { talkerId, sessionType, pinned } = params
-      const credentials = getCredentials()
+      const credentials = await getCredentials()
 
       if (!credentials) {
         return { success: false, error: 'Not logged in. Please scan QR code to login.' }
@@ -1397,7 +1439,7 @@ export function registerBilibiliIpcHandlers() {
 
   // Fetch customer service chats, newest first
   ipcMain.handle(IpcChannel.BILIBILI_CUSTOMER_SERVICE_FETCH_SESSIONS, async () => {
-    const credentials = getCredentials()
+    const credentials = await getCredentials()
     if (!credentials) {
       return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
     }
@@ -1433,7 +1475,7 @@ export function registerBilibiliIpcHandlers() {
   ipcMain.handle(
     IpcChannel.BILIBILI_CUSTOMER_SERVICE_FETCH_MESSAGES,
     async (_event, params: FetchCustomerServiceMessagesParams) => {
-      const credentials = getCredentials()
+      const credentials = await getCredentials()
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
       }
@@ -1485,7 +1527,7 @@ export function registerBilibiliIpcHandlers() {
   ipcMain.handle(
     IpcChannel.BILIBILI_CUSTOMER_SERVICE_SEND_MESSAGE,
     async (_event, params: SendCustomerServiceMessageParams) => {
-      const credentials = getCredentials()
+      const credentials = await getCredentials()
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
       }
@@ -1551,7 +1593,7 @@ export function registerBilibiliIpcHandlers() {
 
   // Mark a customer service chat as read
   ipcMain.handle(IpcChannel.BILIBILI_CUSTOMER_SERVICE_UPDATE_ACK, async (_event, params: CustomerServiceShop) => {
-    const credentials = getCredentials()
+    const credentials = await getCredentials()
     if (!credentials) {
       return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
     }

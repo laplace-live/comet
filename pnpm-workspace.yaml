@@ -4,3 +4,5 @@ allowBuilds:
   electron-winstaller: true
   protobufjs: true
   unrs-resolver: true
+minimumReleaseAgeExclude:
+  - electron@44.9.0

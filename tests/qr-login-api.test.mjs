@@ -12,9 +12,9 @@ const mockModules = {
     export const handlers = new Map()
     export const ipcMain = { handle: (channel, handler) => handlers.set(channel, handler) }
     export const safeStorage = {
-      isEncryptionAvailable: () => true,
-      encryptString: value => Buffer.from(value),
-      decryptString: value => value.toString('utf8'),
+      isAsyncEncryptionAvailable: async () => true,
+      encryptStringAsync: async value => Buffer.from(value),
+      decryptStringAsync: async value => ({ result: value.toString('utf8'), shouldReEncrypt: false }),
     }
   `,
   'electron-store': `
@@ -79,8 +79,8 @@ before(async () => {
   api.registerBilibiliIpcHandlers()
 })
 
-beforeEach(() => {
-  api.clearAllAccounts()
+beforeEach(async () => {
+  await api.clearAllAccounts()
 })
 
 const credentials = {
@@ -341,4 +341,31 @@ test('scanned status remains pending without account creation', async t => {
   mockFetch(t, [Response.json(payload)])
   assert.deepEqual(await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' }), payload)
   await assertNoAccount()
+})
+
+test('two logins that finish together both keep their account', async t => {
+  const other = { ...credentials, DedeUserID: 67890 }
+  // Each poll signs in its own account; NAV answers for whichever account the cookie carries
+  t.mock.method(globalThis, 'fetch', async (input, init = {}) => {
+    const url = new URL(String(input))
+    if (`${url.origin}${url.pathname}` === endpoints.QR_POLL) {
+      return pollResponse(url.searchParams.get('qrcode_key') === 'other-key' ? legacyUrl(other) : legacyUrl())
+    }
+    const mid = Number(/DedeUserID=(\d+)/.exec(new Headers(init.headers).get('Cookie'))?.[1])
+    return Response.json({ code: 0, data: { isLogin: true, mid, uname: `Fixture ${mid}` } })
+  })
+  const results = await Promise.all([
+    invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' }),
+    invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'other-key' }),
+  ])
+  assert.deepEqual(
+    results.map(result => result.userInfo?.mid),
+    [credentials.DedeUserID, other.DedeUserID]
+  )
+  const { accounts } = await invoke(channels.BILIBILI_GET_ACCOUNTS)
+  assert.deepEqual(
+    accounts.map(account => account.mid).sort(),
+    [credentials.DedeUserID, other.DedeUserID].sort(),
+    "neither login's save may drop the other's account"
+  )
 })
