@@ -105,8 +105,17 @@ function encWbi(params: Record<string, string | number>, imgKey: string, subKey:
 }
 
 /**
+ * Whether a JSON reply refuses the signature instead of answering: a wrong or stale w_rid gets
+ * `{"code":0,"data":{"v_voucher":…}}`, which passes for a success
+ */
+function isWbiRejection(reply: unknown): boolean {
+  return !!(reply as { data?: { v_voucher?: unknown } | null } | null)?.data?.v_voucher
+}
+
+/**
  * Request with a Wbi-signed query and parse the JSON reply.
- * Rotated keys get a 412 block page instead of JSON, so that refreshes the keys and retries once.
+ * Rotated keys get a 412 block page or a rejection instead of a reply, so that refreshes the keys and
+ * retries once. A POST other than that isn't retried, since it may have gone through.
  * @returns null when no keys can be fetched or the request stays blocked
  */
 async function fetchWbiSigned<T>(
@@ -123,11 +132,16 @@ async function fetchWbiSigned<T>(
     const query = encWbi(params, wbiKeys.imgKey, wbiKeys.subKey, Math.floor(Date.now() / 1000))
     const resp = await fetch(`${endpoint}?${query}`, init)
     const responseText = await resp.text()
+    let reply: T
     try {
-      return parse(responseText)
+      reply = parse(responseText)
     } catch {
       console.warn(`Wbi-signed request blocked (HTTP ${resp.status}): ${endpoint}`)
+      if (init.method === 'POST' && resp.status !== 412) return null
+      continue
     }
+    if (!isWbiRejection(reply)) return reply
+    console.warn(`Wbi signature rejected: ${endpoint}`)
   }
   return null
 }

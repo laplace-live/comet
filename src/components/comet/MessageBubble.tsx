@@ -21,11 +21,7 @@ import type { CheckLoginResult } from '@/types/electron'
 
 import { MSG_SOURCE, MSG_TYPE, SESSION_TYPE } from '@/types/bilibili'
 
-import {
-  getCustomerServicePreview,
-  isCustomerServiceSystemSender,
-  parseCustomerServiceContent,
-} from '@/lib/customer-service'
+import { getCustomerServicePreview, parseCustomerServiceContent } from '@/lib/customer-service'
 import { formatTime, getSessionAvatar } from '@/lib/message-utils'
 import { cn } from '@/lib/utils'
 
@@ -707,17 +703,23 @@ function renderCustomerServiceVideo(content: { title?: string; cover?: string; u
   )
 }
 
+// One-time choices picked from here, by the msg_key of the message offering them. The list unmounts a
+// bubble once it scrolls away, so this outlives it until the server's copy of the message says so too.
+const pickedCustomerServiceChoices = new Map<string, number>()
+
 // The bot's suggestions as buttons: picking one sends its reply, and one-time choices lock once picked
 function CustomerServiceChoices({
   content,
+  messageKey,
   onReply,
 }: {
   content: Extract<CustomerServiceContent, { kind: 'choices' }>
+  messageKey: string
   onReply?: (reply: CustomerServiceReply) => Promise<boolean>
 }) {
   const [sending, setSending] = useState(false)
   // Picked here, before the server's copy of the message says so
-  const [pickedHere, setPickedHere] = useState<number | null>(null)
+  const [pickedHere, setPickedHere] = useState(() => pickedCustomerServiceChoices.get(messageKey) ?? null)
   const done = !!content.once && (content.once.done || pickedHere !== null)
 
   const pick = async (index: number) => {
@@ -725,7 +727,10 @@ function CustomerServiceChoices({
     setSending(true)
     const sent = await onReply(content.choices[index].reply)
     setSending(false)
-    if (sent && content.once) setPickedHere(index)
+    if (sent && content.once) {
+      pickedCustomerServiceChoices.set(messageKey, index)
+      setPickedHere(index)
+    }
   }
 
   return (
@@ -767,7 +772,8 @@ function CustomerServiceChoices({
 function renderCustomerServiceContent(
   content: CustomerServiceContent,
   emojiInfoMap: EmojiInfoMap,
-  onReply?: (reply: CustomerServiceReply) => Promise<boolean>
+  onReply?: (reply: CustomerServiceReply) => Promise<boolean>,
+  messageKey = ''
 ): React.ReactNode {
   switch (content.kind) {
     case 'text':
@@ -782,7 +788,8 @@ function renderCustomerServiceContent(
       )
 
     case 'choices':
-      return <CustomerServiceChoices content={content} onReply={onReply} />
+      // Keyed, since the list can put another message where this one was
+      return <CustomerServiceChoices key={messageKey} content={content} messageKey={messageKey} onReply={onReply} />
 
     case 'image':
       return renderImageContent(content)
@@ -1013,15 +1020,14 @@ export function MessageBubble({
     )
   }
 
-  // Customer service messages have types of their own; notices (queue state, a closed session) are centered
+  // Customer service messages have types of their own; notices (queue state, a closed session) are centered.
+  // As in the web client, the content alone decides: what Bilibili's system sends can carry links and choices.
   const customerServiceContent = message.customer_service_sender ? parseCustomerServiceContent(message) : null
-  if (customerServiceContent && (customerServiceContent.kind === 'notice' || isCustomerServiceSystemSender(message))) {
+  if (customerServiceContent?.kind === 'notice') {
     return (
       <div className='flex items-center justify-center gap-1 py-1'>
         <div className='rounded-full bg-zinc-100 px-3 py-1 text-center text-muted-foreground text-xs dark:bg-zinc-800/50'>
-          {customerServiceContent.kind === 'notice'
-            ? renderCustomerServiceContent(customerServiceContent, emojiInfoMap)
-            : getCustomerServicePreview(message)}
+          {renderCustomerServiceContent(customerServiceContent, emojiInfoMap)}
         </div>
         {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
       </div>
@@ -1209,7 +1215,12 @@ export function MessageBubble({
                 )}
               >
                 {customerServiceContent
-                  ? renderCustomerServiceContent(customerServiceContent, emojiInfoMap, onCustomerServiceReply)
+                  ? renderCustomerServiceContent(
+                      customerServiceContent,
+                      emojiInfoMap,
+                      onCustomerServiceReply,
+                      String(message.msg_key)
+                    )
                   : renderMessageContent(message, emojiInfoMap)}
               </div>
             }

@@ -10,12 +10,15 @@ import type {
   CustomerServiceMessage,
   CustomerServiceMessagesResponse,
   CustomerServiceParticipant,
+  CustomerServiceSendMessageResponse,
   CustomerServiceSession,
 } from '@/types/bilibili'
 import type {
   CustomerServiceShop,
+  ErrorResponse,
   FetchCustomerServiceMessagesParams,
   FetchUsersParams,
+  NavigateToSessionParams,
   NewMessageNotification,
   SendCustomerServiceMessageParams,
   ShowNotificationParams,
@@ -23,10 +26,13 @@ import type {
 
 import { CS_MSG_TYPE, CS_SENDER_TYPE, SYSTEM_MSG_TYPE } from '@/types/bilibili'
 
-import { getCustomerServicePreview, parseCustomerServiceContent } from '@/lib/customer-service'
+import { getCustomerServicePreview, parseCustomerServiceContent, toDisplayMessage } from '@/lib/customer-service'
 
 import { type UsePrivateMessagesReturn, usePrivateMessages } from '@/hooks/usePrivateMessages'
 
+import { MessageBubble } from '@/components/comet/MessageBubble'
+
+import { getDraftKey, getSessionDraft } from '@/stores/useDrafts'
 import { useSettings } from '@/stores/useSettings'
 
 const globals = window as unknown as {
@@ -161,14 +167,19 @@ function csMessage(sender: CustomerServiceParticipant, text: string, seq: number
   }
 }
 
-function csSession(shop: CustomerServiceShop, name: string, unread = 0): CustomerServiceSession {
+function csSession(
+  shop: CustomerServiceShop,
+  name: string,
+  unread = 0,
+  lastMsg: CustomerServiceMessage | null = null
+): CustomerServiceSession {
   return {
     talker_info: {
       ...participant(CS_SENDER_TYPE.CUSTOMER, 0, name),
       shop_father_id: shop.shopFatherId,
       shop_id: shop.shopId,
     },
-    last_msg: null,
+    last_msg: lastMsg,
     unread_info: { unread_count: unread },
     session_ts: 1,
     max_seqno: '0',
@@ -208,7 +219,11 @@ let customerServiceSessions: CustomerServiceSession[]
 let customerServiceSessionsGate: Promise<unknown>
 let fetchCustomerServiceMessagesImpl: (
   params: FetchCustomerServiceMessagesParams
-) => Promise<CustomerServiceMessagesResponse>
+) => Promise<CustomerServiceMessagesResponse | ErrorResponse>
+let sendCustomerServiceMessageImpl: () => Promise<CustomerServiceSendMessageResponse>
+let fetchDirectMessagesImpl: () => Promise<BilibiliMessagesResponse>
+// What clicking a notification calls
+let navigate: (params: NavigateToSessionParams) => void
 let customerServiceCalls: {
   fetchMessages: FetchCustomerServiceMessagesParams[]
   sendMessage: SendCustomerServiceMessageParams[]
@@ -244,6 +259,11 @@ const sessionsResponse = (): BilibiliSessionsResponse => ({
   },
 })
 
+/** One page of a direct conversation, newest first */
+function directPage(messages: BilibiliMessage[]): BilibiliMessagesResponse {
+  return { code: 0, msg: '0', message: '0', ttl: 1, data: { messages, has_more: 0, min_seqno: 1, max_seqno: 1 } }
+}
+
 async function setup(initialSessions: BilibiliSession[]) {
   serverSessions = initialSessions
   fetchSessionsImpl = async () => sessionsResponse()
@@ -253,6 +273,9 @@ async function setup(initialSessions: BilibiliSession[]) {
   customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服')]
   customerServiceSessionsGate = Promise.resolve()
   fetchCustomerServiceMessagesImpl = async () => csPage([])
+  sendCustomerServiceMessageImpl = async () => ({ code: 0, message: '0', data: { msg_key: '900000000000000099' } })
+  // A lookup of the notified chat finds someone else's message, which a sender check would trust
+  fetchDirectMessagesImpl = async () => directPage([message(0, '您好，请问有什么可以帮您？', 1)])
   customerServiceCalls = { fetchMessages: [], sendMessage: [], updateAck: [] }
   directCalls = { fetchMessages: 0, sendMessage: 0 }
   signedInMid = ME
@@ -271,16 +294,9 @@ async function setup(initialSessions: BilibiliSession[]) {
       },
       wsDisconnect: async () => ({ success: true }),
       fetchSessions: () => fetchSessionsImpl(),
-      // A lookup of the notified chat finds someone else's message, which a sender check would trust
-      fetchMessages: async (): Promise<BilibiliMessagesResponse> => {
+      fetchMessages: () => {
         directCalls.fetchMessages++
-        return {
-          code: 0,
-          msg: '0',
-          message: '0',
-          ttl: 1,
-          data: { messages: [message(0, '您好，请问有什么可以帮您？', 1)], has_more: 0, min_seqno: 1, max_seqno: 1 },
-        }
+        return fetchDirectMessagesImpl()
       },
       sendMessage: async () => {
         directCalls.sendMessage++
@@ -295,9 +311,9 @@ async function setup(initialSessions: BilibiliSession[]) {
           customerServiceCalls.fetchMessages.push(params)
           return fetchCustomerServiceMessagesImpl(params)
         },
-        sendMessage: async (params: SendCustomerServiceMessageParams) => {
+        sendMessage: (params: SendCustomerServiceMessageParams) => {
           customerServiceCalls.sendMessage.push(params)
-          return { code: 0, message: '0', data: { msg_key: '900000000000000099' } }
+          return sendCustomerServiceMessageImpl()
         },
         updateAck: async (shop: CustomerServiceShop) => {
           customerServiceCalls.updateAck.push(shop)
@@ -337,7 +353,10 @@ async function setup(initialSessions: BilibiliSession[]) {
       onSessionUpdate: () => () => undefined,
       onWsConnected: () => () => undefined,
       onWsDisconnected: () => () => undefined,
-      onNavigateToSession: () => () => undefined,
+      onNavigateToSession: (callback: (params: NavigateToSessionParams) => void) => {
+        navigate = callback
+        return () => undefined
+      },
     },
   } as unknown as typeof window.electronAPI
   const container = document.createElement('div')
@@ -375,28 +394,33 @@ function test(name: string, run: () => Promise<void>) {
 
 test("the user's own customer service message does not notify", async () => {
   await setup([customerService(0, 1, '您好，请问有什么可以帮您？')])
+  // 客服消息 counts an older reply as unread, but the chat says who sent its latest message
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服', 1, csMessage(USER, '我想咨询一下', 2))]
   // Neither a message lookup nor an instant message that names someone else may count as a reply
-  await notify(customerServiceNotification, [customerService(0, 2, '我想咨询一下')])
+  await notify(customerServiceNotification, [customerService(1, 2, '我想咨询一下')])
   await notify({ ...customerServiceNotification, instantMsg: instantMsg(0, '我想咨询一下') }, [
-    customerService(0, 3, '我想咨询一下'),
+    customerService(1, 3, '我想咨询一下'),
   ])
-  assert(shown.length === 0, `a message that adds no unread must not notify, got ${shown.length}`)
+  assert(shown.length === 0, `the user's own message must not notify, got ${shown.length}`)
   assert(displayedCustomerService().session_ts === 3, 'the notifications should still refresh 客服消息')
 })
 
 test('a customer service reply notifies once as 客服消息', async () => {
   await setup([customerService(0, 1, '我想咨询一下')])
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服', 1, csMessage(BOT, '已为您转接人工客服', 2))]
   await notify(customerServiceNotification, [customerService(1, 2, '已为您转接人工客服')])
-  assert(shown.length === 1, 'a reply that raises the unread count should notify')
+  assert(shown.length === 1, 'a reply from someone else should notify')
   const [notification] = shown
   assert(notification.title === '客服消息', `title should name 客服消息, got ${notification.title}`)
   assert(notification.body === '已为您转接人工客服', `body should be the reply, got ${notification.body}`)
   assert(notification.icon === 'https://i0.hdslb.com/bfs/face/customer-service.png', 'icon should be its avatar')
   assert(notification.talkerId === 0 && notification.sessionType === 1, 'a click should open 客服消息')
+  assert(notification.customerServiceShop?.shopId === BILIBILI_SHOP.shopId, 'a click should open the chat that replied')
 })
 
 test('overlapping notifications for one reply notify once', async () => {
   await setup([customerService(0, 1, '我想咨询一下')])
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服', 1, csMessage(BOT, '机器人自动回复', 3))]
   const pending = deferred<BilibiliSessionsResponse>()
   fetchSessionsImpl = () => pending.promise
   serverSessions = [customerService(1, 3, '机器人自动回复')]
@@ -409,6 +433,40 @@ test('overlapping notifications for one reply notify once', async () => {
   assert(shown.length === 1, `one reply should notify once, got ${shown.length}`)
 })
 
+test("a reply notifies before 客服消息 is listed, and the user's own message still doesn't", async () => {
+  // 客服消息 sorts past the sessions loaded so far, with replies left unread
+  await setup([friend])
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服', 2, csMessage(USER, '我在手机上发的', 3))]
+  await notify(customerServiceNotification, [customerService(2, 3, '我在手机上发的'), friend])
+  assert(shown.length === 0, `the user's own message from another device must not notify, got ${shown.length}`)
+
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服', 3, csMessage(BOT, '已收到您的反馈', 4))]
+  await notify(customerServiceNotification, [customerService(3, 4, '已收到您的反馈'), friend])
+  assert(shown.length === 1 && shown[0].body === '已收到您的反馈', 'the reply should notify')
+})
+
+test('clicking a customer service notification opens the chat that replied', async () => {
+  await setup([customerService(0, 1, '您好'), friend])
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服'), csSession(STORE_SHOP, '会员购店铺')]
+  fetchCustomerServiceMessagesImpl = async ({ shopId }) =>
+    csPage([csMessage(BOT, shopId === STORE_SHOP.shopId ? '您的订单已发货' : '哔哩哔哩客服的旧消息', 1)])
+  // The user read Bilibili's own chat, then moved on
+  await flush(() => current.selectSession(displayedCustomerService()))
+  await flush(() => current.selectSession(friend))
+
+  customerServiceSessions = [
+    csSession(STORE_SHOP, '会员购店铺', 1, csMessage(BOT, '您的订单已发货', 2)),
+    csSession(BILIBILI_SHOP, '哔哩哔哩客服'),
+  ]
+  await notify({ talkerId: STORE_SHOP.shopId, sessionType: 4 }, [customerService(1, 2, '您的订单已发货'), friend])
+  const [notification] = shown
+  assert(notification?.body === '您的订单已发货', `the store's reply should notify, got ${notification?.body}`)
+  await flush(() => navigate(notification))
+
+  assert(current.activeCustomerService?.talker_info.name === '会员购店铺', 'the store chat should open')
+  assert(shownTexts().join('|') === '您的订单已发货', `the reply should show, got ${shownTexts()}`)
+})
+
 test('muting 客服消息 stays local and silences it', async () => {
   await setup([customerService(2, 1, '已为您转接人工客服'), friend])
   await flush(async () => assert(await current.toggleDnd(displayedCustomerService(), true), 'muting should succeed'))
@@ -416,12 +474,14 @@ test('muting 客服消息 stays local and silences it', async () => {
   assert(useSettings.getState().customerServiceMutedMids.includes(ME), 'the mute should be kept for this account')
   assert(badge === 0, `muted unread must leave the badge, got ${badge}`)
 
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服', 3, csMessage(BOT, '请问还有其他问题吗？', 2))]
   await notify(customerServiceNotification, [customerService(3, 2, '请问还有其他问题吗？'), friend])
   assert(shown.length === 0, 'a muted reply must not notify')
   assert(displayedCustomerService().is_dnd === 1, 'the mute should survive a refresh')
 
   await flush(async () => assert(await current.toggleDnd(displayedCustomerService(), false), 'unmuting should succeed'))
   assert(displayedCustomerService().is_dnd === 0 && badge === 3, 'unmuting should restore the session')
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服', 4, csMessage(BOT, '感谢您的耐心等待', 3))]
   await notify(customerServiceNotification, [customerService(4, 3, '感谢您的耐心等待'), friend])
   assert(shown.length === 1, 'an unmuted reply should notify again')
 })
@@ -656,6 +716,318 @@ test('businesses and the human agent can be picked once', async () => {
   )
   const manualDone = parse(CS_MSG_TYPE.MACHINE_ANSWER, { type: 4, selected: 1 })
   assert(manualDone.kind === 'choices' && manualDone.once?.done, 'a human agent asked for should lock')
+})
+
+test('a direct conversation that loads after 客服消息 opens leaves its chat alone', async () => {
+  await setup([customerService(1, 1, '您好'), friend])
+  const slow = deferred<BilibiliMessagesResponse>()
+  fetchDirectMessagesImpl = () => slow.promise
+  fetchCustomerServiceMessagesImpl = async () => csPage([csMessage(BOT, '客服的回复', 1)])
+
+  await flush(() => current.selectSession(friend))
+  await flush(() => current.selectSession(displayedCustomerService()))
+  await flush(() => slow.resolve(directPage([message(FRIEND, '好友的私信', 1)])))
+
+  assert(shownTexts().join('|') === '客服的回复', `only the customer service chat should show, got ${shownTexts()}`)
+  assert(!current.messagesLoading, 'the customer service chat should have finished loading')
+})
+
+test('picking a chat while 客服消息 reopens keeps that chat', async () => {
+  await setup([customerService(0, 1, '您好'), friend])
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服'), csSession(STORE_SHOP, '会员购店铺')]
+  fetchCustomerServiceMessagesImpl = async ({ shopId }) =>
+    csPage([csMessage(BOT, shopId === STORE_SHOP.shopId ? '会员购的回复' : '哔哩哔哩客服的回复', 1)])
+  await flush(() => current.selectSession(displayedCustomerService()))
+  await flush(() => current.selectSession(friend))
+
+  // Back in 客服消息, the chat switcher is up while the list reloads
+  const gate = deferred<void>()
+  customerServiceSessionsGate = gate.promise
+  await flush(() => current.selectSession(displayedCustomerService()))
+  await flush(() => current.selectCustomerService(STORE_SHOP))
+  await flush(() => gate.resolve())
+
+  assert(current.activeCustomerService?.talker_info.name === '会员购店铺', 'the chat picked should stay open')
+  assert(shownTexts().join('|') === '会员购的回复', `the picked chat should show, got ${shownTexts()}`)
+})
+
+test("a load still out for the last account stays out of the next one's chat", async () => {
+  await setup([customerService(1, 1, '您好')])
+  const slow = deferred<CustomerServiceMessagesResponse>()
+  fetchCustomerServiceMessagesImpl = () => slow.promise
+  await flush(() => current.selectSession(displayedCustomerService()))
+
+  // The other account has a chat with Bilibili's own customer service too, the same shop 0/0
+  fetchCustomerServiceMessagesImpl = async () => csPage([csMessage(BOT, '这个账号的客服回复', 1)])
+  await flush(() => current.switchAccount(FRIEND))
+  await flush(() => current.selectSession(displayedCustomerService()))
+  await flush(() => slow.resolve(csPage([csMessage(BOT, '上个账号的客服回复', 1)])))
+
+  assert(shownTexts().join('|') === '这个账号的客服回复', `only this account's chat should show, got ${shownTexts()}`)
+  assert(customerServiceCalls.updateAck.length === 1, 'only this account should mark its chat read')
+})
+
+test('a reply after a long gap pages back to the messages shown', async () => {
+  const opening = [csMessage(BOT, '请问有什么可以帮您？', 1)]
+  await openCustomerServiceChat(opening)
+  // 22 replies came in while notifications were missed, more than the newest page holds
+  const all = [...Array.from({ length: 22 }, (_, i) => csMessage(BOT, `回复 ${i + 2}`, i + 2)).reverse(), ...opening]
+  fetchCustomerServiceMessagesImpl = async ({ endSeqno }) => {
+    const start = endSeqno ? all.findIndex(m => m.seq_no === endSeqno) + 1 : 0
+    return csPage(all.slice(start, start + 20), start + 20 < all.length)
+  }
+  await notify(customerServiceNotification, [customerService(1, 23, '回复 23')])
+
+  const texts = shownTexts()
+  assert(
+    texts.length === 23 && texts[1] === '回复 2' && texts[22] === '回复 23',
+    `nothing should be missing, got ${texts}`
+  )
+})
+
+test('a page that fails keeps the messages that loaded', async () => {
+  await setup([customerService(1, 1, '您好')])
+  fetchCustomerServiceMessagesImpl = async ({ endSeqno }) =>
+    endSeqno
+      ? { error: 'Customer service messages were blocked by risk control', code: 412 }
+      : csPage([csMessage(BOT, '最新的回复', 2), csMessage(USER, '我的问题', 1)], true)
+  await flush(() => current.selectSession(displayedCustomerService()))
+
+  assert(shownTexts().join('|') === '我的问题|最新的回复', `the newest page should still show, got ${shownTexts()}`)
+  assert(!current.messagesLoading, 'the chat should not be left loading')
+})
+
+test("paging stops once the cursor doesn't move back", async () => {
+  await setup([customerService(1, 1, '您好')])
+  // An empty tail page that still says has_more, at seqno 0, which reads back as the newest page
+  fetchCustomerServiceMessagesImpl = async ({ endSeqno }) =>
+    endSeqno && endSeqno !== '0'
+      ? { code: 0, message: '0', data: { messages: [], has_more: 1, min_seqno: '0', max_seqno: '0' } }
+      : csPage([csMessage(BOT, '您好', 1)], true)
+  await flush(() => current.selectSession(displayedCustomerService()))
+
+  assert(
+    customerServiceCalls.fetchMessages.length === 2,
+    `paging should stop, asked ${customerServiceCalls.fetchMessages.length}`
+  )
+  assert(shownTexts().join('|') === '您好', `the chat should show once, got ${shownTexts()}`)
+})
+
+test("paging stops when a page's cursor stays put", async () => {
+  await setup([customerService(1, 1, '您好')])
+  const newer = csMessage(BOT, '较新', 2)
+  const older = csMessage(BOT, '较旧', 1)
+  // The second page holds messages but repeats the first page's cursor, which would page forever
+  const repeat: CustomerServiceMessagesResponse = {
+    code: 0,
+    message: '0',
+    data: { messages: [older], has_more: 1, min_seqno: newer.seq_no, max_seqno: older.seq_no },
+  }
+  fetchCustomerServiceMessagesImpl = async ({ endSeqno }) =>
+    // Bounded, so a loop fails this test rather than hanging the run
+    customerServiceCalls.fetchMessages.length > 4 ? csPage([]) : endSeqno ? repeat : csPage([newer], true)
+  await flush(() => current.selectSession(displayedCustomerService()))
+
+  assert(
+    customerServiceCalls.fetchMessages.length === 2,
+    `paging should stop, asked ${customerServiceCalls.fetchMessages.length}`
+  )
+  assert(shownTexts().join('|') === '较旧|较新', `the chat should show each page once, got ${shownTexts()}`)
+})
+
+test('客服消息 with no chat to show opens the one a reply brings', async () => {
+  await setup([customerService(0, 1, '您好')])
+  customerServiceSessions = []
+  await flush(() => current.selectSession(displayedCustomerService()))
+  assert(current.activeCustomerService === null, 'no chat should be open yet')
+  await flush(async () => assert(!(await current.sendMessage('你好')), 'a send with no chat should fail'))
+  assert(customerServiceCalls.sendMessage.length === 0, 'nothing should be sent without a chat')
+
+  customerServiceSessions = [
+    csSession(BILIBILI_SHOP, '哔哩哔哩客服', 1, csMessage(BOT, '您好，请问有什么可以帮您？', 1)),
+  ]
+  fetchCustomerServiceMessagesImpl = async () => csPage([csMessage(BOT, '您好，请问有什么可以帮您？', 1)])
+  await notify(customerServiceNotification, [customerService(1, 2, '您好，请问有什么可以帮您？')])
+
+  assert(current.activeCustomerService?.talker_info.name === '哔哩哔哩客服', 'the chat that appeared should open')
+  assert(shownTexts().join('|') === '您好，请问有什么可以帮您？', `its messages should show, got ${shownTexts()}`)
+})
+
+test('a send that returns after switching chats stays in its own chat', async () => {
+  await setup([customerService(0, 1, '您好')])
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服'), csSession(STORE_SHOP, '会员购店铺')]
+  fetchCustomerServiceMessagesImpl = async ({ shopId }) =>
+    csPage([csMessage(BOT, shopId === STORE_SHOP.shopId ? '会员购的回复' : '哔哩哔哩客服的回复', 1)])
+  const sending = deferred<CustomerServiceSendMessageResponse>()
+  sendCustomerServiceMessageImpl = () => sending.promise
+  await flush(() => current.selectSession(displayedCustomerService()))
+
+  let sent: Promise<boolean> | undefined
+  await flush(() => {
+    sent = current.sendMessage('发给哔哩哔哩客服的消息')
+  })
+  await flush(() => current.selectCustomerService(STORE_SHOP))
+  await flush(async () => {
+    sending.resolve({ code: 0, message: '0', data: { msg_key: '900000000000000099' } })
+    await sent
+  })
+
+  assert(customerServiceCalls.sendMessage[0]?.shopId === BILIBILI_SHOP.shopId, 'the message should go to its own chat')
+  assert(shownTexts().join('|') === '会员购的回复', `the store chat should not show it, got ${shownTexts()}`)
+})
+
+test("a refresh takes the server's copy of a choice already picked", async () => {
+  const businesses = (select: number) =>
+    JSON.stringify({ type: 0, business_list: [{ business_id: 11, business_name: '会员购', select }] })
+  const offering = { ...csMessage(BOT, '', 1), msg_type: CS_MSG_TYPE.SPLIT_ANSWER, content: businesses(0) }
+  await openCustomerServiceChat([offering])
+
+  fetchCustomerServiceMessagesImpl = async () =>
+    csPage([csMessage(BOT, '正在为您转接会员购客服', 2), { ...offering, content: businesses(1) }])
+  await notify(customerServiceNotification, [customerService(1, 2, '正在为您转接会员购客服')])
+
+  const content = parseCustomerServiceContent(current.messages[0])
+  assert(content.kind === 'choices' && content.once?.done, 'the pick the server recorded should lock the choices')
+  assert(current.messages.length === 2, `the reply should be added once, got ${current.messages.length}`)
+})
+
+test('a message that landed before one sent from here shows before it', async () => {
+  const opening = [csMessage(BOT, '请问有什么可以帮您？', 1)]
+  await openCustomerServiceChat(opening)
+  await flush(async () => assert(await current.sendMessage('我的问题'), 'send should succeed'))
+
+  // The agent's greeting was sent before the user's message, and only arrives now, with the reply
+  const mine = { ...csMessage(USER, '我的问题', 3), msg_key: '900000000000000099' }
+  fetchCustomerServiceMessagesImpl = async () =>
+    csPage([csMessage(BOT, '回复', 4), mine, csMessage(BOT, '人工客服已接入', 2), ...opening])
+  await notify(customerServiceNotification, [customerService(1, 4, '回复')])
+
+  assert(
+    shownTexts().join('|') === '请问有什么可以帮您？|人工客服已接入|我的问题|回复',
+    `messages should keep the chat's order, got ${shownTexts()}`
+  )
+})
+
+test("focusing the window doesn't mark read a chat that failed to load", async () => {
+  await setup([customerService(1, 1, '您好')])
+  fetchCustomerServiceMessagesImpl = async () => ({
+    error: 'Customer service messages were blocked by risk control',
+    code: 412,
+  })
+  await flush(() => current.selectSession(displayedCustomerService()))
+  await flush(() => window.dispatchEvent(new Event('focus')))
+
+  assert(customerServiceCalls.updateAck.length === 0, 'with nothing shown, nothing should be marked read')
+})
+
+test("reading one chat leaves another chat's new reply unread", async () => {
+  await setup([customerService(0, 1, '您好')])
+  customerServiceSessions = [csSession(BILIBILI_SHOP, '哔哩哔哩客服'), csSession(STORE_SHOP, '会员购店铺')]
+  fetchCustomerServiceMessagesImpl = async () => csPage([csMessage(BOT, '哔哩哔哩客服的回复', 1)])
+  await flush(() => current.selectSession(displayedCustomerService()))
+  // The user is reading Bilibili's own chat when the store replies
+  await flush(() => window.dispatchEvent(new Event('focus')))
+
+  // 客服消息's refresh lands first, then the chat on screen, and the chat list last
+  const chats = deferred<void>()
+  customerServiceSessionsGate = chats.promise
+  const page = deferred<CustomerServiceMessagesResponse>()
+  fetchCustomerServiceMessagesImpl = () => page.promise
+  customerServiceSessions = [
+    csSession(STORE_SHOP, '会员购店铺', 1, csMessage(BOT, '您的订单已发货', 2)),
+    csSession(BILIBILI_SHOP, '哔哩哔哩客服'),
+  ]
+  await notify({ talkerId: STORE_SHOP.shopId, sessionType: 4 }, [customerService(1, 2, '您的订单已发货')])
+  await flush(() => page.resolve(csPage([csMessage(BOT, '哔哩哔哩客服的回复', 1)])))
+  await flush(() => chats.resolve())
+
+  const unread = displayedCustomerService().unread_count
+  assert(unread === 1, `the store's reply should stay unread, got ${unread}`)
+  assert(badge === 1, `the dock badge should count it, got ${badge}`)
+})
+
+test('a ticket shows its id as written', async () => {
+  const ticket = parseCustomerServiceContent({
+    msg_type: CS_MSG_TYPE.TICKET,
+    content: '{"title":"留言通知","id":1781234567890123457,"create_name":"me"}',
+  })
+  const id = ticket.kind === 'card' ? ticket.details.find(detail => detail.label === '留言ID')?.value : undefined
+  assert(id === '1781234567890123457', `the id should not be rounded, got ${id}`)
+})
+
+test('each customer service chat keeps a draft of its own', async () => {
+  const folded = customerService(0, 1, '您好')
+  const store = getDraftKey(ME, folded, STORE_SHOP)
+  assert(store !== getDraftKey(ME, folded, BILIBILI_SHOP), 'two chats should not share a draft')
+  assert(getSessionDraft({ [store]: '订单 123' }, getDraftKey(ME, folded)) === '订单 123', '客服消息 should list it')
+  assert(getSessionDraft({ [store]: '订单 123' }, getDraftKey(ME, friend)) === undefined, 'others should not')
+})
+
+// A customer service message drawn on its own, as the message list draws it
+async function renderBubble(message: CustomerServiceMessage, onReply: () => Promise<boolean>) {
+  const container = document.createElement('div')
+  document.body.replaceChildren(container)
+  root = createRoot(container)
+  await flush(() =>
+    root.render(
+      <MessageBubble
+        message={toDisplayMessage(message)}
+        emojiInfoMap={{}}
+        isSent={false}
+        session={customerService(0, 1, '')}
+        userCache={{}}
+        userInfo={{ isLogin: true, mid: ME, uname: 'me' }}
+        onCustomerServiceReply={onReply}
+      />
+    )
+  )
+  return container
+}
+
+const choiceButton = (container: HTMLElement, text: string) =>
+  [...container.querySelectorAll('button')].find(button => button.textContent?.trim() === text)
+
+test('a business picked once stays picked when its bubble is drawn again', async () => {
+  const offering: CustomerServiceMessage = {
+    ...csMessage(BOT, '', 1),
+    msg_type: CS_MSG_TYPE.SPLIT_ANSWER,
+    content: JSON.stringify({
+      type: 0,
+      message: '请选择要咨询的业务',
+      business_list: [
+        { business_id: 11, business_name: '会员购', select: 0 },
+        { business_id: 12, business_name: '大会员', select: 0 },
+      ],
+    }),
+  }
+  let replies = 0
+  const onReply = async () => {
+    replies++
+    return true
+  }
+
+  const first = await renderBubble(offering, onReply)
+  await flush(() => choiceButton(first, '会员购')?.click())
+  assert(replies === 1, `picking should reply once, replied ${replies}`)
+
+  // The message list unmounts a bubble once it scrolls away, and draws a new one when it comes back
+  await flush(() => root.unmount())
+  const again = await renderBubble(offering, onReply)
+  const business = choiceButton(again, '大会员')
+  assert(business?.disabled, 'the businesses should stay locked once one is picked')
+  await flush(() => business?.click())
+  assert(replies === 1, `a second business must not be picked, replied ${replies}`)
+})
+
+test("choices from Bilibili's system sender stay buttons", async () => {
+  const welcome: CustomerServiceMessage = {
+    ...csMessage(participant(CS_SENDER_TYPE.SYS_NOTICE, 0, '系统通知'), '', 1),
+    msg_type: CS_MSG_TYPE.MACHINE_WELCOME_QUESTIONS,
+    content: JSON.stringify({ message: '猜你想问', problem_list: [{ problem_id: 1, intent: '如何申请退票？' }] }),
+  }
+  const container = await renderBubble(welcome, async () => true)
+  const question = choiceButton(container, '如何申请退票？')
+  assert(question && !question.disabled, 'the question should be a button to click, not text in a notice')
 })
 
 void (async () => {

@@ -45,7 +45,7 @@ import {
 import { Spinner } from '@/components/ui/spinner'
 import { toastManager } from '@/components/ui/toast'
 
-import { getDraftKey } from '@/stores/useDrafts'
+import { getDraftKey, useDrafts } from '@/stores/useDrafts'
 import { MessageInput } from './MessageInput'
 import { MessagesList } from './MessagesList'
 
@@ -171,6 +171,12 @@ function ChatView({
   const dragCounterRef = useRef(0)
 
   const sessionName = customerServiceTalker?.name || getSessionName(session, userCache)
+  // Each customer service chat keeps a draft of its own, as each conversation does
+  const sessionDraftKey = getDraftKey(userInfo?.mid ?? 0, session)
+  const draftKey =
+    isCustomerService && activeCustomerService
+      ? getDraftKey(userInfo?.mid ?? 0, session, getCustomerServiceShop(activeCustomerService))
+      : sessionDraftKey
   const isDnd = session.is_dnd === 1
   const isSticky = session.top_ts > 0
   const badgeLabel = isCustomerService ? activeCustomerService?.tag_name : session.is_follow === 1 ? '关注中' : null
@@ -198,6 +204,17 @@ function ChatView({
     setIsDragging(false)
     dragCounterRef.current = 0
   }, [session.talker_id])
+
+  // Text typed before 客服消息 had a chat to show is for the chat it then shows
+  useEffect(() => {
+    if (draftKey === sessionDraftKey) return
+    const { drafts, setDraft } = useDrafts.getState()
+    const typed = drafts[sessionDraftKey]
+    if (typed && !drafts[draftKey]) {
+      setDraft(draftKey, typed)
+      setDraft(sessionDraftKey, '')
+    }
+  }, [draftKey, sessionDraftKey])
 
   const scrollToBottom = useCallback(() => {
     if (messages.length > 0) {
@@ -393,7 +410,7 @@ function ChatView({
 
       {/* Message Input - isolated component to prevent re-renders of messages */}
       <MessageInput
-        draftKey={getDraftKey(userInfo?.mid ?? 0, session)}
+        draftKey={draftKey}
         sendingMessage={sendingMessage}
         droppedFile={droppedFile}
         onSendMessage={onSendMessage}

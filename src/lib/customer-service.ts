@@ -1,7 +1,7 @@
 import type { BilibiliMessage, CustomerServiceMessage, CustomerServiceSession } from '@/types/bilibili'
 import type { CustomerServiceShop } from '@/types/electron'
 
-import { CS_MSG_TYPE, CS_SENDER_TYPE, SESSION_TYPE } from '@/types/bilibili'
+import { CS_MSG_TYPE, SESSION_TYPE } from '@/types/bilibili'
 
 // Customer service chats (客服消息) run on their own backend, one chat per shop. Their messages
 // mostly have types of their own, so this turns each into one of a few shapes the bubble draws.
@@ -13,6 +13,45 @@ export function getCustomerServiceShop(session: CustomerServiceSession): Custome
 
 export function isSameShop(a: CustomerServiceShop | null, b: CustomerServiceShop | null): boolean {
   return !!a && !!b && a.shopFatherId === b.shopFatherId && a.shopId === b.shopId
+}
+
+/** The chat a WebSocket notification names, read as the web client does: type 4 is a store's, talkerId its shop */
+export function getNotifiedShop(notification: { talkerId: number; sessionType: number }): CustomerServiceShop {
+  return { shopFatherId: notification.sessionType === 4 ? 1 : 0, shopId: notification.talkerId || 0 }
+}
+
+/**
+ * Whether a page's min_seqno moves the cursor back from the last one, so paging always ends
+ * whatever the server sends (an empty page's 0, a repeat). Seqnos stay strings past Number.MAX_SAFE_INTEGER.
+ */
+export function isEarlierSeqno(seqno: string | undefined, before: string | undefined): seqno is string {
+  if (!seqno || !/^\d+$/.test(seqno)) return false
+  const value = BigInt(seqno)
+  return value > 0n && (before === undefined || value < BigInt(before))
+}
+
+/**
+ * The messages shown with the newest pages merged in by msg_key. The pages say where each of theirs goes,
+ * so one that landed before a message sent from here goes before it, and a shown one the server has
+ * changed since (a choice the bot recorded as picked) takes the server's copy. Messages sent from here
+ * that no page holds yet stay last.
+ * @param pages - oldest first, ending with the newest
+ */
+export function mergeCustomerServiceMessages(shown: BilibiliMessage[], pages: BilibiliMessage[]): BilibiliMessage[] {
+  const keyOf = (message: BilibiliMessage) => String(message.msg_key)
+  const fetched = new Set(pages.map(keyOf))
+  const shownByKey = new Map(shown.map(m => [keyOf(m), m]))
+  // Shown messages before the first one the pages hold are older than all of them
+  const first = shown.findIndex(m => fetched.has(keyOf(m)))
+  const merged = [
+    ...(first === -1 ? shown : shown.slice(0, first)),
+    ...pages.map(m => {
+      const same = shownByKey.get(keyOf(m))
+      return same && same.content === m.content && same.msg_status === m.msg_status ? same : m
+    }),
+    ...(first === -1 ? [] : shown.slice(first).filter(m => !fetched.has(keyOf(m)))),
+  ]
+  return merged.length === shown.length && merged.every((m, i) => m === shown[i]) ? shown : merged
 }
 
 /** A customer service message in the shape the message list draws */
@@ -39,11 +78,6 @@ export function toDisplayMessage(message: CustomerServiceMessage): BilibiliMessa
       face: message.sender_info.pic_url,
     },
   }
-}
-
-/** Sent by Bilibili rather than a person, drawn centred like other system notices */
-export function isCustomerServiceSystemSender(message: BilibiliMessage): boolean {
-  return message.customer_service_sender?.type === CS_SENDER_TYPE.SYS_NOTICE
 }
 
 export interface CustomerServiceLink {
@@ -345,18 +379,21 @@ export function parseCustomerServiceContent(
       return { kind: 'card', title: '[订单]', details: [], link: link(content.abs_url, '查看订单') }
     case CS_MSG_TYPE.GOODS:
       return { kind: 'card', title: '[商品]', details: [], link: link(content.abs_url, '查看商品') }
-    case CS_MSG_TYPE.TICKET:
+    case CS_MSG_TYPE.TICKET: {
+      // Ticket ids pass Number.MAX_SAFE_INTEGER, so they're read as written, as the web client reads them
+      const ticket = parseJson(String(message.content).replace(/("id"\s*:\s*)(\d+)/g, '$1"$2"'))
       return {
         kind: 'card',
-        title: string(content.title) || '[留言通知]',
+        title: string(ticket.title) || '[留言通知]',
         details: [
-          { label: '创建人', value: string(content.create_name) },
-          { label: '创建时间', value: string(content.create_time) },
-          { label: '留言ID', value: string(content.id) },
-          { label: '用户诉求', value: string(content.user_expect) },
+          { label: '创建人', value: string(ticket.create_name) },
+          { label: '创建时间', value: string(ticket.create_time) },
+          { label: '留言ID', value: string(ticket.id) },
+          { label: '用户诉求', value: string(ticket.user_expect) },
         ].filter(detail => detail.value),
-        link: link(content.jump_url, '查看留言'),
+        link: link(ticket.jump_url, '查看留言'),
       }
+    }
     case CS_MSG_TYPE.ARCHIVE:
       return {
         kind: 'video',

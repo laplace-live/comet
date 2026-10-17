@@ -267,11 +267,15 @@ export interface ShowNotificationParams {
   icon?: string
   talkerId: number
   sessionType: number
+  /** For 客服消息, the customer service chat the notification is for */
+  customerServiceShop?: CustomerServiceShop
 }
 
 export interface NavigateToSessionParams {
   talkerId: number
   sessionType: number
+  /** For 客服消息, the customer service chat to open it on */
+  customerServiceShop?: CustomerServiceShop
 }
 
 export interface CopyImageParams {

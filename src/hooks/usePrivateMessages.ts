@@ -6,6 +6,7 @@ import type {
   BilibiliMessage,
   BilibiliSession,
   CustomerServiceMessage,
+  CustomerServiceMessagesResponse,
   CustomerServiceSession,
 } from '@/types/bilibili'
 import type {
@@ -21,14 +22,17 @@ import type {
 import { CS_MSG_TYPE, CS_SENDER_TYPE, CUSTOMER_SERVICE_WS_SESSION_TYPES, SESSION_TYPE } from '@/types/bilibili'
 
 import { getImageType } from '@/lib/const'
-import { type CustomerServiceReply, getCustomerServiceShop, isSameShop, toDisplayMessage } from '@/lib/customer-service'
 import {
-  getLastMessagePreview,
-  getSessionAvatar,
-  getSessionName,
-  isCustomerServiceSession,
-  parseMessageContent,
-} from '@/lib/message-utils'
+  type CustomerServiceReply,
+  getCustomerServicePreview,
+  getCustomerServiceShop,
+  getNotifiedShop,
+  isEarlierSeqno,
+  isSameShop,
+  mergeCustomerServiceMessages,
+  toDisplayMessage,
+} from '@/lib/customer-service'
+import { getSessionAvatar, getSessionName, isCustomerServiceSession, parseMessageContent } from '@/lib/message-utils'
 
 import { toastManager } from '@/components/ui/toast'
 
@@ -43,6 +47,53 @@ function isErrorResponse<T extends object>(response: T | ErrorResponse): respons
 // Show the local 客服消息 mute as is_dnd, so it reads like any other muted session
 function withLocalDnd(session: BilibiliSession): BilibiliSession {
   return isCustomerServiceSession(session) ? { ...session, is_dnd: 1 } : session
+}
+
+const NO_CUSTOMER_SERVICE_CHAT = '暂无可回复的客服会话'
+
+interface CustomerServicePages {
+  /** Newest first, as the pages come */
+  messages: CustomerServiceMessage[]
+  emojiInfos: BilibiliEmojiInfo[]
+  /** Why paging stopped early, if a page failed */
+  error: string | null
+}
+
+/**
+ * Page back through a customer service chat, newest first, each page continuing from the oldest seqno
+ * of the last, until `enough` says so or the history runs out
+ * @param stale - checked after every page, so a load the user has moved on from stops there
+ * @returns null when it went stale
+ */
+async function fetchCustomerServicePages(
+  shop: CustomerServiceShop,
+  enough: (page: CustomerServiceMessage[]) => boolean,
+  stale: () => boolean
+): Promise<CustomerServicePages | null> {
+  const pages: CustomerServicePages = { messages: [], emojiInfos: [], error: null }
+  let endSeqno: string | undefined
+
+  for (;;) {
+    let data: CustomerServiceMessagesResponse | ErrorResponse
+    try {
+      data = await window.electronAPI.bilibili.customerService.fetchMessages({ ...shop, endSeqno })
+    } catch (err) {
+      if (stale()) return null
+      return { ...pages, error: err instanceof Error ? err.message : 'Failed to fetch customer service messages' }
+    }
+    if (stale()) return null
+    if (isErrorResponse(data) || data.code !== 0 || !data.data) {
+      const error = isErrorResponse(data) ? data.error : data.message
+      return { ...pages, error: error || 'Failed to fetch customer service messages' }
+    }
+
+    const page = data.data.messages || []
+    pages.messages.push(...page)
+    pages.emojiInfos.push(...(data.data.e_infos || []))
+    const more = data.data.has_more === 1 && page.length > 0 && isEarlierSeqno(data.data.min_seqno, endSeqno)
+    if (!more || enough(page)) return pages
+    endSeqno = data.data.min_seqno
+  }
 }
 
 // Map of emoji text (e.g., "[tv_doge]") to emoji info
@@ -193,10 +244,17 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
   const customerServiceSessionsRef = useRef<CustomerServiceSession[]>([])
   const activeCustomerServiceShopRef = useRef<CustomerServiceShop | null>(null)
+  // Bumped when another account signs in. Its chats can share shop ids with this one's
+  // (Bilibili's own is 0/0 for everyone), so replies still out for the last account check it
+  const customerServiceAccountRef = useRef(0)
+  // Bumped by every load of a chat (and by the account changing), so only the latest load lands
+  const customerServiceLoadRef = useRef(0)
 
-  useEffect(() => {
-    customerServiceSessionsRef.current = customerServiceSessions
-  }, [customerServiceSessions])
+  // Kept in step with the ref, which unread sums read without waiting for a render
+  const setChats = useCallback((list: CustomerServiceSession[]) => {
+    customerServiceSessionsRef.current = list
+    setCustomerServiceSessions(list)
+  }, [])
 
   // Also set synchronously, so a reply for a chat the user just left can tell
   const setActiveShop = useCallback((shop: CustomerServiceShop | null) => {
@@ -207,10 +265,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Customer service chats belong to an account: forget them when another one signs in
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset whenever the account changes
   useEffect(() => {
-    customerServiceSessionsRef.current = []
-    setCustomerServiceSessions([])
+    customerServiceAccountRef.current++
+    customerServiceLoadRef.current++
+    setChats([])
     setActiveShop(null)
-  }, [userInfo?.mid, setActiveShop])
+  }, [userInfo?.mid, setChats, setActiveShop])
 
   // Whether a reply for this customer service chat is still wanted
   const isCustomerServiceOpen = useCallback((shop: CustomerServiceShop) => {
@@ -219,21 +278,24 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   }, [])
 
   // Mark a customer service chat as read, and take it off 客服消息's unread, which counts every chat's
-  const ackCustomerService = useCallback((shop: CustomerServiceShop) => {
-    window.electronAPI.bilibili.customerService
-      .updateAck(shop)
-      .catch(err => console.error('Failed to mark customer service chat as read:', err))
+  const ackCustomerService = useCallback(
+    (shop: CustomerServiceShop) => {
+      window.electronAPI.bilibili.customerService
+        .updateAck(shop)
+        .then(result => {
+          if (isErrorResponse(result)) console.error('Failed to mark customer service chat as read:', result.error)
+        })
+        .catch(err => console.error('Failed to mark customer service chat as read:', err))
 
-    const othersUnread = customerServiceSessionsRef.current
-      .filter(s => !isSameShop(getCustomerServiceShop(s), shop))
-      .reduce((sum, s) => sum + (s.unread_info?.unread_count || 0), 0)
-    setCustomerServiceSessions(prev =>
-      prev.map(s =>
+      const chats = customerServiceSessionsRef.current.map(s =>
         isSameShop(getCustomerServiceShop(s), shop) ? { ...s, unread_info: { ...s.unread_info, unread_count: 0 } } : s
       )
-    )
-    setSessions(prev => prev.map(s => (isCustomerServiceSession(s) ? { ...s, unread_count: othersUnread } : s)))
-  }, [])
+      const othersUnread = chats.reduce((sum, s) => sum + (s.unread_info?.unread_count || 0), 0)
+      setChats(chats)
+      setSessions(prev => prev.map(s => (isCustomerServiceSession(s) ? { ...s, unread_count: othersUnread } : s)))
+    },
+    [setChats]
+  )
 
   // Track window focus state and mark current session as read when regaining focus
   useEffect(() => {
@@ -242,9 +304,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       // When window regains focus, mark the current session as read
       const session = selectedSessionRef.current
-      // 客服消息 is read one customer service chat at a time
+      // 客服消息 is read one customer service chat at a time, once it shows (not while it loads, or if it failed to)
       if (session && isCustomerServiceSession(session)) {
-        if (activeCustomerServiceShopRef.current) ackCustomerService(activeCustomerServiceShopRef.current)
+        const shop = activeCustomerServiceShopRef.current
+        if (shop && messagesRef.current.length > 0) ackCustomerService(shop)
       } else if (session) {
         // Derive the latest seqno from current messages to avoid using stale session data.
         // selectedSession.max_seqno may not reflect messages that arrived while unfocused.
@@ -581,90 +644,77 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
   // List the customer service chats in 客服消息, newest first; null when the request fails
   const fetchCustomerServiceSessions = useCallback(async (): Promise<CustomerServiceSession[] | null> => {
+    const account = customerServiceAccountRef.current
     try {
       const data = await window.electronAPI.bilibili.customerService.fetchSessions()
+      // Another account signed in while this was out, and these chats are the last one's
+      if (account !== customerServiceAccountRef.current) return null
       if (isErrorResponse(data) || data.code !== 0 || !data.data) {
         console.error('[usePrivateMessages] Failed to fetch customer service sessions:', data)
         return null
       }
 
       const list = data.data.session_list || []
-      customerServiceSessionsRef.current = list
-      setCustomerServiceSessions(list)
+      setChats(list)
       return list
     } catch (err) {
       console.error('[usePrivateMessages] Failed to fetch customer service sessions:', err)
       return null
     }
-  }, [])
+  }, [setChats])
 
   // Load a customer service chat, every page of it like fetchMessages does
   const fetchCustomerServiceMessages = useCallback(
     async (shop: CustomerServiceShop) => {
+      const load = ++customerServiceLoadRef.current
+      // Leaving the chat, opening it again or another account signing in drops this load, pages and all
+      const stale = () => load !== customerServiceLoadRef.current || !isCustomerServiceOpen(shop)
       setMessagesLoading(true)
       setEmojiInfoMap({})
 
-      try {
-        const loaded: CustomerServiceMessage[] = []
-        let endSeqno: string | undefined
-        let hasMore = true
+      const pages = await fetchCustomerServicePages(shop, () => false, stale)
+      if (!pages) return
 
-        // Pages run newest first, each continuing from the oldest seqno of the last
-        while (hasMore) {
-          const data = await window.electronAPI.bilibili.customerService.fetchMessages({ ...shop, endSeqno })
-
-          if (isErrorResponse(data)) {
-            throw new Error(data.error || 'Failed to fetch customer service messages')
-          }
-          if (data.code !== 0 || !data.data) {
-            throw new Error(data.message || 'Failed to fetch customer service messages')
-          }
-
-          loaded.push(...(data.data.messages || []))
-          mergeEmojiInfos(data.data.e_infos)
-
-          hasMore = data.data.has_more === 1 && !!data.data.min_seqno && data.data.min_seqno !== endSeqno
-          endSeqno = data.data.min_seqno
-        }
-
-        if (!isCustomerServiceOpen(shop)) return
-        setMessages(loaded.reverse().map(toDisplayMessage))
-        ackCustomerService(shop)
-      } catch (err) {
-        console.error('Failed to fetch customer service messages:', err)
-      } finally {
-        if (isCustomerServiceOpen(shop)) setMessagesLoading(false)
+      if (pages.error) {
+        console.error('Failed to fetch customer service messages:', pages.error)
+        toastManager.add({
+          type: 'error',
+          title: pages.messages.length > 0 ? '较早的消息加载失败' : '消息加载失败',
+          description: pages.error,
+        })
       }
+      // Whatever loaded still shows: pages come newest first, so a later one failing leaves the chat readable
+      mergeEmojiInfos(pages.emojiInfos)
+      setMessages(pages.messages.reverse().map(toDisplayMessage))
+      setMessagesLoading(false)
+      if (pages.messages.length > 0 || !pages.error) ackCustomerService(shop)
     },
     [mergeEmojiInfos, isCustomerServiceOpen, ackCustomerService]
   )
 
-  // Add the open customer service chat's newest messages, without a spinner
+  // Add the open customer service chat's newest messages, without a spinner. It pages back until it
+  // reaches what's shown, and takes the server's copy of those too (a choice the bot recorded as picked).
+  // `settled` holds the ack back until the session lists refreshing alongside have landed, so the unread
+  // it works out is neither taken from an older list nor overwritten by one.
   const fetchCustomerServiceMessagesQuietly = useCallback(
-    async (shop: CustomerServiceShop) => {
-      try {
-        const data = await window.electronAPI.bilibili.customerService.fetchMessages(shop)
-        if (isErrorResponse(data) || data.code !== 0 || !data.data) {
-          console.error('[usePrivateMessages] Silent customer service fetch failed')
-          return
-        }
-        if (!isCustomerServiceOpen(shop)) return
+    async (shop: CustomerServiceShop, settled?: Promise<unknown>) => {
+      const account = customerServiceAccountRef.current
+      const stale = () => account !== customerServiceAccountRef.current || !isCustomerServiceOpen(shop)
+      const shown = new Set(messagesRef.current.map(m => String(m.msg_key)))
 
-        mergeEmojiInfos(data.data.e_infos)
+      const pages = await fetchCustomerServicePages(shop, page => page.some(m => shown.has(m.msg_key)), stale)
+      if (!pages) return
+      if (pages.error) console.error('[usePrivateMessages] Silent customer service fetch failed:', pages.error)
+      if (pages.messages.length === 0) return
 
-        // The newest page repeats what's shown, including messages sent from here, so match on msg_key
-        const newest = (data.data.messages || []).map(toDisplayMessage).reverse()
-        setMessages(prev => {
-          const shown = new Set(prev.map(m => String(m.msg_key)))
-          const added = newest.filter(m => !shown.has(String(m.msg_key)))
-          return added.length > 0 ? [...prev, ...added] : prev
-        })
+      mergeEmojiInfos(pages.emojiInfos)
+      const newest = pages.messages.map(toDisplayMessage).reverse()
+      setMessages(prev => mergeCustomerServiceMessages(prev, newest))
 
-        // Only mark as read if the window is focused (user is actively viewing)
-        if (windowFocusedRef.current) ackCustomerService(shop)
-      } catch (err) {
-        console.error('[usePrivateMessages] Silent customer service fetch error:', err)
-      }
+      // Only mark as read if the window is focused (user is actively viewing), and nothing was missed
+      if (!windowFocusedRef.current || pages.error) return
+      await settled
+      if (!stale()) ackCustomerService(shop)
     },
     [mergeEmojiInfos, isCustomerServiceOpen, ackCustomerService]
   )
@@ -672,10 +722,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Open 客服消息 on one of its chats: the one picked before if it's still listed, else the newest
   const openCustomerService = useCallback(async () => {
     setMessagesLoading(true)
+    const load = ++customerServiceLoadRef.current
 
     const picked = activeCustomerServiceShopRef.current
     const list = await fetchCustomerServiceSessions()
-    // The user may have moved on while the list loaded, and that session's loading is its own
+    // While the list loaded the user may have picked a chat, opened 客服消息 again or switched account,
+    // or moved on to another session, and each of those loads on its own
+    if (load !== customerServiceLoadRef.current) return
     if (!selectedSessionRef.current || !isCustomerServiceSession(selectedSessionRef.current)) return
     const session = list?.find(s => isSameShop(getCustomerServiceShop(s), picked)) ?? list?.[0]
     // Without a list to go by, keep showing the chat picked before
@@ -701,12 +754,18 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     [setActiveShop, fetchCustomerServiceMessages]
   )
 
-  // Send to the open customer service chat, showing the message right away
+  // Send to a customer service chat, the open one unless given, showing the message right away
   const sendCustomerServiceMessage = useCallback(
-    async (msgType: number, content: string): Promise<boolean> => {
-      const shop = activeCustomerServiceShopRef.current
+    async (msgType: number, content: string, shop = activeCustomerServiceShopRef.current): Promise<boolean> => {
       const senderMid = userInfo?.mid
-      if (!shop || !senderMid) return false
+      if (!senderMid) return false
+      if (!shop) {
+        // 客服消息 opened with no chat to show, because its list failed or was empty
+        console.error('Failed to send customer service message: no chat is open')
+        toastManager.add({ type: 'error', title: '发送失败', description: NO_CUSTOMER_SERVICE_CHAT })
+        return false
+      }
+      const account = customerServiceAccountRef.current
 
       const data = await window.electronAPI.bilibili.customerService.sendMessage({ ...shop, msgType, content })
 
@@ -720,6 +779,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         })
         return false
       }
+
+      // Sent, but for an account that has signed out since, so none of what's shown is its
+      if (account !== customerServiceAccountRef.current) return true
 
       // The chat's next refresh brings the server's copy, which carries the same msg_key
       const sentMessage: BilibiliMessage = {
@@ -738,7 +800,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         customer_service_sender: { type: CS_SENDER_TYPE.USER, name: userInfo.uname || '', face: userInfo.face || '' },
       }
 
-      setMessages(prev => [...prev, sentMessage])
+      // Only into the chat it went to, which the user may have left, and only once: a refresh can bring
+      // the server's copy before the send returns
+      if (isCustomerServiceOpen(shop)) {
+        const key = String(sentMessage.msg_key)
+        setMessages(prev => (prev.some(m => String(m.msg_key) === key) ? prev : [...prev, sentMessage]))
+      }
       setSessions(prev =>
         prev.map(s =>
           isCustomerServiceSession(s) ? { ...s, session_ts: Date.now() * 1000, last_msg: sentMessage } : s
@@ -747,7 +814,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       return true
     },
-    [userInfo]
+    [userInfo, isCustomerServiceOpen]
   )
 
   // Send what picking one of the bot's suggestions sends, like a typed message
@@ -783,6 +850,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       // Clear emoji map when switching sessions
       setEmojiInfoMap({})
 
+      // The user may open another session (客服消息 included) while pages load, which loads on its own
+      const isOpen = () =>
+        selectedSessionRef.current?.talker_id === session.talker_id &&
+        selectedSessionRef.current?.session_type === session.session_type
+
       try {
         const allMessages: BilibiliMessage[] = []
         let hasMore = true
@@ -796,6 +868,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
             size: '1000', // Use larger page size to reduce number of requests
             endSeqno,
           })
+          if (!isOpen()) return
 
           if (isErrorResponse(data)) {
             throw new Error(data.error || 'Failed to fetch messages')
@@ -859,7 +932,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         }
       } catch (err) {
         console.error('Failed to fetch messages:', err)
-        setMessagesLoading(false)
+        if (isOpen()) setMessagesLoading(false)
       }
     },
     [openCustomerService, mergeEmojiInfos, userInfo, fetchUserInfoBatch]
@@ -1250,8 +1323,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       setSendingMessage(true)
 
       try {
-        // First, upload the image to Bilibili CDN (customer service takes uploads of its own)
+        // First, upload the image to Bilibili CDN (customer service takes uploads of its own).
+        // A customer service image goes to the chat open now, so there must be one before uploading.
         const isCustomerService = isCustomerServiceSession(selectedSession)
+        const customerServiceShop = activeCustomerServiceShopRef.current
+        if (isCustomerService && !customerServiceShop) {
+          toastManager.add({ type: 'error', title: '图片发送失败', description: NO_CUSTOMER_SERVICE_CHAT })
+          return false
+        }
         const upload = isCustomerService
           ? window.electronAPI.bilibili.customerService.uploadImage
           : window.electronAPI.bilibili.uploadImage
@@ -1284,7 +1363,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         })
 
         if (isCustomerService) {
-          return await sendCustomerServiceMessage(CS_MSG_TYPE.IMAGE, msgContent)
+          return await sendCustomerServiceMessage(CS_MSG_TYPE.IMAGE, msgContent, customerServiceShop)
         }
 
         const data = await window.electronAPI.bilibili.sendMessage({
@@ -1659,33 +1738,44 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     [showNotificationForMessage]
   )
 
-  // session_ts of the 客服消息 state last notified about
-  const notifiedCustomerServiceTsRef = useRef<number | null>(null)
+  // msg_key of the customer service message last notified about
+  const notifiedCustomerServiceKeyRef = useRef<string | null>(null)
 
-  // Customer service notifications also arrive for the user's own messages, with no sender Comet can check.
-  // Only a message to the user raises 客服消息's unread count, so that decides whether to notify.
+  // Customer service notifications also arrive for the user's own messages and name only the chat,
+  // so that chat's latest message decides: notify once for an unread one somebody else sent
   const showCustomerServiceNotification = useCallback(
-    async (refreshedSessions: Promise<BilibiliSession[]>) => {
-      const unreadBefore = sessionsRef.current.find(isCustomerServiceSession)?.unread_count ?? 0
-      const session = (await refreshedSessions).find(isCustomerServiceSession)
-      if (!session || session.unread_count <= unreadBefore) return
+    async (
+      shop: CustomerServiceShop,
+      chats: Promise<CustomerServiceSession[] | null>,
+      refreshedSessions: Promise<BilibiliSession[]>
+    ) => {
+      const list = await chats
+      // A chat past the listed ones is likely the newest, which lists first
+      const chat = list?.find(s => isSameShop(getCustomerServiceShop(s), shop)) ?? list?.[0]
+      const latest = chat?.last_msg
+      if (!chat || !latest || !chat.unread_info?.unread_count) return
+      if (latest.sender_info?.type === CS_SENDER_TYPE.USER || latest.msg_type === CS_MSG_TYPE.WITHDRAW) return
 
-      // An earlier notification's refresh can already see the reply this one is for
-      if (session.session_ts === notifiedCustomerServiceTsRef.current) return
-      notifiedCustomerServiceTsRef.current = session.session_ts
+      // Several notifications can arrive for one message (the user's own just before a reply, say)
+      if (latest.msg_key === notifiedCustomerServiceKeyRef.current) return
+      notifiedCustomerServiceKeyRef.current = latest.msg_key
 
-      if (session.is_dnd === 1 || customerServiceMuted) {
+      const session =
+        (await refreshedSessions).find(isCustomerServiceSession) ?? sessionsRef.current.find(isCustomerServiceSession)
+      if (session?.is_dnd === 1 || customerServiceMuted) {
         console.log('[usePrivateMessages] Notification suppressed for muted customer service session')
         return
       }
 
       try {
         const result = await window.electronAPI.bilibili.showNotification({
-          title: getSessionName(session),
-          body: getLastMessagePreview(session) || '[新消息]',
-          icon: getSessionAvatar(session) ?? undefined,
-          talkerId: session.talker_id,
-          sessionType: session.session_type,
+          title: session ? getSessionName(session) : '客服消息',
+          body: getCustomerServicePreview(latest) || '[新消息]',
+          icon: (session && getSessionAvatar(session)) || undefined,
+          talkerId: session?.talker_id ?? 0,
+          sessionType: session?.session_type ?? SESSION_TYPE.USER,
+          // Clicking it opens 客服消息 on this chat
+          customerServiceShop: getCustomerServiceShop(chat),
         })
         console.log('[usePrivateMessages] Notification result:', result)
       } catch (err) {
@@ -1707,13 +1797,24 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       // Customer service chats run on their own backend and only appear folded into 客服消息
       if (CUSTOMER_SERVICE_WS_SESSION_TYPES.has(notification.sessionType)) {
-        showCustomerServiceNotification(refreshedSessions)
+        const chats = fetchCustomerServiceSessions()
+        showCustomerServiceNotification(getNotifiedShop(notification), chats, refreshedSessions)
 
-        // With 客服消息 open, refresh its chats' unread counts and the chat on screen
-        if (selectedSession && isCustomerServiceSession(selectedSession)) {
-          fetchCustomerServiceSessions()
-          if (activeCustomerServiceShopRef.current) {
-            fetchCustomerServiceMessagesQuietly(activeCustomerServiceShopRef.current)
+        // With 客服消息 open, refresh the chat on screen; its ack waits for both lists, whose unread it
+        // updates. With no chat on screen (the list was empty or failed), open the newest one.
+        const open = selectedSessionRef.current
+        if (open && isCustomerServiceSession(open)) {
+          const shop = activeCustomerServiceShopRef.current
+          if (shop) {
+            fetchCustomerServiceMessagesQuietly(shop, Promise.all([refreshedSessions, chats]))
+          } else {
+            chats.then(list => {
+              const now = selectedSessionRef.current
+              if (!list?.[0] || activeCustomerServiceShopRef.current || !now || !isCustomerServiceSession(now)) return
+              const newest = getCustomerServiceShop(list[0])
+              setActiveShop(newest)
+              fetchCustomerServiceMessages(newest)
+            })
           }
         }
         return
@@ -1882,6 +1983,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       showCustomerServiceNotification,
       fetchCustomerServiceSessions,
       fetchCustomerServiceMessagesQuietly,
+      setActiveShop,
+      fetchCustomerServiceMessages,
       fetchMessagesQuietly,
       showNotificationForMessage,
       fetchLatestMessageForNotification,
@@ -1965,8 +2068,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       }
 
       if (session) {
-        // Select the session (this will fetch messages and mark as read)
+        // Select the session (this will fetch messages and mark as read), and for 客服消息 the chat
+        // the notification was for
         console.log('[usePrivateMessages] Selecting session:', session.talker_id)
+        if (params.customerServiceShop && isCustomerServiceSession(session)) setActiveShop(params.customerServiceShop)
         selectSession(session)
       } else {
         console.log('[usePrivateMessages] Session still not found after refresh')
@@ -1979,7 +2084,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       console.log('[usePrivateMessages] Cleaning up navigation listener')
       cleanup()
     }
-  }, [selectSession, refreshSessionsQuietly])
+  }, [selectSession, refreshSessionsQuietly, setActiveShop])
 
   // Auto-connect WebSocket when logged in
   useEffect(() => {
