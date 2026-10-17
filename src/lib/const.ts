@@ -21,6 +21,8 @@ export const BILIBILI_API = {
   VC: 'https://api.vc.bilibili.com',
   /** Message center */
   MESSAGE: 'https://message.bilibili.com',
+  /** Customer service chats (客服消息), separate from the VC messaging backend */
+  CUSTOMER_SERVICE: 'https://customerservice.bilibili.com',
   /** Broadcast WebSocket */
   BROADCAST_WS: 'wss://broadcast.chat.bilibili.com:7826',
 } as const
@@ -96,6 +98,18 @@ export const BILIBILI_ENDPOINTS = {
   SET_DND: `${BILIBILI_API.VC}/link_setting/v1/link_setting/set_msg_dnd`,
   /** Pin/unpin (sticky) a session */
   SET_TOP: `${BILIBILI_API.VC}/session_svr/v1/session_svr/set_top`,
+
+  // Customer service
+  /** Get customer service chats, one per shop */
+  CUSTOMER_SERVICE_GET_SESSIONS: `${BILIBILI_API.CUSTOMER_SERVICE}/x/custom/session_svr/v1/get_sessions`,
+  /** Fetch messages from a customer service chat (Wbi-signed) */
+  CUSTOMER_SERVICE_FETCH_MESSAGES: `${BILIBILI_API.CUSTOMER_SERVICE}/x/custom/session_svr/v1/fetch_sess_msg`,
+  /** Send a message to a customer service chat (Wbi-signed) */
+  CUSTOMER_SERVICE_SEND_MESSAGE: `${BILIBILI_API.CUSTOMER_SERVICE}/x/custom/msg_svr/v1/send_msg`,
+  /** Mark a customer service chat as read */
+  CUSTOMER_SERVICE_UPDATE_ACK: `${BILIBILI_API.CUSTOMER_SERVICE}/x/custom/session_svr/v1/update_ack`,
+  /** Upload an image for a customer service message */
+  CUSTOMER_SERVICE_UPLOAD_IMAGE: `${BILIBILI_API.CUSTOMER_SERVICE}/x/custom/call_svr/v1/upload_bfs`,
 
   // Risk control / device fingerprint
   /** Fetch buvid3/buvid4 device fingerprint cookies (gaia risk control) */

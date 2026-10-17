@@ -43,6 +43,10 @@ export default function App() {
     recallMessage,
     toggleDnd,
     toggleSticky,
+    customerServiceSessions,
+    activeCustomerService,
+    selectCustomerService,
+    sendCustomerServiceReply,
     // Multi-account actions
     switchAccount,
     removeAccount,
@@ -208,6 +212,10 @@ export default function App() {
               onRecall={recallMessage}
               onToggleDnd={toggleDnd}
               onToggleSticky={toggleSticky}
+              customerServiceSessions={customerServiceSessions}
+              activeCustomerService={activeCustomerService}
+              onSelectCustomerService={selectCustomerService}
+              onCustomerServiceReply={sendCustomerServiceReply}
             />
 
             {/* Add Account / Re-auth Dialog */}

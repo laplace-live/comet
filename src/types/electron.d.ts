@@ -4,6 +4,9 @@ import type {
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
   BilibiliUserCardsResponse,
+  CustomerServiceMessagesResponse,
+  CustomerServiceSendMessageResponse,
+  CustomerServiceSessionsResponse,
 } from './bilibili'
 
 export interface FetchSessionsParams {
@@ -88,6 +91,23 @@ export interface SetTopParams {
 export interface SetTopResult {
   success: boolean
   error?: string
+}
+
+/** A customer service chat, by shop */
+export interface CustomerServiceShop {
+  shopFatherId: number
+  shopId: number
+}
+
+/** Pages come back newest first */
+export interface FetchCustomerServiceMessagesParams extends CustomerServiceShop {
+  /** Fetch the messages before this seq_no, or the newest without one */
+  endSeqno?: string
+}
+
+export interface SendCustomerServiceMessageParams extends CustomerServiceShop {
+  msgType: number
+  content: string
 }
 
 export interface SendMessageResponse {
@@ -313,6 +333,19 @@ export interface ElectronAPI {
     uploadImage: (params: UploadImageParams) => Promise<UploadImageResult>
     setDnd: (params: SetDndParams) => Promise<SetDndResult>
     setTop: (params: SetTopParams) => Promise<SetTopResult>
+
+    // Customer service chats (客服消息)
+    customerService: {
+      fetchSessions: () => Promise<CustomerServiceSessionsResponse | ErrorResponse>
+      fetchMessages: (
+        params: FetchCustomerServiceMessagesParams
+      ) => Promise<CustomerServiceMessagesResponse | ErrorResponse>
+      sendMessage: (
+        params: SendCustomerServiceMessageParams
+      ) => Promise<CustomerServiceSendMessageResponse | ErrorResponse>
+      updateAck: (params: CustomerServiceShop) => Promise<UpdateAckResponse | ErrorResponse>
+      uploadImage: (params: UploadImageParams) => Promise<UploadImageResult>
+    }
 
     // WebSocket for real-time notifications
     wsConnect: () => Promise<{ success: boolean }>

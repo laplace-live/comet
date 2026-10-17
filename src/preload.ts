@@ -8,6 +8,8 @@ import type {
   CheckLoginResult,
   CopyImageParams,
   CopyImageResult,
+  CustomerServiceShop,
+  FetchCustomerServiceMessagesParams,
   FetchMessagesParams,
   FetchSessionsParams,
   FetchUsersParams,
@@ -23,6 +25,7 @@ import type {
   RemoveAccountResult,
   ReorderAccountsParams,
   ReorderAccountsResult,
+  SendCustomerServiceMessageParams,
   SendMessageParams,
   SessionUpdateNotification,
   SetActiveAccountParams,
@@ -85,6 +88,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(IpcChannel.BILIBILI_UPLOAD_IMAGE, params),
     setDnd: (params: SetDndParams): Promise<SetDndResult> => ipcRenderer.invoke(IpcChannel.BILIBILI_SET_DND, params),
     setTop: (params: SetTopParams): Promise<SetTopResult> => ipcRenderer.invoke(IpcChannel.BILIBILI_SET_TOP, params),
+
+    // Customer service chats (客服消息)
+    customerService: {
+      fetchSessions: () => ipcRenderer.invoke(IpcChannel.BILIBILI_CUSTOMER_SERVICE_FETCH_SESSIONS),
+      fetchMessages: (params: FetchCustomerServiceMessagesParams) =>
+        ipcRenderer.invoke(IpcChannel.BILIBILI_CUSTOMER_SERVICE_FETCH_MESSAGES, params),
+      sendMessage: (params: SendCustomerServiceMessageParams) =>
+        ipcRenderer.invoke(IpcChannel.BILIBILI_CUSTOMER_SERVICE_SEND_MESSAGE, params),
+      updateAck: (params: CustomerServiceShop) =>
+        ipcRenderer.invoke(IpcChannel.BILIBILI_CUSTOMER_SERVICE_UPDATE_ACK, params),
+      uploadImage: (params: UploadImageParams): Promise<UploadImageResult> =>
+        ipcRenderer.invoke(IpcChannel.BILIBILI_CUSTOMER_SERVICE_UPLOAD_IMAGE, params),
+    },
 
     // WebSocket for real-time notifications
     wsConnect: (): Promise<{ success: boolean }> => ipcRenderer.invoke(IpcChannel.BILIBILI_WS_CONNECT),

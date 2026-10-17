@@ -1,43 +1,48 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import type { UserCache } from '@/lib/message-utils'
 import type {
   BilibiliEmojiInfo,
   BilibiliMessage,
-  BilibiliMessagesResponse,
   BilibiliSession,
-  BilibiliSessionsResponse,
-  BilibiliUserCardsResponse,
+  CustomerServiceMessage,
+  CustomerServiceSession,
 } from '@/types/bilibili'
 import type {
   CheckLoginResult,
+  CustomerServiceShop,
   ErrorResponse,
   NavigateToSessionParams,
   NewMessageNotification,
-  SendMessageResponse,
   SessionUpdateNotification,
   StoredAccountInfo,
 } from '@/types/electron'
 
-import { SESSION_TYPE } from '@/types/bilibili'
+import { CS_MSG_TYPE, CS_SENDER_TYPE, CUSTOMER_SERVICE_WS_SESSION_TYPES, SESSION_TYPE } from '@/types/bilibili'
 
 import { getImageType } from '@/lib/const'
-import { parseMessageContent } from '@/lib/message-utils'
+import { type CustomerServiceReply, getCustomerServiceShop, isSameShop, toDisplayMessage } from '@/lib/customer-service'
+import {
+  getLastMessagePreview,
+  getSessionAvatar,
+  getSessionName,
+  isCustomerServiceSession,
+  parseMessageContent,
+} from '@/lib/message-utils'
 
 import { toastManager } from '@/components/ui/toast'
 
 import { useDrafts } from '@/stores/useDrafts'
+import { useSettings } from '@/stores/useSettings'
 
 // Helper to check if response is an error
-function isErrorResponse(
-  response:
-    | BilibiliSessionsResponse
-    | BilibiliMessagesResponse
-    | BilibiliUserCardsResponse
-    | SendMessageResponse
-    | ErrorResponse
-): response is ErrorResponse {
+function isErrorResponse<T extends object>(response: T | ErrorResponse): response is ErrorResponse {
   return 'error' in response
+}
+
+// Show the local 客服消息 mute as is_dnd, so it reads like any other muted session
+function withLocalDnd(session: BilibiliSession): BilibiliSession {
+  return isCustomerServiceSession(session) ? { ...session, is_dnd: 1 } : session
 }
 
 // Map of emoji text (e.g., "[tv_doge]") to emoji info
@@ -65,6 +70,12 @@ export interface UsePrivateMessagesReturn {
   activeAccountMid: number | null
   isAddingAccount: boolean
   reauthAccount: StoredAccountInfo | null
+
+  // Customer service chats shown in 客服消息, one per shop
+  customerServiceSessions: CustomerServiceSession[]
+  activeCustomerService: CustomerServiceSession | null
+  selectCustomerService: (shop: CustomerServiceShop) => void
+  sendCustomerServiceReply: (reply: CustomerServiceReply) => Promise<boolean>
 
   // Actions
   checkLogin: () => Promise<boolean>
@@ -118,6 +129,26 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const [isAddingAccount, setIsAddingAccount] = useState(false)
   const [reauthAccount, setReauthAccount] = useState<StoredAccountInfo | null>(null)
 
+  // Customer service chats, which 客服消息 shows one at a time
+  const [customerServiceSessions, setCustomerServiceSessions] = useState<CustomerServiceSession[]>([])
+  const [activeCustomerServiceShop, setActiveCustomerServiceShop] = useState<CustomerServiceShop | null>(null)
+  const activeCustomerService = useMemo(
+    () => customerServiceSessions.find(s => isSameShop(getCustomerServiceShop(s), activeCustomerServiceShop)) ?? null,
+    [customerServiceSessions, activeCustomerServiceShop]
+  )
+
+  const customerServiceMuted = useSettings(
+    state => userInfo?.mid !== undefined && state.customerServiceMutedMids.includes(userInfo.mid)
+  )
+  const displayedSessions = useMemo(
+    () => (customerServiceMuted ? sessions.map(withLocalDnd) : sessions),
+    [sessions, customerServiceMuted]
+  )
+  const displayedSelectedSession = useMemo(
+    () => (customerServiceMuted && selectedSession ? withLocalDnd(selectedSession) : selectedSession),
+    [selectedSession, customerServiceMuted]
+  )
+
   // Helper to merge emoji infos into the map
   const mergeEmojiInfos = useCallback((emojiInfos: BilibiliEmojiInfo[] | undefined) => {
     if (!emojiInfos || emojiInfos.length === 0) return
@@ -160,6 +191,50 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     selectedSessionRef.current = selectedSession
   }, [selectedSession])
 
+  const customerServiceSessionsRef = useRef<CustomerServiceSession[]>([])
+  const activeCustomerServiceShopRef = useRef<CustomerServiceShop | null>(null)
+
+  useEffect(() => {
+    customerServiceSessionsRef.current = customerServiceSessions
+  }, [customerServiceSessions])
+
+  // Also set synchronously, so a reply for a chat the user just left can tell
+  const setActiveShop = useCallback((shop: CustomerServiceShop | null) => {
+    activeCustomerServiceShopRef.current = shop
+    setActiveCustomerServiceShop(shop)
+  }, [])
+
+  // Customer service chats belong to an account: forget them when another one signs in
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset whenever the account changes
+  useEffect(() => {
+    customerServiceSessionsRef.current = []
+    setCustomerServiceSessions([])
+    setActiveShop(null)
+  }, [userInfo?.mid, setActiveShop])
+
+  // Whether a reply for this customer service chat is still wanted
+  const isCustomerServiceOpen = useCallback((shop: CustomerServiceShop) => {
+    const session = selectedSessionRef.current
+    return !!session && isCustomerServiceSession(session) && isSameShop(activeCustomerServiceShopRef.current, shop)
+  }, [])
+
+  // Mark a customer service chat as read, and take it off 客服消息's unread, which counts every chat's
+  const ackCustomerService = useCallback((shop: CustomerServiceShop) => {
+    window.electronAPI.bilibili.customerService
+      .updateAck(shop)
+      .catch(err => console.error('Failed to mark customer service chat as read:', err))
+
+    const othersUnread = customerServiceSessionsRef.current
+      .filter(s => !isSameShop(getCustomerServiceShop(s), shop))
+      .reduce((sum, s) => sum + (s.unread_info?.unread_count || 0), 0)
+    setCustomerServiceSessions(prev =>
+      prev.map(s =>
+        isSameShop(getCustomerServiceShop(s), shop) ? { ...s, unread_info: { ...s.unread_info, unread_count: 0 } } : s
+      )
+    )
+    setSessions(prev => prev.map(s => (isCustomerServiceSession(s) ? { ...s, unread_count: othersUnread } : s)))
+  }, [])
+
   // Track window focus state and mark current session as read when regaining focus
   useEffect(() => {
     const handleFocus = () => {
@@ -167,7 +242,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       // When window regains focus, mark the current session as read
       const session = selectedSessionRef.current
-      if (session) {
+      // 客服消息 is read one customer service chat at a time
+      if (session && isCustomerServiceSession(session)) {
+        if (activeCustomerServiceShopRef.current) ackCustomerService(activeCustomerServiceShopRef.current)
+      } else if (session) {
         // Derive the latest seqno from current messages to avoid using stale session data.
         // selectedSession.max_seqno may not reflect messages that arrived while unfocused.
         const currentMessages = messagesRef.current
@@ -200,7 +278,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       window.removeEventListener('focus', handleFocus)
       window.removeEventListener('blur', handleBlur)
     }
-  }, [])
+  }, [ackCustomerService])
 
   // Fetch user info for multiple users in batch
   const fetchUserInfoBatch = useCallback(async (uids: number[]) => {
@@ -501,8 +579,206 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [hasMoreSessions, nextEndTs, loadingMore, fetchUserInfoBatch])
 
+  // List the customer service chats in 客服消息, newest first; null when the request fails
+  const fetchCustomerServiceSessions = useCallback(async (): Promise<CustomerServiceSession[] | null> => {
+    try {
+      const data = await window.electronAPI.bilibili.customerService.fetchSessions()
+      if (isErrorResponse(data) || data.code !== 0 || !data.data) {
+        console.error('[usePrivateMessages] Failed to fetch customer service sessions:', data)
+        return null
+      }
+
+      const list = data.data.session_list || []
+      customerServiceSessionsRef.current = list
+      setCustomerServiceSessions(list)
+      return list
+    } catch (err) {
+      console.error('[usePrivateMessages] Failed to fetch customer service sessions:', err)
+      return null
+    }
+  }, [])
+
+  // Load a customer service chat, every page of it like fetchMessages does
+  const fetchCustomerServiceMessages = useCallback(
+    async (shop: CustomerServiceShop) => {
+      setMessagesLoading(true)
+      setEmojiInfoMap({})
+
+      try {
+        const loaded: CustomerServiceMessage[] = []
+        let endSeqno: string | undefined
+        let hasMore = true
+
+        // Pages run newest first, each continuing from the oldest seqno of the last
+        while (hasMore) {
+          const data = await window.electronAPI.bilibili.customerService.fetchMessages({ ...shop, endSeqno })
+
+          if (isErrorResponse(data)) {
+            throw new Error(data.error || 'Failed to fetch customer service messages')
+          }
+          if (data.code !== 0 || !data.data) {
+            throw new Error(data.message || 'Failed to fetch customer service messages')
+          }
+
+          loaded.push(...(data.data.messages || []))
+          mergeEmojiInfos(data.data.e_infos)
+
+          hasMore = data.data.has_more === 1 && !!data.data.min_seqno && data.data.min_seqno !== endSeqno
+          endSeqno = data.data.min_seqno
+        }
+
+        if (!isCustomerServiceOpen(shop)) return
+        setMessages(loaded.reverse().map(toDisplayMessage))
+        ackCustomerService(shop)
+      } catch (err) {
+        console.error('Failed to fetch customer service messages:', err)
+      } finally {
+        if (isCustomerServiceOpen(shop)) setMessagesLoading(false)
+      }
+    },
+    [mergeEmojiInfos, isCustomerServiceOpen, ackCustomerService]
+  )
+
+  // Add the open customer service chat's newest messages, without a spinner
+  const fetchCustomerServiceMessagesQuietly = useCallback(
+    async (shop: CustomerServiceShop) => {
+      try {
+        const data = await window.electronAPI.bilibili.customerService.fetchMessages(shop)
+        if (isErrorResponse(data) || data.code !== 0 || !data.data) {
+          console.error('[usePrivateMessages] Silent customer service fetch failed')
+          return
+        }
+        if (!isCustomerServiceOpen(shop)) return
+
+        mergeEmojiInfos(data.data.e_infos)
+
+        // The newest page repeats what's shown, including messages sent from here, so match on msg_key
+        const newest = (data.data.messages || []).map(toDisplayMessage).reverse()
+        setMessages(prev => {
+          const shown = new Set(prev.map(m => String(m.msg_key)))
+          const added = newest.filter(m => !shown.has(String(m.msg_key)))
+          return added.length > 0 ? [...prev, ...added] : prev
+        })
+
+        // Only mark as read if the window is focused (user is actively viewing)
+        if (windowFocusedRef.current) ackCustomerService(shop)
+      } catch (err) {
+        console.error('[usePrivateMessages] Silent customer service fetch error:', err)
+      }
+    },
+    [mergeEmojiInfos, isCustomerServiceOpen, ackCustomerService]
+  )
+
+  // Open 客服消息 on one of its chats: the one picked before if it's still listed, else the newest
+  const openCustomerService = useCallback(async () => {
+    setMessagesLoading(true)
+
+    const picked = activeCustomerServiceShopRef.current
+    const list = await fetchCustomerServiceSessions()
+    // The user may have moved on while the list loaded, and that session's loading is its own
+    if (!selectedSessionRef.current || !isCustomerServiceSession(selectedSessionRef.current)) return
+    const session = list?.find(s => isSameShop(getCustomerServiceShop(s), picked)) ?? list?.[0]
+    // Without a list to go by, keep showing the chat picked before
+    const shop = session ? getCustomerServiceShop(session) : list ? null : picked
+
+    setActiveShop(shop)
+    if (shop) {
+      await fetchCustomerServiceMessages(shop)
+    } else {
+      setMessages([])
+      setMessagesLoading(false)
+    }
+  }, [fetchCustomerServiceSessions, setActiveShop, fetchCustomerServiceMessages])
+
+  // Switch 客服消息 to another of its chats
+  const selectCustomerService = useCallback(
+    (shop: CustomerServiceShop) => {
+      if (isSameShop(activeCustomerServiceShopRef.current, shop)) return
+      setActiveShop(shop)
+      setMessages([])
+      fetchCustomerServiceMessages(shop)
+    },
+    [setActiveShop, fetchCustomerServiceMessages]
+  )
+
+  // Send to the open customer service chat, showing the message right away
+  const sendCustomerServiceMessage = useCallback(
+    async (msgType: number, content: string): Promise<boolean> => {
+      const shop = activeCustomerServiceShopRef.current
+      const senderMid = userInfo?.mid
+      if (!shop || !senderMid) return false
+
+      const data = await window.electronAPI.bilibili.customerService.sendMessage({ ...shop, msgType, content })
+
+      if (isErrorResponse(data) || data.code !== 0) {
+        const description = isErrorResponse(data) ? data.error : data.message
+        console.error('Failed to send customer service message:', description)
+        toastManager.add({
+          type: 'error',
+          title: '发送失败',
+          description: description || '无法发送消息',
+        })
+        return false
+      }
+
+      // The chat's next refresh brings the server's copy, which carries the same msg_key
+      const sentMessage: BilibiliMessage = {
+        sender_uid: senderMid,
+        receiver_type: SESSION_TYPE.USER,
+        receiver_id: 0,
+        msg_type: msgType,
+        content,
+        msg_seqno: Date.now(),
+        timestamp: Math.floor(Date.now() / 1000),
+        at_uids: null,
+        msg_key: data.data?.msg_key || String(Date.now()),
+        msg_status: 0,
+        notify_code: '',
+        msg_source: 0,
+        customer_service_sender: { type: CS_SENDER_TYPE.USER, name: userInfo.uname || '', face: userInfo.face || '' },
+      }
+
+      setMessages(prev => [...prev, sentMessage])
+      setSessions(prev =>
+        prev.map(s =>
+          isCustomerServiceSession(s) ? { ...s, session_ts: Date.now() * 1000, last_msg: sentMessage } : s
+        )
+      )
+
+      return true
+    },
+    [userInfo]
+  )
+
+  // Send what picking one of the bot's suggestions sends, like a typed message
+  const sendCustomerServiceReply = useCallback(
+    async (reply: CustomerServiceReply): Promise<boolean> => {
+      setSendingMessage(true)
+      try {
+        return await sendCustomerServiceMessage(reply.msgType, reply.content)
+      } catch (err) {
+        console.error('Failed to send customer service reply:', err)
+        toastManager.add({
+          type: 'error',
+          title: '发送失败',
+          description: err instanceof Error ? err.message : '网络错误，请稍后重试',
+        })
+        return false
+      } finally {
+        setSendingMessage(false)
+      }
+    },
+    [sendCustomerServiceMessage]
+  )
+
   const fetchMessages = useCallback(
     async (session: BilibiliSession) => {
+      // 客服消息 holds chats from the customer service backend, not messages of its own
+      if (isCustomerServiceSession(session)) {
+        await openCustomerService()
+        return
+      }
+
       setMessagesLoading(true)
       // Clear emoji map when switching sessions
       setEmojiInfoMap({})
@@ -586,7 +862,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setMessagesLoading(false)
       }
     },
-    [mergeEmojiInfos, userInfo, fetchUserInfoBatch]
+    [openCustomerService, mergeEmojiInfos, userInfo, fetchUserInfoBatch]
   )
 
   // Silent fetch of new messages - no loading spinner, merges with existing messages
@@ -674,6 +950,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
   const selectSession = useCallback(
     (session: BilibiliSession) => {
+      // Ahead of the render, so replies for the session left behind can tell they're stale
+      selectedSessionRef.current = session
       setSelectedSession(session)
       setMessages([])
       fetchMessages(session)
@@ -682,6 +960,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   )
 
   const clearSelectedSession = useCallback(() => {
+    selectedSessionRef.current = null
     setSelectedSession(null)
     setMessages([])
   }, [])
@@ -699,6 +978,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       try {
         // Prepare the message content as JSON string
         const msgContent = JSON.stringify({ content: content.trim() })
+
+        if (isCustomerServiceSession(selectedSession)) {
+          return await sendCustomerServiceMessage(CS_MSG_TYPE.TEXT, msgContent)
+        }
 
         const data = await window.electronAPI.bilibili.sendMessage({
           receiverId: String(selectedSession.talker_id),
@@ -789,7 +1072,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setSendingMessage(false)
       }
     },
-    [selectedSession, userInfo]
+    [selectedSession, userInfo, sendCustomerServiceMessage]
   )
 
   // Recall a message by sending a msg_type=5 message with the target msg_key
@@ -799,6 +1082,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       const senderMid = userInfo?.mid
       if (!selectedSession || !senderMid) {
         return { success: false, error: '无法撤回消息' }
+      }
+      // Customer service has no recall, as in Bilibili's own client
+      if (isCustomerServiceSession(selectedSession)) {
+        return { success: false, error: '客服消息不支持撤回' }
       }
 
       try {
@@ -844,54 +1131,64 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   )
 
   // Toggle Do Not Disturb for a session
-  const toggleDnd = useCallback(async (session: BilibiliSession, enabled: boolean): Promise<boolean> => {
-    try {
-      const result = await window.electronAPI.bilibili.setDnd({
-        dndUid: session.session_type === SESSION_TYPE.USER ? session.talker_id : undefined,
-        dndGroupId: session.session_type === SESSION_TYPE.FAN_GROUP ? session.talker_id : undefined,
-        sessionType: session.session_type,
-        enabled,
-      })
+  const toggleDnd = useCallback(
+    async (session: BilibiliSession, enabled: boolean): Promise<boolean> => {
+      try {
+        if (isCustomerServiceSession(session)) {
+          // set_msg_dnd needs a talker uid, which 客服消息 lacks, and customer service only offers
+          // Do Not Disturb per store, so Comet keeps this session's setting itself
+          if (!userInfo?.mid) return false
+          useSettings.getState().setCustomerServiceMuted(userInfo.mid, enabled)
+        } else {
+          const result = await window.electronAPI.bilibili.setDnd({
+            dndUid: session.session_type === SESSION_TYPE.USER ? session.talker_id : undefined,
+            dndGroupId: session.session_type === SESSION_TYPE.FAN_GROUP ? session.talker_id : undefined,
+            sessionType: session.session_type,
+            enabled,
+          })
 
-      if (!result.success) {
-        console.error('Failed to toggle DND:', result.error)
+          if (!result.success) {
+            console.error('Failed to toggle DND:', result.error)
+            toastManager.add({
+              type: 'error',
+              title: '操作失败',
+              description: result.error || '无法更改免打扰设置',
+            })
+            return false
+          }
+        }
+
+        // Update the session in the sessions list
+        setSessions(prev =>
+          prev.map(s => {
+            if (s.talker_id === session.talker_id && s.session_type === session.session_type) {
+              return { ...s, is_dnd: enabled ? 1 : 0 }
+            }
+            return s
+          })
+        )
+
+        // Also update the selected session if it matches
+        setSelectedSession(prev => {
+          if (prev?.talker_id === session.talker_id && prev?.session_type === session.session_type) {
+            return { ...prev, is_dnd: enabled ? 1 : 0 }
+          }
+          return prev
+        })
+
+        return true
+      } catch (err) {
+        console.error('Failed to toggle DND:', err)
         toastManager.add({
           type: 'error',
           title: '操作失败',
-          description: result.error || '无法更改免打扰设置',
+          description: '无法更改免打扰设置',
         })
         return false
       }
-
-      // Update the session in the sessions list
-      setSessions(prev =>
-        prev.map(s => {
-          if (s.talker_id === session.talker_id && s.session_type === session.session_type) {
-            return { ...s, is_dnd: enabled ? 1 : 0 }
-          }
-          return s
-        })
-      )
-
-      // Also update the selected session if it matches
-      setSelectedSession(prev => {
-        if (prev?.talker_id === session.talker_id && prev?.session_type === session.session_type) {
-          return { ...prev, is_dnd: enabled ? 1 : 0 }
-        }
-        return prev
-      })
-
-      return true
-    } catch (err) {
-      console.error('Failed to toggle DND:', err)
-      toastManager.add({
-        type: 'error',
-        title: '操作失败',
-        description: '无法更改免打扰设置',
-      })
-      return false
-    }
-  }, [])
+    },
+    [userInfo?.mid]
+  )
 
   // Toggle sticky (pin/unpin) for a session
   const toggleSticky = useCallback(async (session: BilibiliSession, pinned: boolean): Promise<boolean> => {
@@ -953,8 +1250,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       setSendingMessage(true)
 
       try {
-        // First, upload the image to Bilibili CDN
-        const uploadResult = await window.electronAPI.bilibili.uploadImage({
+        // First, upload the image to Bilibili CDN (customer service takes uploads of its own)
+        const isCustomerService = isCustomerServiceSession(selectedSession)
+        const upload = isCustomerService
+          ? window.electronAPI.bilibili.customerService.uploadImage
+          : window.electronAPI.bilibili.uploadImage
+        const uploadResult = await upload({
           imageData,
           mimeType,
         })
@@ -981,6 +1282,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           original: 1,
           size: Math.round((imageData.length * 3) / 4 / 1024), // Approximate size in KB from base64
         })
+
+        if (isCustomerService) {
+          return await sendCustomerServiceMessage(CS_MSG_TYPE.IMAGE, msgContent)
+        }
 
         const data = await window.electronAPI.bilibili.sendMessage({
           receiverId: String(selectedSession.talker_id),
@@ -1065,7 +1370,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setSendingMessage(false)
       }
     },
-    [selectedSession, userInfo]
+    [selectedSession, userInfo, sendCustomerServiceMessage]
   )
 
   // Connect to WebSocket for real-time notifications
@@ -1354,6 +1659,42 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     [showNotificationForMessage]
   )
 
+  // session_ts of the 客服消息 state last notified about
+  const notifiedCustomerServiceTsRef = useRef<number | null>(null)
+
+  // Customer service notifications also arrive for the user's own messages, with no sender Comet can check.
+  // Only a message to the user raises 客服消息's unread count, so that decides whether to notify.
+  const showCustomerServiceNotification = useCallback(
+    async (refreshedSessions: Promise<BilibiliSession[]>) => {
+      const unreadBefore = sessionsRef.current.find(isCustomerServiceSession)?.unread_count ?? 0
+      const session = (await refreshedSessions).find(isCustomerServiceSession)
+      if (!session || session.unread_count <= unreadBefore) return
+
+      // An earlier notification's refresh can already see the reply this one is for
+      if (session.session_ts === notifiedCustomerServiceTsRef.current) return
+      notifiedCustomerServiceTsRef.current = session.session_ts
+
+      if (session.is_dnd === 1 || customerServiceMuted) {
+        console.log('[usePrivateMessages] Notification suppressed for muted customer service session')
+        return
+      }
+
+      try {
+        const result = await window.electronAPI.bilibili.showNotification({
+          title: getSessionName(session),
+          body: getLastMessagePreview(session) || '[新消息]',
+          icon: getSessionAvatar(session) ?? undefined,
+          talkerId: session.talker_id,
+          sessionType: session.session_type,
+        })
+        console.log('[usePrivateMessages] Notification result:', result)
+      } catch (err) {
+        console.error('[usePrivateMessages] Failed to show notification:', err)
+      }
+    },
+    [customerServiceMuted]
+  )
+
   // Handle new message notification - uses incremental update, no spinners
   const handleNewMessage = useCallback(
     (notification: NewMessageNotification) => {
@@ -1363,6 +1704,20 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       // (respects sticky sessions, custom sorting, new conversations, etc.).
       // Notifications reuse it to look up sessions that aren't in state yet.
       const refreshedSessions = refreshSessionsQuietly()
+
+      // Customer service chats run on their own backend and only appear folded into 客服消息
+      if (CUSTOMER_SERVICE_WS_SESSION_TYPES.has(notification.sessionType)) {
+        showCustomerServiceNotification(refreshedSessions)
+
+        // With 客服消息 open, refresh its chats' unread counts and the chat on screen
+        if (selectedSession && isCustomerServiceSession(selectedSession)) {
+          fetchCustomerServiceSessions()
+          if (activeCustomerServiceShopRef.current) {
+            fetchCustomerServiceMessagesQuietly(activeCustomerServiceShopRef.current)
+          }
+        }
+        return
+      }
 
       const isCurrentSession =
         selectedSession?.talker_id === notification.talkerId &&
@@ -1524,6 +1879,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     [
       selectedSession,
       refreshSessionsQuietly,
+      showCustomerServiceNotification,
+      fetchCustomerServiceSessions,
+      fetchCustomerServiceMessagesQuietly,
       fetchMessagesQuietly,
       showNotificationForMessage,
       fetchLatestMessageForNotification,
@@ -1609,9 +1967,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (session) {
         // Select the session (this will fetch messages and mark as read)
         console.log('[usePrivateMessages] Selecting session:', session.talker_id)
-        setSelectedSession(session)
-        setMessages([])
-        fetchMessages(session)
+        selectSession(session)
       } else {
         console.log('[usePrivateMessages] Session still not found after refresh')
       }
@@ -1623,7 +1979,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       console.log('[usePrivateMessages] Cleaning up navigation listener')
       cleanup()
     }
-  }, [fetchMessages, refreshSessionsQuietly])
+  }, [selectSession, refreshSessionsQuietly])
 
   // Auto-connect WebSocket when logged in
   useEffect(() => {
@@ -1635,18 +1991,18 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Update dock badge with total unread count (macOS)
   // DND sessions don't count, matching Bilibili's own unread reminder
   useEffect(() => {
-    const totalUnread = sessions
+    const totalUnread = displayedSessions
       .filter(session => session.is_dnd !== 1)
       .reduce((sum, session) => sum + (session.unread_count || 0), 0)
     window.electronAPI.setBadgeCount(totalUnread).catch(err => {
       console.error('[usePrivateMessages] Failed to update dock badge:', err)
     })
-  }, [sessions])
+  }, [displayedSessions])
 
   return {
     // State
-    sessions,
-    selectedSession,
+    sessions: displayedSessions,
+    selectedSession: displayedSelectedSession,
     messages,
     emojiInfoMap,
     loading,
@@ -1665,6 +2021,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     activeAccountMid,
     isAddingAccount,
     reauthAccount,
+
+    // Customer service chats shown in 客服消息
+    customerServiceSessions,
+    activeCustomerService,
+    selectCustomerService,
+    sendCustomerServiceReply,
 
     // Actions
     checkLogin,

@@ -13,7 +13,17 @@ import type {
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
   BilibiliUserCardsResponse,
+  CustomerServiceMessagesResponse,
+  CustomerServiceSendMessageResponse,
+  CustomerServiceSessionsResponse,
 } from '@/types/bilibili'
+import type {
+  CustomerServiceShop,
+  FetchCustomerServiceMessagesParams,
+  SendCustomerServiceMessageParams,
+  UploadImageParams,
+  UploadImageResult,
+} from '@/types/electron'
 
 import { SESSION_TYPE } from '@/types/bilibili'
 
@@ -35,6 +45,15 @@ function preserveLargeIntegers(responseText: string): string {
   // Match "msg_key": followed by a large integer (15+ digits to be safe)
   // and convert it to a string value
   return responseText.replace(/"msg_key"\s*:\s*(\d{15,})/g, '"msg_key":"$1"')
+}
+
+/**
+ * Parse a customer service response with its message ids as strings.
+ * msg_key and the seqnos can exceed Number.MAX_SAFE_INTEGER, and the seqnos go back to the
+ * API for paging, so they stay strings whatever their size.
+ */
+function parseCustomerServiceJson<T>(responseText: string): T {
+  return JSON.parse(responseText.replace(/"(msg_key|seq_no|max_seqno|min_seqno)"\s*:\s*(\d+)/g, '"$1":"$2"'))
 }
 
 // ============================================================================
@@ -83,6 +102,34 @@ function encWbi(params: Record<string, string | number>, imgKey: string, subKey:
     .update(query + mixinKey)
     .digest('hex')
   return `${query}&w_rid=${wRid}`
+}
+
+/**
+ * Request with a Wbi-signed query and parse the JSON reply.
+ * Rotated keys get a 412 block page instead of JSON, so that refreshes the keys and retries once.
+ * @returns null when no keys can be fetched or the request stays blocked
+ */
+async function fetchWbiSigned<T>(
+  endpoint: string,
+  params: Record<string, string | number>,
+  cookieHeader: string,
+  parse: (responseText: string) => T,
+  init: RequestInit = {}
+): Promise<T | null> {
+  for (const forceRefresh of [false, true]) {
+    const wbiKeys = await getWbiKeys(cookieHeader, forceRefresh)
+    if (!wbiKeys) return null
+
+    const query = encWbi(params, wbiKeys.imgKey, wbiKeys.subKey, Math.floor(Date.now() / 1000))
+    const resp = await fetch(`${endpoint}?${query}`, init)
+    const responseText = await resp.text()
+    try {
+      return parse(responseText)
+    } catch {
+      console.warn(`Wbi-signed request blocked (HTTP ${resp.status}): ${endpoint}`)
+    }
+  }
+  return null
 }
 
 // Cached Wbi keys (they rotate, so refresh periodically or on demand).
@@ -411,6 +458,21 @@ export function cookieStringFromCredentials(credentials: BilibiliCredentials): s
 }
 
 /**
+ * Cookie header for requests gated by gaia risk control, which requires the buvid3/buvid4
+ * device-fingerprint cookies in addition to the login credentials.
+ */
+async function cookieHeaderWithBuvids(credentials: BilibiliCredentials): Promise<string> {
+  const buvids = await getBuvids()
+  return [
+    cookieStringFromCredentials(credentials),
+    buvids ? `buvid3=${buvids.buvid3}` : '',
+    buvids ? `buvid4=${buvids.buvid4}` : '',
+  ]
+    .filter(Boolean)
+    .join('; ')
+}
+
+/**
  * Look up the account profile the given credentials authenticate as.
  * Returns null when the response says the credentials are not logged in.
  * Network, timeout and parse failures reject, so each caller keeps its own policy.
@@ -430,6 +492,64 @@ async function fetchNavProfile(
   if (data.code !== 0 || !data.data?.isLogin || !data.data.mid) return null
 
   return { mid: data.data.mid, uname: data.data.uname || `User ${data.data.mid}`, face: data.data.face }
+}
+
+/**
+ * Upload an image to Bilibili CDN through one of its upload endpoints.
+ * @param fields - form fields sent after the file, which differ per endpoint
+ * @param label - what is being uploaded, for the error log
+ */
+async function uploadImage(
+  endpoint: string,
+  { imageData, mimeType }: UploadImageParams,
+  fields: (csrf: string) => Record<string, string>,
+  label: string
+): Promise<UploadImageResult> {
+  const credentials = getCredentials()
+
+  if (!credentials) {
+    return { success: false, error: 'Not logged in. Please scan QR code to login.' }
+  }
+
+  if (!imageData || !mimeType) {
+    return { success: false, error: 'Missing image data or MIME type' }
+  }
+
+  try {
+    const formData = new FormData()
+    const blob = new Blob([Buffer.from(imageData, 'base64')], { type: mimeType })
+    formData.append('file_up', blob, `image.${getImageExtension(mimeType)}`)
+    for (const [name, value] of Object.entries(fields(credentials.bili_jct))) {
+      formData.append(name, value)
+    }
+
+    const resp = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        Cookie: cookieStringFromCredentials(credentials),
+        ...COMMON_HEADERS,
+        Referer: BILIBILI_HEADERS.REFERER,
+        Origin: BILIBILI_HEADERS.ORIGIN,
+      },
+      body: formData,
+    })
+
+    const data: BilibiliImageUploadResponse = await resp.json()
+
+    if (data.code !== 0 || !data.data) {
+      return { success: false, error: data.message || 'Failed to upload image' }
+    }
+
+    return {
+      success: true,
+      url: data.data.image_url,
+      width: data.data.image_width,
+      height: data.data.image_height,
+    }
+  } catch (error) {
+    console.error(`Failed to upload ${label}:`, error)
+    return { success: false, error: 'Failed to upload image' }
+  }
 }
 
 export function registerBilibiliIpcHandlers() {
@@ -951,16 +1071,8 @@ export function registerBilibiliIpcHandlers() {
       }
 
       try {
-        // send_msg is gated by gaia risk control, which requires the buvid3/buvid4
-        // device-fingerprint cookies in addition to the login credentials.
-        const buvids = await getBuvids()
-        const cookieHeader = [
-          cookieStringFromCredentials(credentials),
-          buvids ? `buvid3=${buvids.buvid3}` : '',
-          buvids ? `buvid4=${buvids.buvid4}` : '',
-        ]
-          .filter(Boolean)
-          .join('; ')
+        // send_msg is gated by gaia risk control
+        const cookieHeader = await cookieHeaderWithBuvids(credentials)
 
         // Stable device id for this account (persisted, not regenerated per send)
         const devId = getOrCreateDevId(credentials.DedeUserID)
@@ -1253,72 +1365,220 @@ export function registerBilibiliIpcHandlers() {
   )
 
   // Upload image to Bilibili CDN
+  ipcMain.handle(IpcChannel.BILIBILI_UPLOAD_IMAGE, (_event, params: UploadImageParams) =>
+    uploadImage(
+      BILIBILI_ENDPOINTS.UPLOAD_IMAGE,
+      params,
+      csrf => ({ category: 'daily', csrf, csrf_token: csrf }),
+      'image'
+    )
+  )
+
+  // ==========================================================================
+  // Customer service
+  //
+  // Customer service chats live on customerservice.bilibili.com, which the session list only
+  // folds into one SYSTEM_MSG_TYPE.CUSTOMER_SERVICE session. Requests mirror the web client's.
+  // ==========================================================================
+
+  // Fetch customer service chats, newest first
+  ipcMain.handle(IpcChannel.BILIBILI_CUSTOMER_SERVICE_FETCH_SESSIONS, async () => {
+    const credentials = getCredentials()
+    if (!credentials) {
+      return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
+    }
+
+    try {
+      const url = new URL(BILIBILI_ENDPOINTS.CUSTOMER_SERVICE_GET_SESSIONS)
+      url.searchParams.set('size', '20')
+      url.searchParams.set('build', '0')
+      url.searchParams.set('mobi_app', 'web')
+
+      const resp = await fetch(url.toString(), {
+        headers: {
+          Cookie: cookieStringFromCredentials(credentials),
+          ...COMMON_HEADERS,
+          Referer: BILIBILI_HEADERS.REFERER,
+          Origin: BILIBILI_HEADERS.ORIGIN,
+        },
+      })
+      const data = parseCustomerServiceJson<CustomerServiceSessionsResponse>(await resp.text())
+
+      if (data.code !== 0) {
+        return { error: data.message || 'Failed to fetch customer service sessions', code: data.code }
+      }
+
+      return data
+    } catch (error) {
+      console.error('Failed to fetch customer service sessions:', error)
+      return { error: 'Failed to fetch customer service sessions', code: 500 }
+    }
+  })
+
+  // Fetch one page of a customer service chat's messages
   ipcMain.handle(
-    IpcChannel.BILIBILI_UPLOAD_IMAGE,
-    async (
-      _event,
-      params: {
-        imageData: string
-        mimeType: string
-      }
-    ) => {
-      const { imageData, mimeType } = params
+    IpcChannel.BILIBILI_CUSTOMER_SERVICE_FETCH_MESSAGES,
+    async (_event, params: FetchCustomerServiceMessagesParams) => {
       const credentials = getCredentials()
-
       if (!credentials) {
-        return { success: false, error: 'Not logged in. Please scan QR code to login.' }
-      }
-
-      if (!imageData || !mimeType) {
-        return { success: false, error: 'Missing image data or MIME type' }
+        return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
       }
 
       try {
         const cookieHeader = cookieStringFromCredentials(credentials)
-
-        // Convert base64 to buffer
-        const imageBuffer = Buffer.from(imageData, 'base64')
-
-        // Determine file extension from MIME type
-        const ext = getImageExtension(mimeType)
-        const filename = `image.${ext}`
-
-        // Create multipart form data
-        // Using the built-in FormData from Node.js 18+
-        const formData = new FormData()
-        const blob = new Blob([imageBuffer], { type: mimeType })
-        formData.append('file_up', blob, filename)
-        formData.append('category', 'daily')
-        formData.append('csrf', credentials.bili_jct)
-        formData.append('csrf_token', credentials.bili_jct)
-
-        const resp = await fetch(BILIBILI_ENDPOINTS.UPLOAD_IMAGE, {
-          method: 'POST',
-          headers: {
-            Cookie: cookieHeader,
-            ...COMMON_HEADERS,
-            Referer: BILIBILI_HEADERS.REFERER,
-            Origin: BILIBILI_HEADERS.ORIGIN,
+        const data = await fetchWbiSigned(
+          BILIBILI_ENDPOINTS.CUSTOMER_SERVICE_FETCH_MESSAGES,
+          {
+            size: 20,
+            // 0 pages back from end_seqno, or from the newest without one
+            order: 0,
+            shop_father_id: params.shopFatherId,
+            shop_id: params.shopId,
+            begin_seqno: '',
+            end_seqno: params.endSeqno ?? '',
+            sender_device_id: 1,
+            build: 0,
+            mobi_app: 'web',
           },
-          body: formData,
-        })
+          cookieHeader,
+          parseCustomerServiceJson<CustomerServiceMessagesResponse>,
+          {
+            headers: {
+              Cookie: cookieHeader,
+              ...COMMON_HEADERS,
+              Referer: BILIBILI_HEADERS.REFERER,
+              Origin: BILIBILI_HEADERS.ORIGIN,
+            },
+          }
+        )
 
-        const data: BilibiliImageUploadResponse = await resp.json()
-
-        if (data.code !== 0 || !data.data) {
-          return { success: false, error: data.message || 'Failed to upload image' }
+        if (!data) {
+          return { error: 'Customer service messages were blocked by risk control', code: 412 }
+        }
+        if (data.code !== 0) {
+          return { error: data.message || 'Failed to fetch customer service messages', code: data.code }
         }
 
-        return {
-          success: true,
-          url: data.data.image_url,
-          width: data.data.image_width,
-          height: data.data.image_height,
-        }
+        return data
       } catch (error) {
-        console.error('Failed to upload image:', error)
-        return { success: false, error: 'Failed to upload image' }
+        console.error('Failed to fetch customer service messages:', error)
+        return { error: 'Failed to fetch customer service messages', code: 500 }
       }
     }
+  )
+
+  // Send a message to a customer service chat
+  ipcMain.handle(
+    IpcChannel.BILIBILI_CUSTOMER_SERVICE_SEND_MESSAGE,
+    async (_event, params: SendCustomerServiceMessageParams) => {
+      const credentials = getCredentials()
+      if (!credentials) {
+        return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
+      }
+
+      try {
+        // Like send_msg, this is gated by gaia risk control
+        const cookieHeader = await cookieHeaderWithBuvids(credentials)
+
+        const formData = new URLSearchParams({
+          sender_uid: String(credentials.DedeUserID),
+          shop_father_id: String(params.shopFatherId),
+          shop_id: String(params.shopId),
+          content: params.content,
+          msg_type: String(params.msgType),
+          new_face_version: '0',
+          canal_token: '',
+          dev_id: getOrCreateDevId(credentials.DedeUserID),
+          msg_status: '0',
+          msg_source: '6',
+          timestamp: String(Math.floor(Date.now() / 1000)),
+          build: '0',
+          mobi_app: 'web',
+          csrf: credentials.bili_jct,
+        })
+
+        // Signed like the web client: no query params of its own, so the signature covers wts alone
+        const data = await fetchWbiSigned(
+          BILIBILI_ENDPOINTS.CUSTOMER_SERVICE_SEND_MESSAGE,
+          {},
+          cookieHeader,
+          parseCustomerServiceJson<CustomerServiceSendMessageResponse>,
+          {
+            method: 'POST',
+            headers: {
+              Cookie: cookieHeader,
+              ...COMMON_HEADERS,
+              'Content-Type': 'application/x-www-form-urlencoded',
+              Referer: BILIBILI_HEADERS.REFERER,
+              Origin: BILIBILI_HEADERS.ORIGIN,
+            },
+            body: formData.toString(),
+          }
+        )
+
+        if (!data) {
+          return { error: 'Customer service message was blocked by risk control', code: 412 }
+        }
+        if (data.code !== 0) {
+          return { error: data.message || 'Failed to send customer service message', code: data.code }
+        }
+
+        return data
+      } catch (error) {
+        console.error('Failed to send customer service message:', error)
+        return { error: 'Failed to send customer service message', code: 500 }
+      }
+    }
+  )
+
+  // Mark a customer service chat as read
+  ipcMain.handle(IpcChannel.BILIBILI_CUSTOMER_SERVICE_UPDATE_ACK, async (_event, params: CustomerServiceShop) => {
+    const credentials = getCredentials()
+    if (!credentials) {
+      return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
+    }
+
+    try {
+      const formData = new URLSearchParams({
+        shop_father_id: String(params.shopFatherId),
+        shop_id: String(params.shopId),
+        build: '0',
+        mobi_app: 'web',
+        csrf: credentials.bili_jct,
+      })
+
+      const resp = await fetch(BILIBILI_ENDPOINTS.CUSTOMER_SERVICE_UPDATE_ACK, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieStringFromCredentials(credentials),
+          ...COMMON_HEADERS,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Referer: BILIBILI_HEADERS.REFERER,
+          Origin: BILIBILI_HEADERS.ORIGIN,
+        },
+        body: formData.toString(),
+      })
+
+      const data = await resp.json()
+
+      if (data.code !== 0) {
+        return { error: data.message || 'Failed to update customer service ack', code: data.code }
+      }
+
+      return data
+    } catch (error) {
+      console.error('Failed to update customer service ack:', error)
+      return { error: 'Failed to update customer service ack', code: 500 }
+    }
+  })
+
+  // Upload an image for a customer service message
+  ipcMain.handle(IpcChannel.BILIBILI_CUSTOMER_SERVICE_UPLOAD_IMAGE, (_event, params: UploadImageParams) =>
+    uploadImage(
+      BILIBILI_ENDPOINTS.CUSTOMER_SERVICE_UPLOAD_IMAGE,
+      params,
+      csrf => ({ biz: 'im', csrf }),
+      'customer service image'
+    )
   )
 }

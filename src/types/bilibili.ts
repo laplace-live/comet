@@ -99,6 +99,12 @@ export interface BilibiliMessage {
   new_face_version?: number
   msg_source: number
   sys_cancel?: boolean
+  // Customer service messages only: their sender, since only the user's has a real sender_uid
+  customer_service_sender?: {
+    type: number // See CS_SENDER_TYPE
+    name: string
+    face: string
+  }
 }
 
 // Fetch messages response
@@ -343,6 +349,130 @@ export const SESSION_TYPE = {
 // System session type constants (session.system_msg_type)
 export const SYSTEM_MSG_TYPE = {
   CUSTOMER_SERVICE: 8, // 客服消息 (backed by customerservice.bilibili.com, talker_id is 0)
+} as const
+
+// Session types that WebSocket notifications (notifyInfo.sessionType) give customer service chats,
+// which the session list folds into the one SYSTEM_MSG_TYPE.CUSTOMER_SERVICE session
+export const CUSTOMER_SERVICE_WS_SESSION_TYPES: ReadonlySet<number> = new Set([
+  3, // Bilibili's own customer service
+  4, // A store's customer service
+])
+
+// ============================================================================
+// Customer Service Types (customerservice.bilibili.com)
+// Each chat belongs to a shop: Bilibili's own customer service has shop_father_id 0, stores 1
+// ============================================================================
+
+// A sender or receiver of a customer service message, or the shop a chat is with
+export interface CustomerServiceParticipant {
+  type: number // See CS_SENDER_TYPE
+  uid: number // The user's mid for the user, 0 for the bot
+  shop_id: number
+  shop_father_id: number
+  customer_id: number
+  machine_session_id: number
+  customer_session_id: number
+  name: string
+  pic_url: string
+  shop_homepage: string
+  tags?: string[] | null
+}
+
+// Customer service message
+export interface CustomerServiceMessage {
+  sender_info: CustomerServiceParticipant
+  receiver_info: CustomerServiceParticipant
+  msg_type: number // See CS_MSG_TYPE
+  content: string // Serialized JSON, shaped by msg_type
+  // Ids are kept as strings: they exceed Number.MAX_SAFE_INTEGER
+  msg_key: string
+  seq_no: string
+  timestamp: number
+  msg_status: number
+  msg_source: number
+}
+
+// Customer service chat, as get_sessions lists it
+export interface CustomerServiceSession {
+  talker_info: CustomerServiceParticipant
+  last_msg: CustomerServiceMessage | null
+  unread_info: { unread_count: number }
+  session_ts: number // Microsecond timestamp
+  max_seqno: string
+  top_set: number
+  do_not_disturb: boolean
+  tag_name: string // e.g. 官方
+}
+
+export interface CustomerServiceSessionsResponse {
+  code: number
+  message: string
+  ttl?: number
+  data: {
+    session_list: CustomerServiceSession[] | null
+    has_more: number
+  } | null
+}
+
+export interface CustomerServiceMessagesResponse {
+  code: number
+  message: string
+  ttl?: number
+  data: {
+    messages: CustomerServiceMessage[] | null // Newest first
+    has_more: number
+    min_seqno: string
+    max_seqno: string
+    e_infos?: BilibiliEmojiInfo[]
+  } | null
+}
+
+export interface CustomerServiceSendMessageResponse {
+  code: number
+  message: string
+  ttl?: number
+  data: { msg_key: string } | null
+}
+
+// Who sent a customer service message (sender_info.type)
+export const CS_SENDER_TYPE = {
+  MACHINE: 0, // The bot that answers first
+  CUSTOMER: 1, // A human agent
+  SYS_NOTICE: 2,
+  USER: 3,
+} as const
+
+// Customer service message types; 1-17 share their meaning with MSG_TYPE
+export const CS_MSG_TYPE = {
+  TEXT: 1,
+  IMAGE: 2,
+  WITHDRAW: 5,
+  FAV_EMOJI: 6,
+  VIDEO: 17,
+  ORDER: 10001,
+  GOODS: 10002,
+  EVALUATION: 10003,
+  TICKET: 10004, // 留言通知
+  MACHINE_ANSWER: 10005, // The bot's answer, shaped by content.type
+  MACHINE_QUESTION: 10006, // A question the user picked
+  CUSTOMER_COME: 10007,
+  MACHINE_WELCOME_TEXT: 10008,
+  MACHINE_WELCOME_QUESTIONS: 10009,
+  SPLIT_QUESTION: 10010,
+  SPLIT_ANSWER: 10011, // Business choices or human agent queue state, shaped by content.type
+  SWITCH_CUSTOMER: 10012,
+  CUSTOMER_INVITE_EVALUATION: 10013,
+  OUT_CUSTOMER_QUEUE: 10014,
+  OUT_CUSTOMER_SESSION: 10015, // 会话已结束
+  QUEUE_NOTICE: 10016,
+  FORCE_SWITCH_CUSTOMER: 10017,
+  CUSTOMER_INITIATIVE_MSG: 10018,
+  SYS_NOTE: 10019,
+  MACHINE_SESSION_EVALUATION: 10020,
+  PARAGRAPH_TEXT: 10021,
+  BUSINESS_LINK: 10022,
+  SYS_BAR: 10023,
+  ARCHIVE: 10027, // Video card
 } as const
 
 // QR Code Login Types

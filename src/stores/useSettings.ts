@@ -10,6 +10,9 @@ interface SettingsState {
   /** Developer mode shows detailed message info and unhides revoked messages */
   developerMode: boolean
   setDeveloperMode: (enabled: boolean) => void
+  /** Accounts that muted 客服消息, which Bilibili offers no Do Not Disturb for */
+  customerServiceMutedMids: number[]
+  setCustomerServiceMuted: (mid: number, muted: boolean) => void
 
   // UI state (not persisted)
   /** Whether the settings modal is open */
@@ -34,6 +37,11 @@ export const useSettings = create<SettingsState>()(
       // Persisted settings
       developerMode: false,
       setDeveloperMode: enabled => set({ developerMode: enabled }),
+      customerServiceMutedMids: [],
+      setCustomerServiceMuted: (mid, muted) =>
+        set(state => ({
+          customerServiceMutedMids: [...state.customerServiceMutedMids.filter(m => m !== mid), ...(muted ? [mid] : [])],
+        })),
 
       // UI state
       settingsOpen: false,
@@ -48,7 +56,10 @@ export const useSettings = create<SettingsState>()(
     {
       name: 'laplace-comet-settings',
       // Only persist settings, not UI state
-      partialize: state => ({ developerMode: state.developerMode }),
+      partialize: state => ({
+        developerMode: state.developerMode,
+        customerServiceMutedMids: state.customerServiceMutedMids,
+      }),
     }
   )
 )

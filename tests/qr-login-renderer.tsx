@@ -9,7 +9,7 @@ import { type UseQRCodeLoginOptions, type UseQRCodeLoginResult, useQRCodeLogin }
 
 const globals = window as unknown as {
   IS_REACT_ACT_ENVIRONMENT: boolean
-  __qrLoginTestResults: { tests: Array<{ name: string; ok: boolean; error?: string }> }
+  __rendererTestResults: { tests: Array<{ name: string; ok: boolean; error?: string }> }
 }
 globals.IS_REACT_ACT_ENVIRONMENT = true
 
@@ -318,7 +318,7 @@ test('expired QR stops polling', async () => {
 })
 
 void (async () => {
-  const report: typeof globals.__qrLoginTestResults = { tests: [] }
+  const report: typeof globals.__rendererTestResults = { tests: [] }
   for (const { name, run } of tests) {
     try {
       await run()
@@ -329,5 +329,5 @@ void (async () => {
       if (root) await flush(() => root.unmount())
     }
   }
-  globals.__qrLoginTestResults = report
+  globals.__rendererTestResults = report
 })()

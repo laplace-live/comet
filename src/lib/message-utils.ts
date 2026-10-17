@@ -1,6 +1,8 @@
 import type { BilibiliMessage, BilibiliSession } from '@/types/bilibili'
 
-import { MSG_TYPE } from '@/types/bilibili'
+import { MSG_TYPE, SYSTEM_MSG_TYPE } from '@/types/bilibili'
+
+import { getCustomerServicePreview } from '@/lib/customer-service'
 
 export interface UserCacheEntry {
   name: string
@@ -152,9 +154,18 @@ export function getSessionAvatar(session: BilibiliSession, userCache?: UserCache
 }
 
 /**
+ * Whether the session is 客服消息, which holds every customer service chat
+ */
+export function isCustomerServiceSession(session: BilibiliSession): boolean {
+  return session.system_msg_type === SYSTEM_MSG_TYPE.CUSTOMER_SERVICE
+}
+
+/**
  * Get last message preview text
  */
 export function getLastMessagePreview(session: BilibiliSession): string {
   if (!session.last_msg) return ''
+  // 客服消息 carries its latest customer service message, in that backend's own message types
+  if (isCustomerServiceSession(session)) return getCustomerServicePreview(session.last_msg)
   return parseMessageContent(session.last_msg)
 }

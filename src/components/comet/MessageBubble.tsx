@@ -9,15 +9,23 @@ import {
   Undo2,
   User,
   Users,
+  Video,
 } from 'lucide-react'
+import { useState } from 'react'
 
 import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
+import type { CustomerServiceContent, CustomerServiceLink, CustomerServiceReply } from '@/lib/customer-service'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliMessage, BilibiliSession } from '@/types/bilibili'
 import type { CheckLoginResult } from '@/types/electron'
 
 import { MSG_SOURCE, MSG_TYPE, SESSION_TYPE } from '@/types/bilibili'
 
+import {
+  getCustomerServicePreview,
+  isCustomerServiceSystemSender,
+  parseCustomerServiceContent,
+} from '@/lib/customer-service'
 import { formatTime, getSessionAvatar } from '@/lib/message-utils'
 import { cn } from '@/lib/utils'
 
@@ -42,6 +50,8 @@ interface MessageBubbleProps {
   userCache: UserCache
   userInfo: CheckLoginResult | null
   onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
+  /** Sends what picking one of a customer service bot's suggestions sends */
+  onCustomerServiceReply?: (reply: CustomerServiceReply) => Promise<boolean>
 }
 
 // Get message source label
@@ -650,6 +660,167 @@ function renderDefaultContent(content: Record<string, unknown>, msgType: number)
   return <p className='text-sm'>[消息类型 {msgType}]</p>
 }
 
+// Link inside a customer service message (details, leaving a message, more questions)
+function renderCustomerServiceLink(link: CustomerServiceLink): React.ReactNode {
+  return (
+    <a
+      href={link.url}
+      target='_blank'
+      rel='noopener noreferrer'
+      className='inline-flex items-center gap-1 text-sky-600 text-sm hover:underline dark:text-sky-400'
+    >
+      {link.text}
+      <ExternalLink className='size-3.5' aria-hidden='true' />
+    </a>
+  )
+}
+
+// Customer service video: an uploaded clip or a video card
+function renderCustomerServiceVideo(content: { title?: string; cover?: string; url?: string }): React.ReactNode {
+  const coverUrl = enforceHttps(content.cover)
+  const card = (
+    <div className='w-60 overflow-hidden rounded-lg border border-border/50 bg-white dark:bg-zinc-800'>
+      {coverUrl && (
+        <picture>
+          <img
+            src={coverUrl}
+            alt={content.title || '视频'}
+            className='aspect-video w-full object-cover'
+            loading='lazy'
+            referrerPolicy='no-referrer'
+          />
+        </picture>
+      )}
+      <p className='flex items-center gap-1.5 p-2 text-sm'>
+        <Video className='size-4 flex-none text-muted-foreground' aria-hidden='true' />
+        <span className='line-clamp-2'>{content.title || '[视频]'}</span>
+      </p>
+    </div>
+  )
+
+  return content.url ? (
+    <a href={enforceHttps(content.url)} target='_blank' rel='noopener noreferrer' className='block'>
+      {card}
+    </a>
+  ) : (
+    card
+  )
+}
+
+// The bot's suggestions as buttons: picking one sends its reply, and one-time choices lock once picked
+function CustomerServiceChoices({
+  content,
+  onReply,
+}: {
+  content: Extract<CustomerServiceContent, { kind: 'choices' }>
+  onReply?: (reply: CustomerServiceReply) => Promise<boolean>
+}) {
+  const [sending, setSending] = useState(false)
+  // Picked here, before the server's copy of the message says so
+  const [pickedHere, setPickedHere] = useState<number | null>(null)
+  const done = !!content.once && (content.once.done || pickedHere !== null)
+
+  const pick = async (index: number) => {
+    if (!onReply || sending || done) return
+    setSending(true)
+    const sent = await onReply(content.choices[index].reply)
+    setSending(false)
+    if (sent && content.once) setPickedHere(index)
+  }
+
+  return (
+    <div className='space-y-2'>
+      <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>{content.text}</p>
+      {content.choices.length > 0 && (
+        <div className='flex flex-col gap-1'>
+          {content.choices.map((choice, index) => {
+            const picked = choice.picked || pickedHere === index
+            return (
+              <button
+                // biome-ignore lint/suspicious/noArrayIndexKey: choices can repeat and never reorder
+                key={`${index}-${choice.text}`}
+                type='button'
+                disabled={!onReply || sending || done}
+                onClick={() => pick(index)}
+                className={cn(
+                  'flex items-center justify-between gap-2 rounded-md bg-zinc-100 px-2.5 py-1.5 text-left text-sm transition-colors dark:bg-zinc-700/60',
+                  'enabled:cursor-pointer enabled:hover:bg-zinc-200 dark:enabled:hover:bg-zinc-700',
+                  done && !picked && 'opacity-60',
+                  picked && 'text-sky-600 dark:text-sky-400'
+                )}
+              >
+                <span className='min-w-0'>{choice.text}</span>
+                {onReply && !done && (
+                  <ChevronRight className='size-4 flex-none text-muted-foreground' aria-hidden='true' />
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {content.link && renderCustomerServiceLink(content.link)}
+    </div>
+  )
+}
+
+// Customer service message, in one of the shapes lib/customer-service parses it into
+function renderCustomerServiceContent(
+  content: CustomerServiceContent,
+  emojiInfoMap: EmojiInfoMap,
+  onReply?: (reply: CustomerServiceReply) => Promise<boolean>
+): React.ReactNode {
+  switch (content.kind) {
+    case 'text':
+      return (
+        <div className='space-y-2'>
+          <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>
+            {parseTextWithEmojis(content.text, emojiInfoMap)}
+          </p>
+          {content.image && renderImageContent({ url: content.image })}
+          {content.link && renderCustomerServiceLink(content.link)}
+        </div>
+      )
+
+    case 'choices':
+      return <CustomerServiceChoices content={content} onReply={onReply} />
+
+    case 'image':
+      return renderImageContent(content)
+
+    case 'video':
+      return renderCustomerServiceVideo(content)
+
+    case 'card':
+      return (
+        <div className='space-y-2'>
+          <p className='font-medium text-sm'>{content.title}</p>
+          {content.details.length > 0 && (
+            <div className='space-y-1'>
+              {content.details.map(detail => (
+                <div key={detail.label} className='flex gap-3 text-xs'>
+                  <span className='w-14 flex-none text-muted-foreground'>{detail.label}</span>
+                  <span className='min-w-0 break-all'>{detail.value}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {content.link && renderCustomerServiceLink(content.link)}
+        </div>
+      )
+
+    case 'notice':
+      return (
+        <span>
+          {content.text}
+          {content.link && <> {renderCustomerServiceLink(content.link)}</>}
+        </span>
+      )
+
+    case 'hidden':
+      return null
+  }
+}
+
 // Message inspector popover component
 function MessageInspector({ message, emojiInfoMap }: { message: BilibiliMessage; emojiInfoMap: EmojiInfoMap }) {
   // Get relevant emoji info for this message by checking if any emoji codes appear in the content
@@ -726,6 +897,7 @@ export function MessageBubble({
   userCache,
   userInfo,
   onRecall,
+  onCustomerServiceReply,
 }: MessageBubbleProps) {
   const { developerMode } = useSettings()
   const sourceLabel = getMessageSourceLabel(message.msg_source)
@@ -751,6 +923,7 @@ export function MessageBubble({
 
   // Get copyable text from the message content
   const getCopyableText = (): string => {
+    if (message.customer_service_sender) return getCustomerServicePreview(message)
     try {
       const content = JSON.parse(message.content)
       return extractTextContent(content.content) || extractTextContent(content) || message.content
@@ -840,6 +1013,21 @@ export function MessageBubble({
     )
   }
 
+  // Customer service messages have types of their own; notices (queue state, a closed session) are centered
+  const customerServiceContent = message.customer_service_sender ? parseCustomerServiceContent(message) : null
+  if (customerServiceContent && (customerServiceContent.kind === 'notice' || isCustomerServiceSystemSender(message))) {
+    return (
+      <div className='flex items-center justify-center gap-1 py-1'>
+        <div className='rounded-full bg-zinc-100 px-3 py-1 text-center text-muted-foreground text-xs dark:bg-zinc-800/50'>
+          {customerServiceContent.kind === 'notice'
+            ? renderCustomerServiceContent(customerServiceContent, emojiInfoMap)
+            : getCustomerServicePreview(message)}
+        </div>
+        {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
+      </div>
+    )
+  }
+
   // System tip messages (msg_type 18) should be displayed centered without bubble styling
   // Fan group system messages (msg_type 306, e.g. "欢迎xxx入群") should be displayed centered
   if (message.msg_type === MSG_TYPE.SYSTEM_TIP || message.msg_type === MSG_TYPE.FAN_GROUP_SYSTEM) {
@@ -900,93 +1088,101 @@ export function MessageBubble({
 
   // Rich content types that need different styling
   const RICH_CONTENT_TYPES: number[] = [MSG_TYPE.IMAGE, MSG_TYPE.CUSTOM_EMOJI, MSG_TYPE.VIDEO_PUSH, MSG_TYPE.SHARE]
-  const isRichContent = RICH_CONTENT_TYPES.includes(message.msg_type)
+  const isRichContent = customerServiceContent
+    ? customerServiceContent.kind === 'image' || customerServiceContent.kind === 'video'
+    : RICH_CONTENT_TYPES.includes(message.msg_type)
 
   const isFanGroup = session.session_type === SESSION_TYPE.FAN_GROUP
 
-  // Get sender info from userCache for group chats
+  // Avatar, name (shown above messages from others) and Bilibili space of whoever sent the message.
+  // Group chats use the actual sender from userCache, not the group; customer service senders have no space
   const senderInfo = userCache[message.sender_uid]
-
-  // Get avatar URL based on sender
-  // For group chats, use the actual sender's avatar from userCache
-  const avatarUrl = isSent
-    ? userInfo?.face // Current user's avatar for sent messages
-    : isFanGroup
-      ? senderInfo?.face // For group chats, use the sender's avatar from cache
-      : getSessionAvatar(session, userCache) // For 1-to-1 chats, use session avatar
-
-  // Get sender name for group chats (shown above messages from others)
-  const senderName = !isSent && isFanGroup ? senderInfo?.name || `UID:${message.sender_uid}` : null
-
-  // Get the user ID for the Bilibili space link
-  // For group chats, use the actual sender_uid, not the group ID
-  const resolvedUid = isSent ? userInfo?.mid : isFanGroup ? message.sender_uid : session.talker_id
+  const customerServiceSender = message.customer_service_sender
+  const sender = isSent
+    ? { face: userInfo?.face, name: null, uid: userInfo?.mid }
+    : customerServiceSender
+      ? { face: customerServiceSender.face, name: customerServiceSender.name, uid: null }
+      : isFanGroup
+        ? { face: senderInfo?.face, name: senderInfo?.name || `UID:${message.sender_uid}`, uid: message.sender_uid }
+        : { face: getSessionAvatar(session, userCache), name: null, uid: session.talker_id }
+  const { face: avatarUrl, name: senderName, uid: resolvedUid } = sender
   const bilibiliSpaceUrl = resolvedUid ? `https://space.bilibili.com/${resolvedUid}` : null
   const laplaceUrl = resolvedUid ? `https://laplace.live/user/${resolvedUid}` : null
+  const hasUserMenu = !!bilibiliSpaceUrl || (isRecallable && !!onRecall)
+
+  const avatar = (
+    <Avatar
+      className={cn(
+        'size-8 flex-none ring-1 ring-border/50',
+        hasUserMenu && 'cursor-pointer transition-opacity hover:opacity-80'
+      )}
+    >
+      {avatarUrl && <AvatarImage src={enforceHttps(avatarUrl)} referrerPolicy='no-referrer' />}
+      <AvatarFallback
+        className={
+          isSent
+            ? 'bg-linear-to-br from-blue-400 to-cyan-300 text-white'
+            : 'bg-linear-to-br from-pink-400 to-orange-300 text-white'
+        }
+      >
+        {isFanGroup && !isSent ? (
+          <Users className='size-3.5' aria-hidden='true' />
+        ) : (
+          <User className='size-3.5' aria-hidden='true' />
+        )}
+      </AvatarFallback>
+    </Avatar>
+  )
 
   return (
     <div className={`flex gap-3 ${isSent ? 'flex-row-reverse' : ''}`}>
-      <Menu>
-        <MenuTrigger
-          nativeButton={false}
-          aria-label='用户菜单'
-          render={
-            <Avatar className='size-8 flex-none cursor-pointer ring-1 ring-border/50 transition-opacity hover:opacity-80'>
-              {avatarUrl && <AvatarImage src={enforceHttps(avatarUrl)} referrerPolicy='no-referrer' />}
-              <AvatarFallback
-                className={
-                  isSent
-                    ? 'bg-linear-to-br from-blue-400 to-cyan-300 text-white'
-                    : 'bg-linear-to-br from-pink-400 to-orange-300 text-white'
-                }
-              >
-                {isFanGroup && !isSent ? (
-                  <Users className='size-3.5' aria-hidden='true' />
-                ) : (
-                  <User className='size-3.5' aria-hidden='true' />
-                )}
-              </AvatarFallback>
-            </Avatar>
-          }
-        />
-        <MenuPopup side={'bottom'} align={isSent ? 'end' : 'start'}>
-          {bilibiliSpaceUrl && (
-            <a href={bilibiliSpaceUrl} target='_blank' rel='noopener noreferrer'>
-              <MenuItem>
-                <ExternalLink aria-hidden='true' />
-                个人空间
+      {hasUserMenu ? (
+        <Menu>
+          <MenuTrigger nativeButton={false} aria-label='用户菜单' render={avatar} />
+          <MenuPopup side={'bottom'} align={isSent ? 'end' : 'start'}>
+            {bilibiliSpaceUrl && (
+              <a href={bilibiliSpaceUrl} target='_blank' rel='noopener noreferrer'>
+                <MenuItem>
+                  <ExternalLink aria-hidden='true' />
+                  个人空间
+                </MenuItem>
+              </a>
+            )}
+            {laplaceUrl && (
+              <a href={laplaceUrl} target='_blank' rel='noopener noreferrer'>
+                <MenuItem>
+                  <ExternalLink aria-hidden='true' />
+                  LAPLACE Live!
+                </MenuItem>
+              </a>
+            )}
+            {isRecallable && onRecall && (
+              <MenuItem onClick={handleRecall}>
+                <Undo2 aria-hidden='true' />
+                撤回
               </MenuItem>
-            </a>
-          )}
-          {laplaceUrl && (
-            <a href={laplaceUrl} target='_blank' rel='noopener noreferrer'>
-              <MenuItem>
-                <ExternalLink aria-hidden='true' />
-                LAPLACE Live!
-              </MenuItem>
-            </a>
-          )}
-          {isRecallable && onRecall && (
-            <MenuItem onClick={handleRecall}>
-              <Undo2 aria-hidden='true' />
-              撤回
-            </MenuItem>
-          )}
-        </MenuPopup>
-      </Menu>
+            )}
+          </MenuPopup>
+        </Menu>
+      ) : (
+        avatar
+      )}
 
       <div className={cn('flex max-w-[70%] flex-col gap-1', isSent ? 'items-end' : 'items-start')}>
-        {/* Sender name for group chats (shown for received messages) */}
-        {senderName && (
-          <a
-            href={bilibiliSpaceUrl || '#'}
-            target='_blank'
-            rel='noopener noreferrer'
-            className='truncate text-muted-foreground text-xs hover:text-foreground hover:underline'
-          >
-            {senderName}
-          </a>
-        )}
+        {/* Sender name for group chats and customer service (shown for received messages) */}
+        {senderName &&
+          (bilibiliSpaceUrl ? (
+            <a
+              href={bilibiliSpaceUrl}
+              target='_blank'
+              rel='noopener noreferrer'
+              className='truncate text-muted-foreground text-xs hover:text-foreground hover:underline'
+            >
+              {senderName}
+            </a>
+          ) : (
+            <span className='truncate text-muted-foreground text-xs'>{senderName}</span>
+          ))}
         {/* Developer mode indicator for recalled messages */}
         {isRecalledInDevMode && (
           <div className='flex items-center gap-1 text-amber-600 text-xs dark:text-amber-400'>
@@ -1012,7 +1208,9 @@ export function MessageBubble({
                   isRecalledInDevMode && 'ring-2 ring-amber-500/50 ring-offset-1'
                 )}
               >
-                {renderMessageContent(message, emojiInfoMap)}
+                {customerServiceContent
+                  ? renderCustomerServiceContent(customerServiceContent, emojiInfoMap, onCustomerServiceReply)
+                  : renderMessageContent(message, emojiInfoMap)}
               </div>
             }
           />
