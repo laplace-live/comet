@@ -11,13 +11,18 @@ import type {
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
   BilibiliUserCardsResponse,
+  CustomerServiceMessagesResponse,
+  CustomerServiceSendMessageResponse,
+  CustomerServiceSessionsResponse,
 } from '@/types/bilibili'
 import type {
   CheckForUpdatesResult,
   CheckLoginResult,
   CopyImageParams,
   CopyImageResult,
+  CustomerServiceShop,
   ErrorResponse,
+  FetchCustomerServiceMessagesParams,
   FetchMessagesParams,
   FetchSessionsParams,
   FetchUsersParams,
@@ -33,6 +38,7 @@ import type {
   RemoveAccountResult,
   ReorderAccountsParams,
   ReorderAccountsResult,
+  SendCustomerServiceMessageParams,
   SendMessageParams,
   SessionUpdateNotification,
   SetActiveAccountParams,
@@ -91,6 +97,13 @@ export const IpcChannel = {
   BILIBILI_UPLOAD_IMAGE: 'bilibili:upload-image',
   BILIBILI_SET_DND: 'bilibili:set-dnd',
   BILIBILI_SET_TOP: 'bilibili:set-top',
+
+  // Bilibili Customer Service
+  BILIBILI_CUSTOMER_SERVICE_FETCH_SESSIONS: 'bilibili:customer-service-fetch-sessions',
+  BILIBILI_CUSTOMER_SERVICE_FETCH_MESSAGES: 'bilibili:customer-service-fetch-messages',
+  BILIBILI_CUSTOMER_SERVICE_SEND_MESSAGE: 'bilibili:customer-service-send-message',
+  BILIBILI_CUSTOMER_SERVICE_UPDATE_ACK: 'bilibili:customer-service-update-ack',
+  BILIBILI_CUSTOMER_SERVICE_UPLOAD_IMAGE: 'bilibili:customer-service-upload-image',
 
   // Bilibili WebSocket
   BILIBILI_WS_CONNECT: 'bilibili:ws-connect',
@@ -229,6 +242,28 @@ export interface IpcInvokeContract {
   [IpcChannel.BILIBILI_SET_TOP]: {
     params: SetTopParams
     result: SetTopResult
+  }
+
+  // Bilibili Customer Service
+  [IpcChannel.BILIBILI_CUSTOMER_SERVICE_FETCH_SESSIONS]: {
+    params: undefined
+    result: CustomerServiceSessionsResponse | ErrorResponse
+  }
+  [IpcChannel.BILIBILI_CUSTOMER_SERVICE_FETCH_MESSAGES]: {
+    params: FetchCustomerServiceMessagesParams
+    result: CustomerServiceMessagesResponse | ErrorResponse
+  }
+  [IpcChannel.BILIBILI_CUSTOMER_SERVICE_SEND_MESSAGE]: {
+    params: SendCustomerServiceMessageParams
+    result: CustomerServiceSendMessageResponse | ErrorResponse
+  }
+  [IpcChannel.BILIBILI_CUSTOMER_SERVICE_UPDATE_ACK]: {
+    params: CustomerServiceShop
+    result: UpdateAckResponse | ErrorResponse
+  }
+  [IpcChannel.BILIBILI_CUSTOMER_SERVICE_UPLOAD_IMAGE]: {
+    params: UploadImageParams
+    result: UploadImageResult
   }
 
   // Bilibili WebSocket

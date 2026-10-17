@@ -14,7 +14,7 @@ import { timeFromNow } from '@/utils/timeFromNow'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 
-import { useDrafts } from '@/stores/useDrafts'
+import { getSessionDraft, useDrafts } from '@/stores/useDrafts'
 import { VerifiedBadge } from './VerifiedBadge'
 
 interface SessionItemProps {
@@ -46,7 +46,7 @@ export function SessionItem({ session, draftKey, isSelected, userCache, onClick 
   const cachedUser = userCache[session.talker_id]
   const vipNicknameColor = getVipNicknameColor(userCache, session.talker_id)
   // Only mark sessions the user has left; the open one is being edited in the input
-  const draft = useDrafts(state => (isSelected ? undefined : state.drafts[draftKey]?.trim()))
+  const draft = useDrafts(state => (isSelected ? undefined : getSessionDraft(state.drafts, draftKey)?.trim()))
 
   return (
     <button

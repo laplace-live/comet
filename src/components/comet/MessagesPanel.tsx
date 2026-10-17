@@ -2,6 +2,7 @@ import {
   ArrowLeft,
   Bell,
   BellOff,
+  ChevronDown,
   Copy,
   EllipsisVertical,
   ImagePlus,
@@ -15,14 +16,16 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { VirtuosoHandle } from 'react-virtuoso'
 
 import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
+import type { CustomerServiceReply } from '@/lib/customer-service'
 import type { UserCache } from '@/lib/message-utils'
-import type { BilibiliMessage, BilibiliSession } from '@/types/bilibili'
-import type { CheckLoginResult } from '@/types/electron'
+import type { BilibiliMessage, BilibiliSession, CustomerServiceSession } from '@/types/bilibili'
+import type { CheckLoginResult, CustomerServiceShop } from '@/types/electron'
 
-import { SESSION_TYPE, SYSTEM_MSG_TYPE } from '@/types/bilibili'
+import { SESSION_TYPE } from '@/types/bilibili'
 
 import { MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MIME_TYPES } from '@/lib/const'
-import { getSessionAvatar, getSessionName } from '@/lib/message-utils'
+import { getCustomerServiceShop } from '@/lib/customer-service'
+import { getSessionAvatar, getSessionName, isCustomerServiceSession } from '@/lib/message-utils'
 
 import { enforceHttps } from '@/utils/enforceHttps'
 import { isMacOS } from '@/utils/platform'
@@ -30,11 +33,19 @@ import { isMacOS } from '@/utils/platform'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from '@/components/ui/menu'
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from '@/components/ui/menu'
 import { Spinner } from '@/components/ui/spinner'
 import { toastManager } from '@/components/ui/toast'
 
-import { getDraftKey } from '@/stores/useDrafts'
+import { getDraftKey, useDrafts } from '@/stores/useDrafts'
 import { MessageInput } from './MessageInput'
 import { MessagesList } from './MessagesList'
 
@@ -53,6 +64,11 @@ interface MessagesPanelProps {
   onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
   onToggleDnd: (session: BilibiliSession, enabled: boolean) => Promise<boolean>
   onToggleSticky: (session: BilibiliSession, pinned: boolean) => Promise<boolean>
+  /** The chats 客服消息 holds, and the one it's showing */
+  customerServiceSessions: CustomerServiceSession[]
+  activeCustomerService: CustomerServiceSession | null
+  onSelectCustomerService: (shop: CustomerServiceShop) => void
+  onCustomerServiceReply: (reply: CustomerServiceReply) => Promise<boolean>
 }
 
 export function MessagesPanel({
@@ -70,6 +86,10 @@ export function MessagesPanel({
   onRecall,
   onToggleDnd,
   onToggleSticky,
+  customerServiceSessions,
+  activeCustomerService,
+  onSelectCustomerService,
+  onCustomerServiceReply,
 }: MessagesPanelProps) {
   return (
     <div
@@ -90,6 +110,10 @@ export function MessagesPanel({
           onRecall={onRecall}
           onToggleDnd={onToggleDnd}
           onToggleSticky={onToggleSticky}
+          customerServiceSessions={customerServiceSessions}
+          activeCustomerService={activeCustomerService}
+          onSelectCustomerService={onSelectCustomerService}
+          onCustomerServiceReply={onCustomerServiceReply}
         />
       ) : (
         <EmptyState />
@@ -112,6 +136,10 @@ interface ChatViewProps {
   onRecall: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
   onToggleDnd: (session: BilibiliSession, enabled: boolean) => Promise<boolean>
   onToggleSticky: (session: BilibiliSession, pinned: boolean) => Promise<boolean>
+  customerServiceSessions: CustomerServiceSession[]
+  activeCustomerService: CustomerServiceSession | null
+  onSelectCustomerService: (shop: CustomerServiceShop) => void
+  onCustomerServiceReply: (reply: CustomerServiceReply) => Promise<boolean>
 }
 
 function ChatView({
@@ -128,19 +156,30 @@ function ChatView({
   onRecall,
   onToggleDnd,
   onToggleSticky,
+  customerServiceSessions,
+  activeCustomerService,
+  onSelectCustomerService,
+  onCustomerServiceReply,
 }: ChatViewProps) {
-  const avatar = getSessionAvatar(session, userCache)
+  const isCustomerService = isCustomerServiceSession(session)
+  // 客服消息 is shown as the customer service chat it's on
+  const customerServiceTalker = isCustomerService ? activeCustomerService?.talker_info : undefined
+  const avatar = customerServiceTalker?.pic_url || getSessionAvatar(session, userCache)
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const [isDragging, setIsDragging] = useState(false)
   const [droppedFile, setDroppedFile] = useState<File | null>(null)
   const dragCounterRef = useRef(0)
 
-  const sessionName = getSessionName(session, userCache)
+  const sessionName = customerServiceTalker?.name || getSessionName(session, userCache)
+  // Each customer service chat keeps a draft of its own, as each conversation does
+  const sessionDraftKey = getDraftKey(userInfo?.mid ?? 0, session)
+  const draftKey =
+    isCustomerService && activeCustomerService
+      ? getDraftKey(userInfo?.mid ?? 0, session, getCustomerServiceShop(activeCustomerService))
+      : sessionDraftKey
   const isDnd = session.is_dnd === 1
   const isSticky = session.top_ts > 0
-  // The customer service session has no talker uid, so set_msg_dnd can't target it.
-  // Bilibili's own client doesn't offer DND for it either.
-  const canToggleDnd = session.system_msg_type !== SYSTEM_MSG_TYPE.CUSTOMER_SERVICE
+  const badgeLabel = isCustomerService ? activeCustomerService?.tag_name : session.is_follow === 1 ? '关注中' : null
 
   const copyUsername = useCallback(() => {
     navigator.clipboard.writeText(sessionName)
@@ -165,6 +204,17 @@ function ChatView({
     setIsDragging(false)
     dragCounterRef.current = 0
   }, [session.talker_id])
+
+  // Text typed before 客服消息 had a chat to show is for the chat it then shows
+  useEffect(() => {
+    if (draftKey === sessionDraftKey) return
+    const { drafts, setDraft } = useDrafts.getState()
+    const typed = drafts[sessionDraftKey]
+    if (typed && !drafts[draftKey]) {
+      setDraft(draftKey, typed)
+      setDraft(sessionDraftKey, '')
+    }
+  }, [draftKey, sessionDraftKey])
 
   const scrollToBottom = useCallback(() => {
     if (messages.length > 0) {
@@ -265,20 +315,29 @@ function ChatView({
         </Avatar>
 
         <div className='flex-1'>
-          <h3 className='font-semibold'>
-            <a
-              href={`https://space.bilibili.com/${session.talker_id}`}
-              target='_blank'
-              rel='noopener noreferrer'
-              className='app-region-no-drag'
-            >
-              {sessionName}
-            </a>
-          </h3>
+          {isCustomerService ? (
+            <CustomerServiceTitle
+              name={sessionName}
+              sessions={customerServiceSessions}
+              active={activeCustomerService}
+              onSelect={onSelectCustomerService}
+            />
+          ) : (
+            <h3 className='font-semibold'>
+              <a
+                href={`https://space.bilibili.com/${session.talker_id}`}
+                target='_blank'
+                rel='noopener noreferrer'
+                className='app-region-no-drag'
+              >
+                {sessionName}
+              </a>
+            </h3>
+          )}
           <div className='flex items-center gap-2'>
-            {session.is_follow === 1 && (
+            {badgeLabel && (
               <Badge variant='outline' size='sm'>
-                关注中
+                {badgeLabel}
               </Badge>
             )}
             <span className='text-muted-foreground text-xs'>{messages.length || '-'} 条消息</span>
@@ -302,25 +361,25 @@ function ChatView({
               )}
               {isSticky ? '取消置顶' : '置顶'}
             </MenuItem>
-            {canToggleDnd && (
-              <MenuItem onClick={handleToggleDnd}>
-                {isDnd ? (
-                  <Bell className='size-4' aria-hidden='true' />
-                ) : (
-                  <BellOff className='size-4' aria-hidden='true' />
-                )}
-                {isDnd ? '开启通知' : '免打扰'}
-              </MenuItem>
-            )}
+            <MenuItem onClick={handleToggleDnd}>
+              {isDnd ? (
+                <Bell className='size-4' aria-hidden='true' />
+              ) : (
+                <BellOff className='size-4' aria-hidden='true' />
+              )}
+              {isDnd ? '开启通知' : '免打扰'}
+            </MenuItem>
             <MenuSeparator />
             <MenuItem onClick={copyUsername}>
               <Copy className='size-4' aria-hidden='true' />
               复制用户名
             </MenuItem>
-            <MenuItem onClick={copyUid}>
-              <Copy className='size-4' aria-hidden='true' />
-              {`复制 UID:${session.talker_id}`}
-            </MenuItem>
+            {!isCustomerService && (
+              <MenuItem onClick={copyUid}>
+                <Copy className='size-4' aria-hidden='true' />
+                {`复制 UID:${session.talker_id}`}
+              </MenuItem>
+            )}
           </MenuPopup>
         </Menu>
       </div>
@@ -343,13 +402,15 @@ function ChatView({
           session={session}
           userCache={userCache}
           userInfo={userInfo}
-          onRecall={onRecall}
+          // Customer service has no recall, and only its bot offers choices to pick
+          onRecall={isCustomerService ? undefined : onRecall}
+          onCustomerServiceReply={isCustomerService ? onCustomerServiceReply : undefined}
         />
       )}
 
       {/* Message Input - isolated component to prevent re-renders of messages */}
       <MessageInput
-        draftKey={getDraftKey(userInfo?.mid ?? 0, session)}
+        draftKey={draftKey}
         sendingMessage={sendingMessage}
         droppedFile={droppedFile}
         onSendMessage={onSendMessage}
@@ -358,6 +419,63 @@ function ChatView({
         onDroppedFileProcessed={handleDroppedFileProcessed}
       />
     </div>
+  )
+}
+
+// The customer service chat 客服消息 is on, with a menu to switch when it holds several
+function CustomerServiceTitle({
+  name,
+  sessions,
+  active,
+  onSelect,
+}: {
+  name: string
+  sessions: CustomerServiceSession[]
+  active: CustomerServiceSession | null
+  onSelect: (shop: CustomerServiceShop) => void
+}) {
+  if (sessions.length < 2) {
+    return <h3 className='font-semibold'>{name}</h3>
+  }
+
+  const keyOf = (session: CustomerServiceSession) =>
+    `${session.talker_info.shop_father_id}_${session.talker_info.shop_id}`
+
+  return (
+    <Menu>
+      <MenuTrigger
+        className='app-region-no-drag inline-flex items-center gap-1 font-semibold transition-colors hover:text-foreground/80'
+        aria-label='切换客服会话'
+      >
+        {name}
+        <ChevronDown className='size-4 text-muted-foreground' aria-hidden='true' />
+      </MenuTrigger>
+      <MenuPopup align='start'>
+        <MenuRadioGroup
+          value={active ? keyOf(active) : ''}
+          onValueChange={value => {
+            const session = sessions.find(s => keyOf(s) === value)
+            if (session) onSelect(getCustomerServiceShop(session))
+          }}
+        >
+          {sessions.map(session => {
+            const unread = session.unread_info?.unread_count ?? 0
+            return (
+              <MenuRadioItem key={keyOf(session)} value={keyOf(session)} closeOnClick>
+                <span className='flex min-w-0 items-center gap-2'>
+                  <span className='truncate'>{session.talker_info.name}</span>
+                  {unread > 0 && (
+                    <Badge variant='destructive' size='sm' className='flex-none'>
+                      {unread > 99 ? '99+' : unread}
+                    </Badge>
+                  )}
+                </span>
+              </MenuRadioItem>
+            )
+          })}
+        </MenuRadioGroup>
+      </MenuPopup>
+    </Menu>
   )
 }
 

@@ -50,6 +50,7 @@ The app supports multiple session and message types defined in `src/lib/const.ts
 - **SESSION_TYPE**: `USER` (1) for direct messages, `FAN_GROUP` (2) for fan group chats
 - **MSG_TYPE**: Various message types including text, images, notifications, `AI_GENERATED` (52), `FAN_GROUP_SYSTEM` (306)
 - **MSG_SOURCE**: Message origins including `AI` (19), `FAN_GROUP_SYSTEM` (13), auto-reply types, system tips
+- **Customer service** (客服消息) is a separate backend, `customerservice.bilibili.com`, with one chat per shop. The session list folds every chat into one session (`SYSTEM_MSG_TYPE.CUSTOMER_SERVICE`, talker_id 0), so its messages, sending, read state and WebSocket notifications (session types 3 and 4) all go through `bilibili.customerService` and `src/lib/customer-service.ts`, not the direct-message calls. Bilibili's own web client (message.bilibili.com) is the reference for how those calls look.
 
 ### Multi-Account Management
 

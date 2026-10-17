@@ -205,6 +205,7 @@ ipcMain.handle(IpcChannel.SHOW_NOTIFICATION, async (_event, params: ShowNotifica
       mainWindow.webContents.send(IpcEvent.BILIBILI_NAVIGATE_TO_SESSION, {
         talkerId: params.talkerId,
         sessionType: params.sessionType,
+        customerServiceShop: params.customerServiceShop,
       })
     } else {
       console.error('[Notification] No main window found')

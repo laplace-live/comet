@@ -3,6 +3,7 @@ import type { ScrollerProps, VirtuosoHandle } from 'react-virtuoso'
 import { Virtuoso } from 'react-virtuoso'
 
 import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
+import type { CustomerServiceReply } from '@/lib/customer-service'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliMessage, BilibiliSession } from '@/types/bilibili'
 import type { CheckLoginResult } from '@/types/electron'
@@ -22,6 +23,7 @@ export interface MessagesListProps {
   userCache: UserCache
   userInfo: CheckLoginResult | null
   onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
+  onCustomerServiceReply?: (reply: CustomerServiceReply) => Promise<boolean>
   virtuosoRef?: React.Ref<VirtuosoHandle>
 }
 
@@ -33,6 +35,7 @@ export const MessagesList = memo(function MessagesList({
   userCache,
   userInfo,
   onRecall,
+  onCustomerServiceReply,
   virtuosoRef,
 }: MessagesListProps) {
   return (
@@ -53,6 +56,7 @@ export const MessagesList = memo(function MessagesList({
             userCache={userCache}
             userInfo={userInfo}
             onRecall={onRecall}
+            onCustomerServiceReply={onCustomerServiceReply}
           />
         </div>
       )}

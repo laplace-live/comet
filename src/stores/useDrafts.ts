@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 
 import type { BilibiliSession } from '@/types/bilibili'
+import type { CustomerServiceShop } from '@/types/electron'
 
 // ============================================================================
 // Drafts Types
@@ -19,9 +20,22 @@ interface DraftsState {
 // Draft Keys
 // ============================================================================
 
-/** Drafts are scoped per account, since two logged-in accounts can talk to the same user */
-export function getDraftKey(accountMid: number, session: Pick<BilibiliSession, 'session_type' | 'talker_id'>): string {
-  return `${accountMid}:${session.session_type}:${session.talker_id}`
+/**
+ * Drafts are scoped per account, since two logged-in accounts can talk to the same user,
+ * and per customer service chat, since 客服消息 holds one for each shop
+ */
+export function getDraftKey(
+  accountMid: number,
+  session: Pick<BilibiliSession, 'session_type' | 'talker_id'>,
+  customerServiceShop?: CustomerServiceShop
+): string {
+  const key = `${accountMid}:${session.session_type}:${session.talker_id}`
+  return customerServiceShop ? `${key}:${customerServiceShop.shopFatherId}_${customerServiceShop.shopId}` : key
+}
+
+/** The draft kept for a session's key, or for 客服消息 the first of its chats' (keyed under it) */
+export function getSessionDraft(drafts: Record<string, string>, key: string): string | undefined {
+  return drafts[key] ?? Object.entries(drafts).find(([k, text]) => k.startsWith(`${key}:`) && text.trim())?.[1]
 }
 
 // ============================================================================
