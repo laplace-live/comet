@@ -144,8 +144,20 @@ before(async () => {
   }
 })
 
-const send = () =>
-  invoke(channels.BILIBILI_CUSTOMER_SERVICE_SEND_MESSAGE, { ...shop, msgType: 1, content: '{"content":"你好"}' })
+const send = (senderMid = credentials.DedeUserID) =>
+  invoke(channels.BILIBILI_CUSTOMER_SERVICE_SEND_MESSAGE, {
+    ...shop,
+    msgType: 1,
+    content: '{"content":"你好"}',
+    senderMid,
+  })
+
+test('a send from an account that is no longer signed in is refused', async t => {
+  const calls = mockFetch(t, endpoints.CUSTOMER_SERVICE_SEND_MESSAGE, [])
+  const result = await send(67890)
+  assert.equal(calls.endpoint, 0, 'it must not go out from the account signed in now')
+  assert.ok(result.error, 'it should say the message was not sent')
+})
 
 test('a send answered with an error page is not sent again', async t => {
   const calls = mockFetch(t, endpoints.CUSTOMER_SERVICE_SEND_MESSAGE, [() => blockPage(502)])

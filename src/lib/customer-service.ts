@@ -159,18 +159,15 @@ function questions(problems: unknown, msgKey: string): CustomerServiceChoice[] {
     }))
 }
 
-/** Text of an HTML snippet, for answers that only come as markup */
+/**
+ * Text of an HTML snippet, for answers that only come as markup.
+ * Parsed, never rendered: a parsed document runs no scripts and loads nothing.
+ */
 function plainText(html: string): string {
-  return html
-    .replace(/<br\s*\/?>|<\/p>/gi, '\n')
-    .replace(/<[^>]*>/g, '')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&amp;/g, '&')
-    .trim()
+  const { body } = new DOMParser().parseFromString(html, 'text/html')
+  for (const br of body.querySelectorAll('br')) br.replaceWith('\n')
+  for (const paragraph of body.querySelectorAll('p')) paragraph.append('\n')
+  return (body.textContent ?? '').replace(/\u00a0/g, ' ').trim()
 }
 
 // The bot's answer (MACHINE_ANSWER), shaped by content.type

@@ -108,6 +108,8 @@ export interface FetchCustomerServiceMessagesParams extends CustomerServiceShop 
 export interface SendCustomerServiceMessageParams extends CustomerServiceShop {
   msgType: number
   content: string
+  /** The account sending it, which must still be the one signed in */
+  senderMid: number
 }
 
 export interface SendMessageResponse {

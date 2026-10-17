@@ -1489,6 +1489,10 @@ export function registerBilibiliIpcHandlers() {
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
       }
+      // An account switch takes effect here before the renderer hears of it, so the renderer can't hold this back
+      if (credentials.DedeUserID !== params.senderMid) {
+        return { error: 'The account changed before the message was sent', code: 409 }
+      }
 
       try {
         // Like send_msg, this is gated by gaia risk control

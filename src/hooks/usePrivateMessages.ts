@@ -247,8 +247,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Bumped when another account signs in. Its chats can share shop ids with this one's
   // (Bilibili's own is 0/0 for everyone), so replies still out for the last account check it
   const customerServiceAccountRef = useRef(0)
-  // Bumped by every load of a chat (and by the account changing), so only the latest load lands
-  const customerServiceLoadRef = useRef(0)
+  // Bumped by every load of a conversation or customer service chat (and by the account changing), so only
+  // the latest load lands: the next account can have the same contact, or the same chat
+  const messagesLoadRef = useRef(0)
 
   // Kept in step with the ref, which unread sums read without waiting for a render
   const setChats = useCallback((list: CustomerServiceSession[]) => {
@@ -266,7 +267,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset whenever the account changes
   useEffect(() => {
     customerServiceAccountRef.current++
-    customerServiceLoadRef.current++
+    messagesLoadRef.current++
     setChats([])
     setActiveShop(null)
   }, [userInfo?.mid, setChats, setActiveShop])
@@ -666,11 +667,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Load a customer service chat, every page of it like fetchMessages does
   const fetchCustomerServiceMessages = useCallback(
     async (shop: CustomerServiceShop) => {
-      const load = ++customerServiceLoadRef.current
+      const load = ++messagesLoadRef.current
       // Leaving the chat, opening it again or another account signing in drops this load, pages and all
-      const stale = () => load !== customerServiceLoadRef.current || !isCustomerServiceOpen(shop)
+      const stale = () => load !== messagesLoadRef.current || !isCustomerServiceOpen(shop)
       setMessagesLoading(true)
       setEmojiInfoMap({})
+      // From nothing, so whatever a refresh or a send adds while the pages load is this chat's
+      setMessages([])
 
       const pages = await fetchCustomerServicePages(shop, () => false, stale)
       if (!pages) return
@@ -683,11 +686,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           description: pages.error,
         })
       }
-      // Whatever loaded still shows: pages come newest first, so a later one failing leaves the chat readable
+      // Whatever loaded still shows: pages come newest first, so a later one failing leaves the chat readable.
+      // A reply refreshed in or a message sent while they loaded is newer, so it stays.
       mergeEmojiInfos(pages.emojiInfos)
-      setMessages(pages.messages.reverse().map(toDisplayMessage))
+      const history = pages.messages.reverse().map(toDisplayMessage)
+      setMessages(prev => mergeCustomerServiceMessages(history, prev))
       setMessagesLoading(false)
-      if (pages.messages.length > 0 || !pages.error) ackCustomerService(shop)
+      // A reply can open the chat with Comet in the background, and then focusing the window marks it read
+      if (windowFocusedRef.current && (pages.messages.length > 0 || !pages.error)) ackCustomerService(shop)
     },
     [mergeEmojiInfos, isCustomerServiceOpen, ackCustomerService]
   )
@@ -722,13 +728,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Open 客服消息 on one of its chats: the one picked before if it's still listed, else the newest
   const openCustomerService = useCallback(async () => {
     setMessagesLoading(true)
-    const load = ++customerServiceLoadRef.current
+    const load = ++messagesLoadRef.current
 
     const picked = activeCustomerServiceShopRef.current
     const list = await fetchCustomerServiceSessions()
     // While the list loaded the user may have picked a chat, opened 客服消息 again or switched account,
     // or moved on to another session, and each of those loads on its own
-    if (load !== customerServiceLoadRef.current) return
+    if (load !== messagesLoadRef.current) return
     if (!selectedSessionRef.current || !isCustomerServiceSession(selectedSessionRef.current)) return
     const session = list?.find(s => isSameShop(getCustomerServiceShop(s), picked)) ?? list?.[0]
     // Without a list to go by, keep showing the chat picked before
@@ -767,7 +773,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       }
       const account = customerServiceAccountRef.current
 
-      const data = await window.electronAPI.bilibili.customerService.sendMessage({ ...shop, msgType, content })
+      // From this account only: the main process refuses it if another one signed in since (during an upload, say)
+      const data = await window.electronAPI.bilibili.customerService.sendMessage({
+        ...shop,
+        msgType,
+        content,
+        senderMid,
+      })
 
       if (isErrorResponse(data) || data.code !== 0) {
         const description = isErrorResponse(data) ? data.error : data.message
@@ -850,8 +862,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       // Clear emoji map when switching sessions
       setEmojiInfoMap({})
 
-      // The user may open another session (客服消息 included) while pages load, which loads on its own
+      // The user may open another session (客服消息 included) while pages load, or this contact under
+      // another account, and each of those loads on its own
+      const load = ++messagesLoadRef.current
       const isOpen = () =>
+        load === messagesLoadRef.current &&
         selectedSessionRef.current?.talker_id === session.talker_id &&
         selectedSessionRef.current?.session_type === session.session_type
 
@@ -1738,8 +1753,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     [showNotificationForMessage]
   )
 
-  // msg_key of the customer service message last notified about
-  const notifiedCustomerServiceKeyRef = useRef<string | null>(null)
+  // msg_key of the customer service message last notified about, per chat
+  const notifiedCustomerServiceKeysRef = useRef(new Map<string, string>())
 
   // Customer service notifications also arrive for the user's own messages and name only the chat,
   // so that chat's latest message decides: notify once for an unread one somebody else sent
@@ -1749,6 +1764,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       chats: Promise<CustomerServiceSession[] | null>,
       refreshedSessions: Promise<BilibiliSession[]>
     ) => {
+      const account = customerServiceAccountRef.current
+      const mid = userInfo?.mid
       const list = await chats
       // A chat past the listed ones is likely the newest, which lists first
       const chat = list?.find(s => isSameShop(getCustomerServiceShop(s), shop)) ?? list?.[0]
@@ -1756,13 +1773,19 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (!chat || !latest || !chat.unread_info?.unread_count) return
       if (latest.sender_info?.type === CS_SENDER_TYPE.USER || latest.msg_type === CS_MSG_TYPE.WITHDRAW) return
 
-      // Several notifications can arrive for one message (the user's own just before a reply, say)
-      if (latest.msg_key === notifiedCustomerServiceKeyRef.current) return
-      notifiedCustomerServiceKeyRef.current = latest.msg_key
+      // Several notifications can arrive for one message (the user's own just before a reply, say),
+      // with another chat's between them
+      const { shopFatherId, shopId } = getCustomerServiceShop(chat)
+      const notified = notifiedCustomerServiceKeysRef.current
+      if (notified.get(`${shopFatherId}_${shopId}`) === latest.msg_key) return
+      notified.set(`${shopFatherId}_${shopId}`, latest.msg_key)
 
       const session =
         (await refreshedSessions).find(isCustomerServiceSession) ?? sessionsRef.current.find(isCustomerServiceSession)
-      if (session?.is_dnd === 1 || customerServiceMuted) {
+      // The user may have muted 客服消息, or switched account, while the lists loaded
+      if (account !== customerServiceAccountRef.current) return
+      const muted = mid !== undefined && useSettings.getState().customerServiceMutedMids.includes(mid)
+      if (session?.is_dnd === 1 || muted) {
         console.log('[usePrivateMessages] Notification suppressed for muted customer service session')
         return
       }
@@ -1782,7 +1805,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         console.error('[usePrivateMessages] Failed to show notification:', err)
       }
     },
-    [customerServiceMuted]
+    [userInfo?.mid]
   )
 
   // Handle new message notification - uses incremental update, no spinners
