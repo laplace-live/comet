@@ -3,9 +3,10 @@ name: Release
 # Changesets flow (laplace-persona / laplace-jupiter pattern): while changesets
 # exist on master, keep a "chore: version packages" PR open (version bump +
 # CHANGELOG.md). Once it merges, `changeset git-tag` tags v<version>, and the
-# action pushes the tag and creates the GitHub Release from the CHANGELOG
-# entry. The tag fires build.yml, which signs, uploads to R2 and attaches the
-# installers to that release.
+# action pushes the tag. The tag fires build.yml, which signs, uploads to R2
+# and publishes the GitHub Release with the CHANGELOG notes and the installers
+# attached: releases are immutable once published, so it can't be created
+# first and filled in later.
 #
 # A GitHub App token (not the default GITHUB_TOKEN) authenticates the action:
 # events caused by GITHUB_TOKEN don't start other workflows, so the tag would
@@ -68,6 +69,9 @@ jobs:
           publish-script: pnpm exec changeset git-tag
           commit-message: "chore: version packages [skip ci]"
           pr-title: "chore: version packages"
-          create-github-releases: true
+          # Releases are immutable once published, so nothing can be attached
+          # afterwards: the action only pushes the tag, and build.yml, which
+          # the tag fires, publishes the release with its installers.
+          create-github-releases: false
           # Must be passed as an input: v2 doesn't read the `GITHUB_TOKEN` env var.
           github-token: ${{ steps.app-token.outputs.token }}
