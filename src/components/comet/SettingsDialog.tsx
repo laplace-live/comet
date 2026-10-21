@@ -87,10 +87,31 @@ interface SettingsDialogProps {
   accounts?: StoredAccountInfo[]
   activeAccountMid?: number | null
   onReorderAccounts?: (mids: number[]) => Promise<boolean>
+  /** 收起未关注人消息, the signed-in account's setting on Bilibili; null until read */
+  unfollowFold?: boolean | null
+  onToggleUnfollowFold?: (enabled: boolean) => Promise<boolean>
 }
 
-export function SettingsDialog({ accounts = [], activeAccountMid, onReorderAccounts }: SettingsDialogProps) {
+export function SettingsDialog({
+  accounts = [],
+  activeAccountMid,
+  onReorderAccounts,
+  unfollowFold = null,
+  onToggleUnfollowFold,
+}: SettingsDialogProps) {
   const { developerMode, setDeveloperMode, settingsOpen, openSettings, closeSettings } = useSettings()
+
+  // 收起未关注人消息 as the user just set it, while Bilibili saves it
+  const [pendingUnfollowFold, setPendingUnfollowFold] = useState<boolean | null>(null)
+  const handleUnfollowFoldChange = useCallback(
+    async (enabled: boolean) => {
+      if (!onToggleUnfollowFold) return
+      setPendingUnfollowFold(enabled)
+      await onToggleUnfollowFold(enabled)
+      setPendingUnfollowFold(null)
+    },
+    [onToggleUnfollowFold]
+  )
 
   // Local state for accounts during drag (for optimistic update)
   const [localAccounts, setLocalAccounts] = useState(accounts)
@@ -182,9 +203,30 @@ export function SettingsDialog({ accounts = [], activeAccountMid, onReorderAccou
               </div>
             )}
 
-            {/* Developer Settings Section */}
+            {/* Message Settings Section */}
             <div className='space-y-4'>
               {localAccounts.length > 1 && <Separator />}
+              <div className='flex items-center justify-between gap-4'>
+                <div className='space-y-0.5'>
+                  <label htmlFor='unfollow-fold' className='font-medium text-sm'>
+                    收起未关注人消息
+                  </label>
+                  <p className='text-muted-foreground text-xs'>
+                    开启后，未关注人消息将被折叠起来。与哔哩哔哩同步，仅对当前账号生效
+                  </p>
+                </div>
+                <Switch
+                  id='unfollow-fold'
+                  checked={pendingUnfollowFold ?? unfollowFold === true}
+                  disabled={unfollowFold === null || pendingUnfollowFold !== null}
+                  onCheckedChange={handleUnfollowFoldChange}
+                />
+              </div>
+            </div>
+
+            {/* Developer Settings Section */}
+            <div className='space-y-4'>
+              <Separator />
               <div className='flex items-center justify-between gap-4'>
                 <div className='space-y-0.5'>
                   <label htmlFor='developer-mode' className='font-medium text-sm'>

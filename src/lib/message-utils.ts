@@ -1,6 +1,6 @@
 import type { BilibiliMessage, BilibiliSession } from '@/types/bilibili'
 
-import { MSG_TYPE, SYSTEM_MSG_TYPE } from '@/types/bilibili'
+import { MSG_TYPE, SESSION_TYPE, SYSTEM_MSG_TYPE } from '@/types/bilibili'
 
 import { getCustomerServicePreview } from '@/lib/customer-service'
 
@@ -158,6 +158,14 @@ export function getSessionAvatar(session: BilibiliSession, userCache?: UserCache
  */
 export function isCustomerServiceSession(session: BilibiliSession): boolean {
   return session.system_msg_type === SYSTEM_MSG_TYPE.CUSTOMER_SERVICE
+}
+
+/**
+ * Whether the session is a chat with someone the user doesn't follow, which 收起未关注人消息 folds into
+ * 未关注人消息. Bilibili's web client tells them the same way; system sessions count as followed.
+ */
+export function isUnfollowedChat(session: BilibiliSession): boolean {
+  return session.session_type === SESSION_TYPE.USER && session.is_follow === 0
 }
 
 /**

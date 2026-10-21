@@ -1,8 +1,9 @@
-import { Loader2, MessageSquare, RefreshCw, Search, Settings, X } from 'lucide-react'
+import { ArrowLeft, Loader2, MessageSquare, RefreshCw, Search, Settings, X } from 'lucide-react'
 import { forwardRef, useMemo, useState } from 'react'
 import type { ScrollerProps } from 'react-virtuoso'
 import { Virtuoso } from 'react-virtuoso'
 
+import type { UnfollowedFold } from '@/hooks/usePrivateMessages'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliSession } from '@/types/bilibili'
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
@@ -28,6 +29,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 
 import { getDraftKey } from '@/stores/useDrafts'
 import { SessionItem } from './SessionItem'
+import { UnfollowedFoldItem } from './UnfollowedFoldItem'
 import { UserMenu } from './UserMenu'
 
 const CustomScroller = forwardRef<HTMLDivElement, ScrollerProps>(({ children, ...props }, ref) => (
@@ -37,6 +39,9 @@ const CustomScroller = forwardRef<HTMLDivElement, ScrollerProps>(({ children, ..
 ))
 
 type SessionVisibilityFilter = 'all' | 'unread' | 'read'
+
+/** A row of the list: a session, or 未关注人消息 with the newest of its chats */
+type SessionListRow = { type: 'session'; session: BilibiliSession } | { type: 'unfollowed'; newest: BilibiliSession }
 
 interface SessionListProps {
   sessions: BilibiliSession[]
@@ -50,9 +55,14 @@ interface SessionListProps {
   userInfo?: CheckLoginResult | null
   accounts?: StoredAccountInfo[]
   activeAccountMid?: number | null
+  /** 未关注人消息, while 收起未关注人消息 folds it out of the main list */
+  unfollowed?: UnfollowedFold | null
   onSessionClick: (session: BilibiliSession) => void
   onLoadMore: () => void
   onRefresh: () => void
+  onOpenUnfollowed?: () => void
+  onCloseUnfollowed?: () => void
+  onLoadMoreUnfollowed?: () => void
   onLogout?: () => void
   onSwitchAccount?: (mid: number) => void
   onAddAccount?: () => void
@@ -72,9 +82,13 @@ export function SessionList({
   userInfo,
   accounts,
   activeAccountMid,
+  unfollowed,
   onSessionClick,
   onLoadMore,
   onRefresh,
+  onOpenUnfollowed,
+  onCloseUnfollowed,
+  onLoadMoreUnfollowed,
   onLogout,
   onSwitchAccount,
   onAddAccount,
@@ -84,9 +98,15 @@ export function SessionList({
   const [filterText, setFilterText] = useState('')
   const [visibilityFilter, setVisibilityFilter] = useState<SessionVisibilityFilter>('all')
 
+  // With 未关注人消息 open, the list shows its chats (未关注的人) in place of the main list's
+  const showingUnfollowed = !!unfollowed?.open
+  const listedSessions = unfollowed?.open ? unfollowed.sessions : sessions
+  const hasMoreListed = unfollowed?.open ? unfollowed.hasMore : hasMoreSessions
+  const loadingMoreListed = unfollowed?.open ? unfollowed.loadingMore : loadingMore
+
   // Filter sessions based on visibility filter and search text
   const filteredSessions = useMemo(() => {
-    let result = sessions
+    let result = listedSessions
 
     // First, apply visibility filter
     if (visibilityFilter === 'unread') {
@@ -116,14 +136,39 @@ export function SessionList({
     }
 
     return result
-  }, [sessions, filterText, visibilityFilter, userCache])
+  }, [listedSessions, filterText, visibilityFilter, userCache])
 
   const isFiltering = filterText.trim().length > 0 || visibilityFilter !== 'all'
 
+  // The newest chat 未关注人消息 holds, which it previews and is listed by
+  const newestUnfollowed = useMemo(
+    () =>
+      unfollowed?.sessions.reduce<BilibiliSession | null>(
+        (newest, session) => (!newest || session.session_ts > newest.session_ts ? session : newest),
+        null
+      ) ?? null,
+    [unfollowed?.sessions]
+  )
+
+  // 未关注人消息 takes its place in the main list by its newest chat's time, below the pinned sessions, as
+  // Bilibili lists it; older than all that's loaded, it waits at the end for the pages that place it. A search
+  // looks through sessions only, but the unread filters go by its unread like any session's.
+  const unfollowedUnread = unfollowed?.unread ?? 0
+  const rows = useMemo(() => {
+    const list: SessionListRow[] = filteredSessions.map(session => ({ type: 'session', session }))
+    const shown =
+      visibilityFilter === 'all' || (visibilityFilter === 'unread' ? unfollowedUnread > 0 : unfollowedUnread === 0)
+    if (showingUnfollowed || filterText.trim() || !shown || !newestUnfollowed) return list
+    const at = filteredSessions.findIndex(s => !s.top_ts && s.session_ts < newestUnfollowed.session_ts)
+    list.splice(at === -1 ? list.length : at, 0, { type: 'unfollowed', newest: newestUnfollowed })
+    return list
+  }, [filteredSessions, showingUnfollowed, filterText, visibilityFilter, unfollowedUnread, newestUnfollowed])
+
   // Handle end reached for infinite scroll - only when not filtering
   const handleEndReached = () => {
-    if (hasMoreSessions && !loadingMore && !isFiltering) {
-      onLoadMore()
+    if (hasMoreListed && !loadingMoreListed && !isFiltering) {
+      if (showingUnfollowed) onLoadMoreUnfollowed?.()
+      else onLoadMore()
     }
   }
 
@@ -138,6 +183,14 @@ export function SessionList({
         <div className='sr-only select-none'>
           <h2 className='font-semibold text-lg'>会话列表</h2>
         </div>
+        {showingUnfollowed && (
+          <div className='app-region-no-drag flex select-none items-center gap-1'>
+            <Button variant='ghost' size='icon-sm' onClick={onCloseUnfollowed} aria-label='返回'>
+              <ArrowLeft aria-hidden='true' />
+            </Button>
+            <h3 className='font-medium'>未关注的人</h3>
+          </div>
+        )}
         <div className='app-region-no-drag flex items-center gap-2'>
           <InputGroup className='flex-1 select-none'>
             <InputGroupInput
@@ -149,7 +202,7 @@ export function SessionList({
             />
             <InputGroupAddon align='inline-end'>
               <InputGroupText className='whitespace-nowrap'>
-                {isFiltering ? `${filteredSessions.length} / ${sessions.length}` : `${sessions.length}`}
+                {isFiltering ? `${filteredSessions.length} / ${listedSessions.length}` : `${listedSessions.length}`}
               </InputGroupText>
 
               {filterText && (
@@ -193,27 +246,38 @@ export function SessionList({
         <div className='flex-1 overflow-hidden'>
           <SessionListSkeleton />
         </div>
-      ) : filteredSessions.length === 0 ? (
+      ) : rows.length === 0 ? (
         <div className='flex-1 overflow-hidden'>{isFiltering ? <SessionListNoResults /> : <SessionListEmpty />}</div>
       ) : (
         <Virtuoso
+          // Each list opens at its top, not at the other's scroll position
+          key={showingUnfollowed ? 'unfollowed' : 'sessions'}
           className='flex-1'
-          data={filteredSessions}
+          data={rows}
           endReached={handleEndReached}
           overscan={20}
-          itemContent={(_, session) => (
-            <SessionItem
-              session={session}
-              draftKey={getDraftKey(userInfo?.mid ?? 0, session)}
-              isSelected={selectedSession?.talker_id === session.talker_id}
-              userCache={userCache}
-              onClick={() => onSessionClick(session)}
-            />
-          )}
+          itemContent={(_, row) =>
+            row.type === 'unfollowed' ? (
+              <UnfollowedFoldItem
+                newest={row.newest}
+                unread={unfollowedUnread}
+                userCache={userCache}
+                onClick={() => onOpenUnfollowed?.()}
+              />
+            ) : (
+              <SessionItem
+                session={row.session}
+                draftKey={getDraftKey(userInfo?.mid ?? 0, row.session)}
+                isSelected={selectedSession?.talker_id === row.session.talker_id}
+                userCache={userCache}
+                onClick={() => onSessionClick(row.session)}
+              />
+            )
+          }
           components={{
             Scroller: CustomScroller,
             Footer: () =>
-              hasMoreSessions && !isFiltering ? (
+              hasMoreListed && !isFiltering ? (
                 <div className='flex items-center justify-center p-4'>
                   <Loader2 className='size-5 animate-spin text-muted-foreground' aria-hidden='true' />
                 </div>

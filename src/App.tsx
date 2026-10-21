@@ -47,6 +47,12 @@ export default function App() {
     activeCustomerService,
     selectCustomerService,
     sendCustomerServiceReply,
+    unfollowFold,
+    unfollowed,
+    toggleUnfollowFold,
+    openUnfollowed,
+    closeUnfollowed,
+    loadMoreUnfollowed,
     // Multi-account actions
     switchAccount,
     removeAccount,
@@ -180,9 +186,13 @@ export default function App() {
               userInfo={userInfo}
               accounts={accounts}
               activeAccountMid={activeAccountMid}
+              unfollowed={unfollowed}
               onSessionClick={selectSession}
               onLoadMore={loadMoreSessions}
               onRefresh={fetchSessions}
+              onOpenUnfollowed={openUnfollowed}
+              onCloseUnfollowed={closeUnfollowed}
+              onLoadMoreUnfollowed={loadMoreUnfollowed}
               onLogout={logout}
               onSwitchAccount={switchAccount}
               onAddAccount={startAddingAccount}
@@ -195,6 +205,8 @@ export default function App() {
               accounts={accounts}
               activeAccountMid={activeAccountMid}
               onReorderAccounts={reorderAccounts}
+              unfollowFold={unfollowFold}
+              onToggleUnfollowFold={toggleUnfollowFold}
             />
 
             <MessagesPanel

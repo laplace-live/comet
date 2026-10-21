@@ -74,6 +74,36 @@ export interface BilibiliSessionsResponse {
   }
 }
 
+// Message settings (link_setting/get), which answers only the optional fields it's asked for
+export interface BilibiliLinkSettingResponse {
+  code: number
+  msg?: string
+  message: string
+  ttl: number
+  data: {
+    // 收起未关注人消息: 1 folds chats with people the user doesn't follow into 未关注人消息
+    show_unfollowed_msg?: number
+  }
+}
+
+// Unread counts by kind of chat (session_svr/single_unread)
+export interface BilibiliSingleUnreadResponse {
+  code: number
+  msg?: string
+  message: string
+  ttl: number
+  data: {
+    unfollow_unread: number // Unread from people the user doesn't follow
+    follow_unread: number // Unread from people the user follows
+    unfollow_push_msg: number
+    dustbin_push_msg: number
+    dustbin_unread: number
+    biz_msg_unfollow_unread: number
+    biz_msg_follow_unread: number
+    custom_unread: number
+  }
+}
+
 // Emoji info
 export interface BilibiliEmojiInfo {
   text: string
@@ -344,6 +374,12 @@ export const MSG_SOURCE = {
 export const SESSION_TYPE = {
   USER: 1,
   FAN_GROUP: 2,
+} as const
+
+// Which sessions get_sessions lists (its session_type parameter), unlike SESSION_TYPE, which says what a session is
+export const SESSION_LIST_TYPE = {
+  USER_AND_SYSTEM: 1, // 用户与系统: the main list, which leaves out the chats unfollow_fold folds
+  UNFOLLOWED: 2, // 未关注人: chats with people the user doesn't follow, as 未关注人消息 lists them
 } as const
 
 // System session type constants (session.system_msg_type)

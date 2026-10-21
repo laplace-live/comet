@@ -7,9 +7,11 @@
 
 import type {
   BilibiliCredentials,
+  BilibiliLinkSettingResponse,
   BilibiliMessagesResponse,
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
+  BilibiliSingleUnreadResponse,
   BilibiliUserCardsResponse,
   CustomerServiceMessagesResponse,
   CustomerServiceSendMessageResponse,
@@ -47,6 +49,8 @@ import type {
   SetDndResult,
   SetTopParams,
   SetTopResult,
+  SetUnfollowFoldParams,
+  SetUnfollowFoldResult,
   ShowNotificationParams,
   UpdateAckParams,
   UpdateAckResponse,
@@ -90,6 +94,8 @@ export const IpcChannel = {
   BILIBILI_FETCH_SESSIONS: 'bilibili:fetch-sessions',
   BILIBILI_FETCH_MESSAGES: 'bilibili:fetch-messages',
   BILIBILI_FETCH_USERS: 'bilibili:fetch-users',
+  BILIBILI_FETCH_SINGLE_UNREAD: 'bilibili:fetch-single-unread',
+  BILIBILI_FETCH_LINK_SETTING: 'bilibili:fetch-link-setting',
 
   // Bilibili Actions
   BILIBILI_UPDATE_ACK: 'bilibili:update-ack',
@@ -97,6 +103,7 @@ export const IpcChannel = {
   BILIBILI_UPLOAD_IMAGE: 'bilibili:upload-image',
   BILIBILI_SET_DND: 'bilibili:set-dnd',
   BILIBILI_SET_TOP: 'bilibili:set-top',
+  BILIBILI_SET_UNFOLLOW_FOLD: 'bilibili:set-unfollow-fold',
 
   // Bilibili Customer Service
   BILIBILI_CUSTOMER_SERVICE_FETCH_SESSIONS: 'bilibili:customer-service-fetch-sessions',
@@ -221,6 +228,14 @@ export interface IpcInvokeContract {
     params: FetchUsersParams
     result: BilibiliUserCardsResponse | ErrorResponse
   }
+  [IpcChannel.BILIBILI_FETCH_SINGLE_UNREAD]: {
+    params: undefined
+    result: BilibiliSingleUnreadResponse | ErrorResponse
+  }
+  [IpcChannel.BILIBILI_FETCH_LINK_SETTING]: {
+    params: undefined
+    result: BilibiliLinkSettingResponse | ErrorResponse
+  }
 
   // Bilibili Actions
   [IpcChannel.BILIBILI_UPDATE_ACK]: {
@@ -242,6 +257,10 @@ export interface IpcInvokeContract {
   [IpcChannel.BILIBILI_SET_TOP]: {
     params: SetTopParams
     result: SetTopResult
+  }
+  [IpcChannel.BILIBILI_SET_UNFOLLOW_FOLD]: {
+    params: SetUnfollowFoldParams
+    result: SetUnfollowFoldResult
   }
 
   // Bilibili Customer Service

@@ -98,6 +98,12 @@ export const BILIBILI_ENDPOINTS = {
   SET_DND: `${BILIBILI_API.VC}/link_setting/v1/link_setting/set_msg_dnd`,
   /** Pin/unpin (sticky) a session */
   SET_TOP: `${BILIBILI_API.VC}/session_svr/v1/session_svr/set_top`,
+  /** Unread counts by kind of chat (followed, unfollowed, …) */
+  SINGLE_UNREAD: `${BILIBILI_API.VC}/session_svr/v1/session_svr/single_unread`,
+  /** Read the account's message settings */
+  GET_LINK_SETTING: `${BILIBILI_API.VC}/link_setting/v1/link_setting/get`,
+  /** Change the account's message settings */
+  SET_LINK_SETTING: `${BILIBILI_API.VC}/link_setting/v1/link_setting/set`,
 
   // Customer service
   /** Get customer service chats, one per shop */
