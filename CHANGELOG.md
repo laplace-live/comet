@@ -1,5 +1,11 @@
 # laplace-comet
 
+## 1.4.0
+
+### Minor Changes
+
+- 1218648: Collapse chats from people you don't follow into 未关注人消息
+
 ## 1.3.0
 
 ### Minor Changes
