@@ -6,12 +6,14 @@ import Store from 'electron-store'
 import type {
   BilibiliCredentials,
   BilibiliImageUploadResponse,
+  BilibiliLinkSettingResponse,
   BilibiliMessagesResponse,
   BilibiliNavResponse,
   BilibiliQRCodeGenerateResponse,
   BilibiliQRCodePollResponse,
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
+  BilibiliSingleUnreadResponse,
   BilibiliUserCardsResponse,
   CustomerServiceMessagesResponse,
   CustomerServiceSendMessageResponse,
@@ -21,6 +23,7 @@ import type {
   CustomerServiceShop,
   FetchCustomerServiceMessagesParams,
   SendCustomerServiceMessageParams,
+  SetUnfollowFoldParams,
   UploadImageParams,
   UploadImageResult,
 } from '@/types/electron'
@@ -935,9 +938,10 @@ export function registerBilibiliIpcHandlers() {
         sessionType?: string
         size?: string
         endTs?: string
+        unfollowFold?: boolean
       }
     ) => {
-      const { sessionType = '1', size = '100', endTs } = params
+      const { sessionType = '1', size = '100', endTs, unfollowFold = false } = params
       const credentials = await getCredentials()
 
       if (!credentials) {
@@ -950,7 +954,7 @@ export function registerBilibiliIpcHandlers() {
         const url = new URL(BILIBILI_ENDPOINTS.GET_SESSIONS)
         url.searchParams.set('session_type', sessionType)
         url.searchParams.set('group_fold', '0')
-        url.searchParams.set('unfollow_fold', '0')
+        url.searchParams.set('unfollow_fold', unfollowFold ? '1' : '0')
         url.searchParams.set('sort_rule', '2')
         url.searchParams.set('size', size)
         url.searchParams.set('build', '0')
@@ -1102,6 +1106,77 @@ export function registerBilibiliIpcHandlers() {
       }
     }
   )
+
+  // Fetch unread counts by kind of chat, such as those 未关注人消息 holds
+  ipcMain.handle(IpcChannel.BILIBILI_FETCH_SINGLE_UNREAD, async () => {
+    const credentials = await getCredentials()
+    if (!credentials) {
+      return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
+    }
+
+    try {
+      const url = new URL(BILIBILI_ENDPOINTS.SINGLE_UNREAD)
+      url.searchParams.set('unread_type', '0')
+      url.searchParams.set('build', '0')
+      url.searchParams.set('mobi_app', 'web')
+
+      const resp = await fetch(url.toString(), {
+        headers: {
+          Cookie: cookieStringFromCredentials(credentials),
+          ...COMMON_HEADERS,
+          Referer: BILIBILI_HEADERS.REFERER,
+          Origin: BILIBILI_HEADERS.ORIGIN,
+        },
+      })
+
+      const data: BilibiliSingleUnreadResponse = await resp.json()
+
+      if (data.code !== 0) {
+        return { error: data.message || 'Failed to fetch unread counts', code: data.code }
+      }
+
+      return data
+    } catch (error) {
+      console.error('Failed to fetch unread counts:', error)
+      return { error: 'Failed to fetch unread counts from Bilibili', code: 500 }
+    }
+  })
+
+  // Fetch the account's 收起未关注人消息 setting, the one message setting Comet follows
+  ipcMain.handle(IpcChannel.BILIBILI_FETCH_LINK_SETTING, async () => {
+    const credentials = await getCredentials()
+    if (!credentials) {
+      return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
+    }
+
+    try {
+      const url = new URL(BILIBILI_ENDPOINTS.GET_LINK_SETTING)
+      // Asks for the field: the reply leaves out the optional ones it isn't asked for
+      url.searchParams.set('show_unfollowed_msg', '1')
+      url.searchParams.set('build', '0')
+      url.searchParams.set('mobi_app', 'web')
+
+      const resp = await fetch(url.toString(), {
+        headers: {
+          Cookie: cookieStringFromCredentials(credentials),
+          ...COMMON_HEADERS,
+          Referer: BILIBILI_HEADERS.REFERER,
+          Origin: BILIBILI_HEADERS.ORIGIN,
+        },
+      })
+
+      const data: BilibiliLinkSettingResponse = await resp.json()
+
+      if (data.code !== 0) {
+        return { error: data.message || 'Failed to fetch message settings', code: data.code }
+      }
+
+      return data
+    } catch (error) {
+      console.error('Failed to fetch message settings:', error)
+      return { error: 'Failed to fetch message settings from Bilibili', code: 500 }
+    }
+  })
 
   // Send message
   ipcMain.handle(
@@ -1419,6 +1494,46 @@ export function registerBilibiliIpcHandlers() {
       }
     }
   )
+
+  // Turn 收起未关注人消息 on or off, the account's setting on Bilibili, as its message settings page does
+  ipcMain.handle(IpcChannel.BILIBILI_SET_UNFOLLOW_FOLD, async (_event, params: SetUnfollowFoldParams) => {
+    const credentials = await getCredentials()
+    if (!credentials) {
+      return { success: false, error: 'Not logged in. Please scan QR code to login.' }
+    }
+
+    try {
+      const formData = new URLSearchParams({
+        show_unfollowed_msg: params.enabled ? '1' : '0',
+        build: '0',
+        mobi_app: 'web',
+        csrf: credentials.bili_jct,
+      })
+
+      const resp = await fetch(BILIBILI_ENDPOINTS.SET_LINK_SETTING, {
+        method: 'POST',
+        headers: {
+          Cookie: cookieStringFromCredentials(credentials),
+          ...COMMON_HEADERS,
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Referer: BILIBILI_HEADERS.REFERER,
+          Origin: BILIBILI_HEADERS.ORIGIN,
+        },
+        body: formData.toString(),
+      })
+
+      const data = await resp.json()
+
+      if (data.code !== 0) {
+        return { success: false, error: data.message || 'Failed to change message settings' }
+      }
+
+      return { success: true }
+    } catch (error) {
+      console.error('Failed to change message settings:', error)
+      return { success: false, error: 'Failed to change message settings' }
+    }
+  })
 
   // Upload image to Bilibili CDN
   ipcMain.handle(IpcChannel.BILIBILI_UPLOAD_IMAGE, (_event, params: UploadImageParams) =>

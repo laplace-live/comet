@@ -34,6 +34,8 @@ import type {
   SetDndResult,
   SetTopParams,
   SetTopResult,
+  SetUnfollowFoldParams,
+  SetUnfollowFoldResult,
   ShowNotificationParams,
   UpdateAckParams,
   UpdateStatusInfo,
@@ -80,6 +82,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fetchSessions: (params: FetchSessionsParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_SESSIONS, params),
     fetchMessages: (params: FetchMessagesParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_MESSAGES, params),
     fetchUsers: (params: FetchUsersParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_USERS, params),
+    fetchSingleUnread: () => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_SINGLE_UNREAD),
+    fetchLinkSetting: () => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_LINK_SETTING),
 
     // Actions
     updateAck: (params: UpdateAckParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_UPDATE_ACK, params),
@@ -88,6 +92,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke(IpcChannel.BILIBILI_UPLOAD_IMAGE, params),
     setDnd: (params: SetDndParams): Promise<SetDndResult> => ipcRenderer.invoke(IpcChannel.BILIBILI_SET_DND, params),
     setTop: (params: SetTopParams): Promise<SetTopResult> => ipcRenderer.invoke(IpcChannel.BILIBILI_SET_TOP, params),
+    setUnfollowFold: (params: SetUnfollowFoldParams): Promise<SetUnfollowFoldResult> =>
+      ipcRenderer.invoke(IpcChannel.BILIBILI_SET_UNFOLLOW_FOLD, params),
 
     // Customer service chats (客服消息)
     customerService: {

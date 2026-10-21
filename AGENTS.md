@@ -51,6 +51,7 @@ The app supports multiple session and message types defined in `src/lib/const.ts
 - **MSG_TYPE**: Various message types including text, images, notifications, `AI_GENERATED` (52), `FAN_GROUP_SYSTEM` (306)
 - **MSG_SOURCE**: Message origins including `AI` (19), `FAN_GROUP_SYSTEM` (13), auto-reply types, system tips
 - **Customer service** (客服消息) is a separate backend, `customerservice.bilibili.com`, with one chat per shop. The session list folds every chat into one session (`SYSTEM_MSG_TYPE.CUSTOMER_SERVICE`, talker_id 0), so its messages, sending, read state and WebSocket notifications (session types 3 and 4) all go through `bilibili.customerService` and `src/lib/customer-service.ts`, not the direct-message calls. Bilibili's own web client (message.bilibili.com) is the reference for how those calls look.
+- **未关注人消息** follows the account's own 收起未关注人消息 setting on Bilibili (`show_unfollowed_msg`, read and written through `link_setting`). With it on, `get_sessions` leaves chats with people the user doesn't follow out of the main list (`unfollow_fold=1`, `SESSION_LIST_TYPE.UNFOLLOWED` lists them), so `usePrivateMessages` keeps them in a second list behind a 未关注人消息 row. Change a session through `updateSession` and look one up with `findListedSession`, which reach both lists.
 
 ### Multi-Account Management
 

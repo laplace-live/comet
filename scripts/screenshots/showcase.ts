@@ -5,6 +5,7 @@
 import { createHash } from 'node:crypto'
 
 import type {
+  BilibiliLinkSettingResponse,
   BilibiliMessage,
   BilibiliMessagesResponse,
   BilibiliNavResponse,
@@ -12,6 +13,7 @@ import type {
   BilibiliQRCodePollResponse,
   BilibiliSession,
   BilibiliSessionsResponse,
+  BilibiliSingleUnreadResponse,
   BilibiliUserCard,
   BilibiliUserCardsResponse,
   FanGroupSystemContent,
@@ -20,7 +22,7 @@ import type {
 } from '@/types/bilibili'
 import type { UpdateAckResponse } from '@/types/electron'
 
-import { MSG_SOURCE, MSG_TYPE, QR_CODE_STATUS, SESSION_TYPE } from '@/types/bilibili'
+import { MSG_SOURCE, MSG_TYPE, QR_CODE_STATUS, SESSION_LIST_TYPE, SESSION_TYPE } from '@/types/bilibili'
 
 import { BILIBILI_API, BILIBILI_ENDPOINTS } from '@/lib/const'
 
@@ -213,6 +215,11 @@ const FACES: Record<string, Face> = {
 /** Bilibili's timestamps are seconds; session times are microseconds. */
 const seconds = (minutesAgo: number): number => Math.floor((SHOWCASE_NOW - minutesAgo * 60_000) / 1000)
 
+/** A chat with someone the station doesn't follow, which 收起未关注人消息 folds into 未关注人消息. */
+const unfollowed = (conversation: Conversation): boolean => conversation.key !== 'fans' && !conversation.follow
+
+const unreadOf = (conversations: Conversation[]): number => conversations.reduce((sum, c) => sum + c.unread, 0)
+
 /** The talker id and session type Bilibili files a conversation under. */
 function talker(key: ConversationKey): { id: number; type: number } {
   return key === 'fans'
@@ -341,6 +348,8 @@ interface Showcase {
   scan: (account: AccountKey) => void
   /** Signs `account` out on Bilibili's side, as an expired session would be. */
   expire: (account: AccountKey) => void
+  /** The accounts with 收起未关注人消息 on, which the app's settings switch changes; none to begin with. */
+  folding: Set<number>
   /** Every request the showcase had no answer for; a run fails on any. */
   unanswered: string[]
 }
@@ -349,6 +358,7 @@ export function createShowcase(): Showcase {
   const unanswered: string[] = []
   let scanned: AccountKey | null = null
   const expired = new Set<number>()
+  const folding = new Set<number>()
   /** Every picture the renderer may ask for, by path; the faces arrive once painted. */
   const pictures = new Map<string, Uint8Array<ArrayBuffer>>([[FAN_ART.path, FAN_ART.png]])
 
@@ -411,8 +421,15 @@ export function createShowcase(): Showcase {
       }
       case BILIBILI_ENDPOINTS.GET_SESSIONS: {
         if (mid === null) return missing(url.href)
+        // 未关注人 lists the chats unfollow_fold leaves out of the main list.
+        const listed =
+          url.searchParams.get('session_type') === String(SESSION_LIST_TYPE.UNFOLLOWED)
+            ? inbox.filter(unfollowed)
+            : url.searchParams.get('unfollow_fold') === '1'
+              ? inbox.filter(c => !unfollowed(c))
+              : inbox
         const data: BilibiliSessionsResponse['data'] = {
-          session_list: inbox.map(c => session(c, mid)),
+          session_list: listed.map(c => session(c, mid)),
           has_more: 0,
           anti_disturb_cleaning: false,
           is_address_list_empty: 0,
@@ -445,6 +462,31 @@ export function createShowcase(): Showcase {
       }
       case BILIBILI_ENDPOINTS.UPDATE_ACK:
         return Response.json(ok satisfies UpdateAckResponse)
+      case BILIBILI_ENDPOINTS.SINGLE_UNREAD: {
+        const data: BilibiliSingleUnreadResponse['data'] = {
+          unfollow_unread: unreadOf(inbox.filter(unfollowed)),
+          follow_unread: unreadOf(inbox.filter(c => !unfollowed(c))),
+          unfollow_push_msg: 0,
+          dustbin_push_msg: 0,
+          dustbin_unread: 0,
+          biz_msg_unfollow_unread: 0,
+          biz_msg_follow_unread: 0,
+          custom_unread: 0,
+        }
+        return Response.json({ ...ok, data } satisfies BilibiliSingleUnreadResponse)
+      }
+      case BILIBILI_ENDPOINTS.GET_LINK_SETTING: {
+        if (mid === null) return missing(url.href)
+        const data: BilibiliLinkSettingResponse['data'] = { show_unfollowed_msg: folding.has(mid) ? 1 : 0 }
+        return Response.json({ ...ok, data } satisfies BilibiliLinkSettingResponse)
+      }
+      case BILIBILI_ENDPOINTS.SET_LINK_SETTING: {
+        const setting = new URLSearchParams(String(init?.body ?? '')).get('show_unfollowed_msg')
+        if (mid === null || setting === null) return missing(url.href)
+        if (setting === '1') folding.add(mid)
+        else folding.delete(mid)
+        return Response.json(ok)
+      }
       default:
         return missing(url.href)
     }
@@ -470,6 +512,7 @@ export function createShowcase(): Showcase {
     expire: account => {
       expired.add(ACCOUNTS[account].mid)
     },
+    folding,
     unanswered,
   }
 }

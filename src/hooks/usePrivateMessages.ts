@@ -19,7 +19,13 @@ import type {
   StoredAccountInfo,
 } from '@/types/electron'
 
-import { CS_MSG_TYPE, CS_SENDER_TYPE, CUSTOMER_SERVICE_WS_SESSION_TYPES, SESSION_TYPE } from '@/types/bilibili'
+import {
+  CS_MSG_TYPE,
+  CS_SENDER_TYPE,
+  CUSTOMER_SERVICE_WS_SESSION_TYPES,
+  SESSION_LIST_TYPE,
+  SESSION_TYPE,
+} from '@/types/bilibili'
 
 import { getImageType } from '@/lib/const'
 import {
@@ -32,7 +38,13 @@ import {
   mergeCustomerServiceMessages,
   toDisplayMessage,
 } from '@/lib/customer-service'
-import { getSessionAvatar, getSessionName, isCustomerServiceSession, parseMessageContent } from '@/lib/message-utils'
+import {
+  getSessionAvatar,
+  getSessionName,
+  isCustomerServiceSession,
+  isUnfollowedChat,
+  parseMessageContent,
+} from '@/lib/message-utils'
 
 import { toastManager } from '@/components/ui/toast'
 
@@ -99,6 +111,18 @@ async function fetchCustomerServicePages(
 // Map of emoji text (e.g., "[tv_doge]") to emoji info
 export type EmojiInfoMap = Record<string, BilibiliEmojiInfo>
 
+/** 未关注人消息: the chats 收起未关注人消息 folds out of the main list, listed apart from it */
+export interface UnfollowedFold {
+  /** Newest first, as Bilibili pages them */
+  sessions: BilibiliSession[]
+  /** Unread across all of them, loaded or not, as Bilibili counts it */
+  unread: number
+  hasMore: boolean
+  loadingMore: boolean
+  /** Whether the session list shows these chats (未关注的人) instead of the main list */
+  open: boolean
+}
+
 export interface UsePrivateMessagesReturn {
   // State
   sessions: BilibiliSession[]
@@ -127,6 +151,14 @@ export interface UsePrivateMessagesReturn {
   activeCustomerService: CustomerServiceSession | null
   selectCustomerService: (shop: CustomerServiceShop) => void
   sendCustomerServiceReply: (reply: CustomerServiceReply) => Promise<boolean>
+
+  // 收起未关注人消息, the account's setting on Bilibili (null until read), and 未关注人消息 while it's on
+  unfollowFold: boolean | null
+  unfollowed: UnfollowedFold | null
+  toggleUnfollowFold: (enabled: boolean) => Promise<boolean>
+  openUnfollowed: () => void
+  closeUnfollowed: () => void
+  loadMoreUnfollowed: () => Promise<void>
 
   // Actions
   checkLogin: () => Promise<boolean>
@@ -200,6 +232,56 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     [selectedSession, customerServiceMuted]
   )
 
+  // 收起未关注人消息, the account's own setting on Bilibili, null until read. With it on, chats with people the
+  // user doesn't follow leave the main list for 未关注人消息, which lists them apart, as Bilibili's web client does.
+  const [unfollowFold, setUnfollowFold] = useState<boolean | null>(null)
+  const unfollowFoldRef = useRef(false)
+  const [unfollowedSessions, setUnfollowedSessions] = useState<BilibiliSession[]>([])
+  const unfollowedSessionsRef = useRef<BilibiliSession[]>([])
+  const [unfollowedUnread, setUnfollowedUnread] = useState(0)
+  const [hasMoreUnfollowed, setHasMoreUnfollowed] = useState(false)
+  const [unfollowedNextEndTs, setUnfollowedNextEndTs] = useState<number | null>(null)
+  const [loadingMoreUnfollowed, setLoadingMoreUnfollowed] = useState(false)
+  const [unfollowedOpen, setUnfollowedOpen] = useState(false)
+  // Bumped by every load of 未关注人消息 and by the account changing, so only the latest load lands
+  const unfollowedLoadRef = useRef(0)
+  const unfollowed = useMemo<UnfollowedFold | null>(
+    () =>
+      unfollowFold
+        ? {
+            sessions: unfollowedSessions,
+            unread: unfollowedUnread,
+            hasMore: hasMoreUnfollowed,
+            loadingMore: loadingMoreUnfollowed,
+            open: unfollowedOpen,
+          }
+        : null,
+    [unfollowFold, unfollowedSessions, unfollowedUnread, hasMoreUnfollowed, loadingMoreUnfollowed, unfollowedOpen]
+  )
+
+  // Kept in step with the ref, which lookups and unread sums read without waiting for a render
+  const setUnfollowed = useCallback((list: BilibiliSession[]) => {
+    unfollowedSessionsRef.current = list
+    setUnfollowedSessions(list)
+  }, [])
+
+  // Also set synchronously, as it decides the requests that follow. Off, 未关注人消息 can't stay open.
+  const applyUnfollowFold = useCallback((folded: boolean | null) => {
+    unfollowFoldRef.current = folded === true
+    setUnfollowFold(folded)
+    if (!folded) setUnfollowedOpen(false)
+  }, [])
+
+  // Forget 未关注人消息 and the setting that folds it, which belong to the account signing out
+  const resetUnfollowed = useCallback(() => {
+    unfollowedLoadRef.current++
+    applyUnfollowFold(null)
+    setUnfollowed([])
+    setUnfollowedUnread(0)
+    setHasMoreUnfollowed(false)
+    setUnfollowedNextEndTs(null)
+  }, [applyUnfollowFold, setUnfollowed])
+
   // Helper to merge emoji infos into the map
   const mergeEmojiInfos = useCallback((emojiInfos: BilibiliEmojiInfo[] | undefined) => {
     if (!emojiInfos || emojiInfos.length === 0) return
@@ -241,6 +323,37 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   useEffect(() => {
     selectedSessionRef.current = selectedSession
   }, [selectedSession])
+
+  // A session as listed now, in the main list or in 未关注人消息
+  const findListedSession = useCallback(
+    (match: (s: BilibiliSession) => boolean) =>
+      sessionsRef.current.find(match) ?? unfollowedSessionsRef.current.find(match),
+    []
+  )
+
+  // Change a session wherever it's listed: in the main list, or in 未关注人消息, whose unread moves with its chats'
+  const updateSession = useCallback(
+    (match: (s: BilibiliSession) => boolean, change: (s: BilibiliSession) => BilibiliSession) => {
+      setSessions(prev => prev.map(s => (match(s) ? change(s) : s)))
+
+      let listed = false
+      let unread = 0
+      const list = unfollowedSessionsRef.current.map(s => {
+        if (!match(s)) return s
+        listed = true
+        const changed = change(s)
+        unread += (changed.unread_count || 0) - (s.unread_count || 0)
+        return changed
+      })
+      if (!listed) return
+      setUnfollowed(list)
+      if (unread !== 0) setUnfollowedUnread(total => Math.max(0, total + unread))
+    },
+    [setUnfollowed]
+  )
+
+  // Whether 收起未关注人消息 keeps this chat in 未关注人消息 rather than the main list
+  const isFolded = useCallback((session: BilibiliSession) => unfollowFoldRef.current && isUnfollowedChat(session), [])
 
   const customerServiceSessionsRef = useRef<CustomerServiceSession[]>([])
   const activeCustomerServiceShopRef = useRef<CustomerServiceShop | null>(null)
@@ -324,10 +437,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           .catch(err => console.error('Failed to mark as read on focus:', err))
 
         // Reset unread count for the selected session
-        setSessions(prev =>
-          prev.map(s =>
-            s.talker_id === session.talker_id && s.session_type === session.session_type ? { ...s, unread_count: 0 } : s
-          )
+        updateSession(
+          s => s.talker_id === session.talker_id && s.session_type === session.session_type,
+          s => ({ ...s, unread_count: 0 })
         )
       }
     }
@@ -342,7 +454,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       window.removeEventListener('focus', handleFocus)
       window.removeEventListener('blur', handleBlur)
     }
-  }, [ackCustomerService])
+  }, [ackCustomerService, updateSession])
 
   // Fetch user info for multiple users in batch
   const fetchUserInfoBatch = useCallback(async (uids: number[]) => {
@@ -377,6 +489,158 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [])
 
+  // Read 收起未关注人消息 for the signed-in account. Unread, nothing folds: a guess shouldn't hide chats.
+  const readUnfollowFold = useCallback(async (): Promise<boolean> => {
+    try {
+      const data = await window.electronAPI.bilibili.fetchLinkSetting()
+      if (!isErrorResponse(data) && data.code === 0) {
+        const folded = data.data?.show_unfollowed_msg === 1
+        applyUnfollowFold(folded)
+        return folded
+      }
+      console.error('[usePrivateMessages] Failed to read 收起未关注人消息:', isErrorResponse(data) ? data.error : data)
+    } catch (err) {
+      console.error('[usePrivateMessages] Failed to read 收起未关注人消息:', err)
+    }
+    applyUnfollowFold(null)
+    return false
+  }, [applyUnfollowFold])
+
+  // Load 未关注人消息's first page and its unread, without a spinner, or empty it with the fold off. Resolves
+  // to the chats it lists, left as they were when the page fails or another load takes over.
+  const loadUnfollowed = useCallback(
+    async (folded: boolean): Promise<BilibiliSession[]> => {
+      const load = ++unfollowedLoadRef.current
+      if (!folded) {
+        setUnfollowed([])
+        setUnfollowedUnread(0)
+        setHasMoreUnfollowed(false)
+        setUnfollowedNextEndTs(null)
+        return []
+      }
+
+      try {
+        const [page, unread] = await Promise.all([
+          window.electronAPI.bilibili.fetchSessions({
+            sessionType: String(SESSION_LIST_TYPE.UNFOLLOWED),
+            unfollowFold: true,
+          }),
+          window.electronAPI.bilibili.fetchSingleUnread(),
+        ])
+        if (load !== unfollowedLoadRef.current) return unfollowedSessionsRef.current
+
+        if (!isErrorResponse(unread) && unread.code === 0) {
+          setUnfollowedUnread(unread.data?.unfollow_unread ?? 0)
+        } else {
+          console.error('[usePrivateMessages] Failed to fetch 未关注人消息 unread:', unread)
+        }
+        if (isErrorResponse(page) || page.code !== 0) {
+          console.error('[usePrivateMessages] Failed to fetch 未关注人消息:', page)
+          return unfollowedSessionsRef.current
+        }
+
+        const list = page.data?.session_list || []
+        setUnfollowed(list)
+        setHasMoreUnfollowed(page.data?.has_more === 1)
+        setUnfollowedNextEndTs(list.length > 0 ? list[list.length - 1].session_ts : null)
+
+        // Its chats are all with users, who come without account_info; a refresh only asks after new ones
+        const uidsToFetch = list
+          .filter(session => !session.account_info?.name && !userCacheRef.current[session.talker_id])
+          .map(session => session.talker_id)
+        if (uidsToFetch.length > 0) fetchUserInfoBatch(uidsToFetch)
+        return list
+      } catch (err) {
+        console.error('[usePrivateMessages] Failed to fetch 未关注人消息:', err)
+        return unfollowedSessionsRef.current
+      }
+    },
+    [setUnfollowed, fetchUserInfoBatch]
+  )
+
+  const unfollowedRefreshRef = useRef<Promise<BilibiliSession[]> | null>(null)
+  const unfollowedNextRefreshRef = useRef<Promise<BilibiliSession[]> | null>(null)
+
+  // Refresh 未关注人消息 without a spinner. A message brings several notifications, so those that ask while a
+  // refresh runs share one more after it, which can't have been sent before what they ask about.
+  const refreshUnfollowedQuietly = useCallback((): Promise<BilibiliSession[]> => {
+    const start = (): Promise<BilibiliSession[]> => {
+      const refresh: Promise<BilibiliSession[]> = loadUnfollowed(unfollowFoldRef.current).finally(() => {
+        if (unfollowedRefreshRef.current === refresh) unfollowedRefreshRef.current = null
+      })
+      unfollowedRefreshRef.current = refresh
+      return refresh
+    }
+
+    const running = unfollowedRefreshRef.current
+    if (!running) return start()
+    unfollowedNextRefreshRef.current ??= running.then(() => {
+      unfollowedNextRefreshRef.current = null
+      return start()
+    })
+    return unfollowedNextRefreshRef.current
+  }, [loadUnfollowed])
+
+  // Refresh only 未关注人消息's unread, which reading its chats elsewhere changes
+  const refreshUnfollowedUnread = useCallback(async () => {
+    const load = unfollowedLoadRef.current
+    try {
+      const data = await window.electronAPI.bilibili.fetchSingleUnread()
+      if (load !== unfollowedLoadRef.current || !unfollowFoldRef.current) return
+      if (!isErrorResponse(data) && data.code === 0) setUnfollowedUnread(data.data?.unfollow_unread ?? 0)
+    } catch (err) {
+      console.error('[usePrivateMessages] Failed to fetch 未关注人消息 unread:', err)
+    }
+  }, [])
+
+  // Load the next page of 未关注人消息
+  const loadMoreUnfollowed = useCallback(async () => {
+    if (!hasMoreUnfollowed || unfollowedNextEndTs === null || loadingMoreUnfollowed) return
+
+    const load = unfollowedLoadRef.current
+    setLoadingMoreUnfollowed(true)
+    try {
+      const data = await window.electronAPI.bilibili.fetchSessions({
+        sessionType: String(SESSION_LIST_TYPE.UNFOLLOWED),
+        unfollowFold: true,
+        endTs: String(unfollowedNextEndTs),
+      })
+      // A reload, or another account, took over meanwhile
+      if (load !== unfollowedLoadRef.current) return
+
+      if (isErrorResponse(data)) {
+        throw new Error(data.error || 'Failed to fetch more sessions')
+      }
+      if (data.code !== 0) {
+        throw new Error(data.message || 'Failed to fetch more sessions')
+      }
+
+      const sessionList = data.data?.session_list || []
+      setUnfollowed([...unfollowedSessionsRef.current, ...sessionList])
+      setHasMoreUnfollowed(data.data?.has_more === 1)
+      setUnfollowedNextEndTs(sessionList.length > 0 ? sessionList[sessionList.length - 1].session_ts : null)
+
+      const uidsToFetch = sessionList
+        .filter(session => !session.account_info?.name && !userCacheRef.current[session.talker_id])
+        .map(session => session.talker_id)
+      if (uidsToFetch.length > 0) fetchUserInfoBatch(uidsToFetch)
+    } catch (err) {
+      console.error('[usePrivateMessages] Failed to load more of 未关注人消息:', err)
+    } finally {
+      setLoadingMoreUnfollowed(false)
+    }
+  }, [hasMoreUnfollowed, unfollowedNextEndTs, loadingMoreUnfollowed, setUnfollowed, fetchUserInfoBatch])
+
+  // List 未关注人消息's chats in place of the main list, refreshed as Bilibili's web client does on opening them
+  const openUnfollowed = useCallback(() => {
+    setUnfollowedOpen(true)
+    refreshUnfollowedQuietly()
+  }, [refreshUnfollowedQuietly])
+
+  const closeUnfollowed = useCallback(() => {
+    setUnfollowedOpen(false)
+  }, [])
+
   // Show system notification for a new message
   const showNotificationForMessage = useCallback(
     async (
@@ -393,9 +657,16 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       // The WS payload has no DND flag and only loaded pages are in state. A session that just
       // received a message sorts to the top of the first page, so use this message's refresh when it's missing.
       const isTargetSession = (s: BilibiliSession) => s.talker_id === talkerId && s.session_type === sessionType
-      const session = sessionsRef.current.find(isTargetSession) ?? (await refreshedSessions).find(isTargetSession)
+      const session = findListedSession(isTargetSession) ?? (await refreshedSessions).find(isTargetSession)
       if (session?.is_dnd === 1) {
         console.log('[usePrivateMessages] Notification suppressed for DND session:', talkerId)
+        return
+      }
+      // Nor for chats folded into 未关注人消息, whose unread Bilibili leaves out of the count it shows, but for
+      // the one open now, which the user is in the middle of
+      const open = selectedSessionRef.current
+      if (session && isFolded(session) && !(open && isTargetSession(open))) {
+        console.log('[usePrivateMessages] Notification suppressed for chat in 未关注人消息:', talkerId)
         return
       }
 
@@ -461,7 +732,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         console.error('[usePrivateMessages] Failed to show notification:', err)
       }
     },
-    [userInfo]
+    [userInfo, findListedSession, isFolded]
   )
 
   // Check login status
@@ -489,6 +760,50 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [])
 
+  // Load the signed-in account's sessions from the first page. Its 收起未关注人消息 setting, read first unless
+  // given, decides whether chats with people it doesn't follow list here or in 未关注人消息. Throws when the
+  // list fails to load.
+  const loadSessions = useCallback(
+    async (folded?: boolean) => {
+      const fold = folded ?? (await readUnfollowFold())
+      const [data] = await Promise.all([
+        window.electronAPI.bilibili.fetchSessions({ unfollowFold: fold }),
+        loadUnfollowed(fold),
+      ])
+
+      if (isErrorResponse(data)) {
+        throw new Error(data.error || 'Failed to fetch sessions')
+      }
+
+      if (data.code !== 0) {
+        throw new Error(data.message || 'Failed to fetch sessions')
+      }
+
+      const sessionList = data.data?.session_list || []
+      setSessions(sessionList)
+      setHasMoreSessions(data.data?.has_more === 1)
+
+      // Store the session_ts of the last session for pagination
+      if (sessionList.length > 0) {
+        const lastSession = sessionList[sessionList.length - 1]
+        setNextEndTs(lastSession.session_ts)
+      } else {
+        setNextEndTs(null)
+      }
+
+      // Find user sessions that don't have account_info and need fetching
+      const uidsToFetch = sessionList
+        .filter(session => session.session_type === SESSION_TYPE.USER && !session.account_info?.name)
+        .map(session => session.talker_id)
+
+      // Fetch user info for those sessions
+      if (uidsToFetch.length > 0) {
+        fetchUserInfoBatch(uidsToFetch)
+      }
+    },
+    [readUnfollowFold, loadUnfollowed, fetchUserInfoBatch]
+  )
+
   // Logout
   const logout = useCallback(async () => {
     try {
@@ -510,6 +825,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       setUserCache({})
       setHasMoreSessions(false)
       setNextEndTs(null)
+      resetUnfollowed()
 
       // Check login - this may remove additional expired accounts on the backend
       const loginResult = await window.electronAPI.bilibili.checkLogin()
@@ -523,22 +839,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (loginResult.isLogin) {
         setIsConnected(true)
         // Fetch sessions for the new account
-        const sessionsData = await window.electronAPI.bilibili.fetchSessions({})
-        if (!isErrorResponse(sessionsData) && sessionsData.code === 0) {
-          const sessionList = sessionsData.data?.session_list || []
-          setSessions(sessionList)
-          setHasMoreSessions(sessionsData.data?.has_more === 1)
-          if (sessionList.length > 0) {
-            setNextEndTs(sessionList[sessionList.length - 1].session_ts)
-          }
-
-          // Fetch user info for sessions that don't have account_info
-          const uidsToFetch = sessionList
-            .filter(session => session.session_type === SESSION_TYPE.USER && !session.account_info?.name)
-            .map(session => session.talker_id)
-          if (uidsToFetch.length > 0) {
-            fetchUserInfoBatch(uidsToFetch)
-          }
+        try {
+          await loadSessions()
+        } catch (err) {
+          console.error('Failed to fetch sessions for the next account:', err)
         }
         // Reconnect WebSocket for the new account
         await window.electronAPI.bilibili.wsConnect()
@@ -550,52 +854,54 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     } catch (err) {
       console.error('Failed to logout:', err)
     }
-  }, [fetchUserInfoBatch, userInfo?.mid])
+  }, [loadSessions, resetUnfollowed, userInfo?.mid])
 
   const fetchSessions = useCallback(async () => {
     setLoading(true)
     setError(null)
 
     try {
-      const data = await window.electronAPI.bilibili.fetchSessions({})
-
-      if (isErrorResponse(data)) {
-        throw new Error(data.error || 'Failed to fetch sessions')
-      }
-
-      if (data.code !== 0) {
-        throw new Error(data.message || 'Failed to fetch sessions')
-      }
-
-      const sessionList = data.data?.session_list || []
-      setSessions(sessionList)
+      await loadSessions()
       setIsConnected(true)
-      setHasMoreSessions(data.data?.has_more === 1)
-
-      // Store the session_ts of the last session for pagination
-      if (sessionList.length > 0) {
-        const lastSession = sessionList[sessionList.length - 1]
-        setNextEndTs(lastSession.session_ts)
-      } else {
-        setNextEndTs(null)
-      }
-
-      // Find user sessions that don't have account_info and need fetching
-      const uidsToFetch = sessionList
-        .filter(session => session.session_type === SESSION_TYPE.USER && !session.account_info?.name)
-        .map(session => session.talker_id)
-
-      // Fetch user info for those sessions
-      if (uidsToFetch.length > 0) {
-        fetchUserInfoBatch(uidsToFetch)
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch sessions')
       setIsConnected(false)
     } finally {
       setLoading(false)
     }
-  }, [fetchUserInfoBatch])
+  }, [loadSessions])
+
+  // Turn 收起未关注人消息 on or off. It's the account's setting on Bilibili, so its other clients follow.
+  const toggleUnfollowFold = useCallback(
+    async (enabled: boolean): Promise<boolean> => {
+      try {
+        const result = await window.electronAPI.bilibili.setUnfollowFold({ enabled })
+        if (!result.success) {
+          console.error('Failed to change 收起未关注人消息:', result.error)
+          toastManager.add({
+            type: 'error',
+            title: '操作失败',
+            description: result.error || '无法更改收起未关注人消息设置',
+          })
+          return false
+        }
+
+        applyUnfollowFold(enabled)
+        // The lists fold or unfold with it, as set: reading it back this soon could still see the old value
+        loadSessions(enabled).catch(err => console.error('Failed to reload sessions:', err))
+        return true
+      } catch (err) {
+        console.error('Failed to change 收起未关注人消息:', err)
+        toastManager.add({
+          type: 'error',
+          title: '操作失败',
+          description: '无法更改收起未关注人消息设置',
+        })
+        return false
+      }
+    },
+    [applyUnfollowFold, loadSessions]
+  )
 
   const loadMoreSessions = useCallback(async () => {
     if (!hasMoreSessions || nextEndTs === null || loadingMore) return
@@ -605,6 +911,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     try {
       const data = await window.electronAPI.bilibili.fetchSessions({
         endTs: String(nextEndTs),
+        unfollowFold: unfollowFoldRef.current,
       })
 
       if (isErrorResponse(data)) {
@@ -940,7 +1247,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
             })
 
             // Update local session state to reflect read status
-            setSessions(prev => prev.map(s => (s.talker_id === session.talker_id ? { ...s, unread_count: 0 } : s)))
+            updateSession(
+              s => s.talker_id === session.talker_id,
+              s => ({ ...s, unread_count: 0 })
+            )
           } catch (ackErr) {
             console.error('Failed to mark session as read:', ackErr)
           }
@@ -950,7 +1260,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         if (isOpen()) setMessagesLoading(false)
       }
     },
-    [openCustomerService, mergeEmojiInfos, userInfo, fetchUserInfoBatch]
+    [openCustomerService, mergeEmojiInfos, userInfo, fetchUserInfoBatch, updateSession]
   )
 
   // Silent fetch of new messages - no loading spinner, merges with existing messages
@@ -1027,13 +1337,16 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
             .catch(err => console.error('Failed to mark as read:', err))
 
           // Update session unread count
-          setSessions(prev => prev.map(s => (s.talker_id === session.talker_id ? { ...s, unread_count: 0 } : s)))
+          updateSession(
+            s => s.talker_id === session.talker_id,
+            s => ({ ...s, unread_count: 0 })
+          )
         }
       } catch (err) {
         console.error('[usePrivateMessages] Silent message fetch error:', err)
       }
     },
-    [mergeEmojiInfos, userInfo, fetchUserInfoBatch]
+    [mergeEmojiInfos, userInfo, fetchUserInfoBatch, updateSession]
   )
 
   const selectSession = useCallback(
@@ -1120,30 +1433,26 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setMessages(prev => [...prev, newMessage])
 
         // Update the session's last_msg and session_ts
-        setSessions(prev =>
-          prev.map(s => {
-            if (s.talker_id === selectedSession.talker_id) {
-              return {
-                ...s,
-                session_ts: Date.now() * 1000, // Microsecond timestamp
-                last_msg: {
-                  sender_uid: senderMid,
-                  receiver_type: selectedSession.session_type,
-                  receiver_id: selectedSession.talker_id,
-                  msg_type: 1,
-                  content: msgContent,
-                  msg_seqno: newMessage.msg_seqno,
-                  timestamp: newMessage.timestamp,
-                  at_uids: null,
-                  msg_key: newMessage.msg_key,
-                  msg_status: 0,
-                  notify_code: '',
-                  new_face_version: 1,
-                  msg_source: 7,
-                },
-              }
-            }
-            return s
+        updateSession(
+          s => s.talker_id === selectedSession.talker_id,
+          s => ({
+            ...s,
+            session_ts: Date.now() * 1000, // Microsecond timestamp
+            last_msg: {
+              sender_uid: senderMid,
+              receiver_type: selectedSession.session_type,
+              receiver_id: selectedSession.talker_id,
+              msg_type: 1,
+              content: msgContent,
+              msg_seqno: newMessage.msg_seqno,
+              timestamp: newMessage.timestamp,
+              at_uids: null,
+              msg_key: newMessage.msg_key,
+              msg_status: 0,
+              notify_code: '',
+              new_face_version: 1,
+              msg_source: 7,
+            },
           })
         )
 
@@ -1160,7 +1469,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setSendingMessage(false)
       }
     },
-    [selectedSession, userInfo, sendCustomerServiceMessage]
+    [selectedSession, userInfo, sendCustomerServiceMessage, updateSession]
   )
 
   // Recall a message by sending a msg_type=5 message with the target msg_key
@@ -1247,13 +1556,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         }
 
         // Update the session in the sessions list
-        setSessions(prev =>
-          prev.map(s => {
-            if (s.talker_id === session.talker_id && s.session_type === session.session_type) {
-              return { ...s, is_dnd: enabled ? 1 : 0 }
-            }
-            return s
-          })
+        updateSession(
+          s => s.talker_id === session.talker_id && s.session_type === session.session_type,
+          s => ({ ...s, is_dnd: enabled ? 1 : 0 })
         )
 
         // Also update the selected session if it matches
@@ -1275,57 +1580,56 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         return false
       }
     },
-    [userInfo?.mid]
+    [userInfo?.mid, updateSession]
   )
 
   // Toggle sticky (pin/unpin) for a session
-  const toggleSticky = useCallback(async (session: BilibiliSession, pinned: boolean): Promise<boolean> => {
-    try {
-      const result = await window.electronAPI.bilibili.setTop({
-        talkerId: session.talker_id,
-        sessionType: session.session_type,
-        pinned,
-      })
+  const toggleSticky = useCallback(
+    async (session: BilibiliSession, pinned: boolean): Promise<boolean> => {
+      try {
+        const result = await window.electronAPI.bilibili.setTop({
+          talkerId: session.talker_id,
+          sessionType: session.session_type,
+          pinned,
+        })
 
-      if (!result.success) {
-        console.error('Failed to toggle sticky:', result.error)
+        if (!result.success) {
+          console.error('Failed to toggle sticky:', result.error)
+          toastManager.add({
+            type: 'error',
+            title: '操作失败',
+            description: result.error || '无法更改置顶设置',
+          })
+          return false
+        }
+
+        // Update the session in the sessions list
+        updateSession(
+          s => s.talker_id === session.talker_id && s.session_type === session.session_type,
+          s => ({ ...s, top_ts: pinned ? Date.now() * 1000 : 0 })
+        )
+
+        // Also update the selected session if it matches
+        setSelectedSession(prev => {
+          if (prev?.talker_id === session.talker_id && prev?.session_type === session.session_type) {
+            return { ...prev, top_ts: pinned ? Date.now() * 1000 : 0 }
+          }
+          return prev
+        })
+
+        return true
+      } catch (err) {
+        console.error('Failed to toggle sticky:', err)
         toastManager.add({
           type: 'error',
           title: '操作失败',
-          description: result.error || '无法更改置顶设置',
+          description: '无法更改置顶设置',
         })
         return false
       }
-
-      // Update the session in the sessions list
-      setSessions(prev =>
-        prev.map(s => {
-          if (s.talker_id === session.talker_id && s.session_type === session.session_type) {
-            return { ...s, top_ts: pinned ? Date.now() * 1000 : 0 }
-          }
-          return s
-        })
-      )
-
-      // Also update the selected session if it matches
-      setSelectedSession(prev => {
-        if (prev?.talker_id === session.talker_id && prev?.session_type === session.session_type) {
-          return { ...prev, top_ts: pinned ? Date.now() * 1000 : 0 }
-        }
-        return prev
-      })
-
-      return true
-    } catch (err) {
-      console.error('Failed to toggle sticky:', err)
-      toastManager.add({
-        type: 'error',
-        title: '操作失败',
-        description: '无法更改置顶设置',
-      })
-      return false
-    }
-  }, [])
+    },
+    [updateSession]
+  )
 
   // Send image message to the current session
   const sendImageMessage = useCallback(
@@ -1429,30 +1733,26 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setMessages(prev => [...prev, newMessage])
 
         // Update the session's last_msg and session_ts
-        setSessions(prev =>
-          prev.map(s => {
-            if (s.talker_id === selectedSession.talker_id) {
-              return {
-                ...s,
-                session_ts: Date.now() * 1000,
-                last_msg: {
-                  sender_uid: senderMid,
-                  receiver_type: selectedSession.session_type,
-                  receiver_id: selectedSession.talker_id,
-                  msg_type: 2,
-                  content: msgContent,
-                  msg_seqno: newMessage.msg_seqno,
-                  timestamp: newMessage.timestamp,
-                  at_uids: null,
-                  msg_key: newMessage.msg_key,
-                  msg_status: 0,
-                  notify_code: '',
-                  new_face_version: 1,
-                  msg_source: 7,
-                },
-              }
-            }
-            return s
+        updateSession(
+          s => s.talker_id === selectedSession.talker_id,
+          s => ({
+            ...s,
+            session_ts: Date.now() * 1000,
+            last_msg: {
+              sender_uid: senderMid,
+              receiver_type: selectedSession.session_type,
+              receiver_id: selectedSession.talker_id,
+              msg_type: 2,
+              content: msgContent,
+              msg_seqno: newMessage.msg_seqno,
+              timestamp: newMessage.timestamp,
+              at_uids: null,
+              msg_key: newMessage.msg_key,
+              msg_status: 0,
+              notify_code: '',
+              new_face_version: 1,
+              msg_source: 7,
+            },
           })
         )
 
@@ -1464,7 +1764,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setSendingMessage(false)
       }
     },
-    [selectedSession, userInfo, sendCustomerServiceMessage]
+    [selectedSession, userInfo, sendCustomerServiceMessage, updateSession]
   )
 
   // Connect to WebSocket for real-time notifications
@@ -1521,6 +1821,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setUserCache({})
         setHasMoreSessions(false)
         setNextEndTs(null)
+        resetUnfollowed()
 
         // Re-check login with new account - this may remove expired accounts
         const loginResult = await window.electronAPI.bilibili.checkLogin()
@@ -1535,22 +1836,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         if (loginResult.isLogin) {
           setIsConnected(true)
           // Fetch sessions for the new account
-          const sessionsData = await window.electronAPI.bilibili.fetchSessions({})
-          if (!isErrorResponse(sessionsData) && sessionsData.code === 0) {
-            const sessionList = sessionsData.data?.session_list || []
-            setSessions(sessionList)
-            setHasMoreSessions(sessionsData.data?.has_more === 1)
-            if (sessionList.length > 0) {
-              setNextEndTs(sessionList[sessionList.length - 1].session_ts)
-            }
-
-            // Fetch user info for sessions that don't have account_info
-            const uidsToFetch = sessionList
-              .filter(session => session.session_type === SESSION_TYPE.USER && !session.account_info?.name)
-              .map(session => session.talker_id)
-            if (uidsToFetch.length > 0) {
-              fetchUserInfoBatch(uidsToFetch)
-            }
+          try {
+            await loadSessions()
+          } catch (err) {
+            console.error('[usePrivateMessages] Failed to fetch sessions for the new account:', err)
           }
           // Reconnect WebSocket
           await window.electronAPI.bilibili.wsConnect()
@@ -1561,7 +1850,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         console.error('[usePrivateMessages] Failed to switch account:', err)
       }
     },
-    [fetchUserInfoBatch]
+    [loadSessions, resetUnfollowed]
   )
 
   // Remove an account
@@ -1595,6 +1884,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
               setSelectedSession(null)
               setMessages([])
               setUserCache({})
+              resetUnfollowed()
             }
           }
         } else {
@@ -1615,7 +1905,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         }
       }
     },
-    [activeAccountMid, switchAccount]
+    [activeAccountMid, switchAccount, resetUnfollowed]
   )
 
   // Start adding a new account (shows QR dialog)
@@ -1697,7 +1987,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Returns the fetched sessions for immediate use (avoids race condition with ref sync)
   const refreshSessionsQuietly = useCallback(async (): Promise<BilibiliSession[]> => {
     try {
-      const data = await window.electronAPI.bilibili.fetchSessions({})
+      const data = await window.electronAPI.bilibili.fetchSessions({ unfollowFold: unfollowFoldRef.current })
 
       if (isErrorResponse(data) || data.code !== 0) {
         console.error('[usePrivateMessages] Silent session refresh failed')
@@ -1843,6 +2133,16 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         return
       }
 
+      // A chat the main list doesn't have may be folded into 未关注人消息, which then refreshes too, so
+      // notifications can look it up there
+      const isNotifiedSession = (s: BilibiliSession) =>
+        s.talker_id === notification.talkerId && s.session_type === notification.sessionType
+      const refreshedChats = refreshedSessions.then(async list =>
+        list.some(isNotifiedSession) || !unfollowFoldRef.current
+          ? list
+          : [...list, ...(await refreshUnfollowedQuietly())]
+      )
+
       const isCurrentSession =
         selectedSession?.talker_id === notification.talkerId &&
         selectedSession?.session_type === notification.sessionType
@@ -1894,7 +2194,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
             instantMsg.senderUid,
             notification.talkerId,
             notification.sessionType,
-            refreshedSessions
+            refreshedChats
           )
         } else {
           // No instant message data available - do a silent fetch to get new messages
@@ -1902,7 +2202,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
           // When window is not focused, also show a notification (fetch the latest message for it)
           if (!isWindowFocused) {
-            fetchLatestMessageForNotification(notification.talkerId, notification.sessionType, refreshedSessions)
+            fetchLatestMessageForNotification(notification.talkerId, notification.sessionType, refreshedChats)
           }
         }
       } else {
@@ -1930,63 +2230,52 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
             instantMsg.senderUid,
             notification.talkerId,
             notification.sessionType,
-            refreshedSessions
+            refreshedChats
           )
         } else {
           // No instant message data - fetch the latest message for notification
-          fetchLatestMessageForNotification(notification.talkerId, notification.sessionType, refreshedSessions)
+          fetchLatestMessageForNotification(notification.talkerId, notification.sessionType, refreshedChats)
         }
       }
 
-      // Update session list to reflect new messages (optimistic in-place update)
-      setSessions(prev => {
-        const existingSessionIndex = prev.findIndex(
-          s => s.talker_id === notification.talkerId && s.session_type === notification.sessionType
-        )
+      // Update session list to reflect new messages (optimistic in-place update), wherever it's listed
+      updateSession(isNotifiedSession, listed => {
+        const session = { ...listed }
 
-        if (existingSessionIndex >= 0) {
-          const updatedSessions = [...prev]
-          const session = { ...updatedSessions[existingSessionIndex] }
-
-          // Update unread count: only reset to 0 if this is the current session AND window is focused
-          if (isCurrentSession && isWindowFocused) {
-            session.unread_count = 0
-          } else {
-            session.unread_count = (session.unread_count || 0) + 1
-          }
-
-          // Update last_msg if we have instant message data
-          if (notification.instantMsg) {
-            const instantMsg = notification.instantMsg
-            session.last_msg = {
-              sender_uid: instantMsg.senderUid,
-              receiver_type: instantMsg.receiverType,
-              receiver_id: instantMsg.receiverId,
-              msg_type: instantMsg.msgType,
-              content: instantMsg.content,
-              msg_seqno: instantMsg.msgSeqno,
-              timestamp: instantMsg.timestamp,
-              at_uids: null,
-              msg_key: instantMsg.msgKey,
-              msg_status: 0,
-              notify_code: '',
-              new_face_version: 1,
-              msg_source: 1,
-            }
-          }
-
-          // Update max_seqno so ack calls use the latest value
-          if (notification.latestSeqno) {
-            session.max_seqno = notification.latestSeqno
-          }
-
-          // Update session in place — preserve server sort order (sticky sessions, etc.)
-          updatedSessions[existingSessionIndex] = session
-
-          return updatedSessions
+        // Update unread count: only reset to 0 if this is the current session AND window is focused
+        if (isCurrentSession && isWindowFocused) {
+          session.unread_count = 0
+        } else {
+          session.unread_count = (session.unread_count || 0) + 1
         }
 
-        return prev
+        // Update last_msg if we have instant message data
+        if (notification.instantMsg) {
+          const instantMsg = notification.instantMsg
+          session.last_msg = {
+            sender_uid: instantMsg.senderUid,
+            receiver_type: instantMsg.receiverType,
+            receiver_id: instantMsg.receiverId,
+            msg_type: instantMsg.msgType,
+            content: instantMsg.content,
+            msg_seqno: instantMsg.msgSeqno,
+            timestamp: instantMsg.timestamp,
+            at_uids: null,
+            msg_key: instantMsg.msgKey,
+            msg_status: 0,
+            notify_code: '',
+            new_face_version: 1,
+            msg_source: 1,
+          }
+        }
+
+        // Update max_seqno so ack calls use the latest value
+        if (notification.latestSeqno) {
+          session.max_seqno = notification.latestSeqno
+        }
+
+        // Update session in place — preserve server sort order (sticky sessions, etc.)
+        return session
       })
 
       // Keep selectedSession in sync so handleFocus and other consumers see the latest max_seqno
@@ -2011,6 +2300,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       fetchMessagesQuietly,
       showNotificationForMessage,
       fetchLatestMessageForNotification,
+      refreshUnfollowedQuietly,
+      updateSession,
     ]
   )
 
@@ -2021,9 +2312,16 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       switch (notification.type) {
         case 'session_list':
-        case 'total_unread':
           // Silent background refresh - no spinner
           refreshSessionsQuietly()
+          break
+        case 'total_unread':
+          refreshSessionsQuietly()
+          // Reading 未关注人消息's chats elsewhere changes its unread too, and with its chats listed, theirs
+          if (unfollowFoldRef.current) {
+            if (unfollowedOpen) refreshUnfollowedQuietly()
+            else refreshUnfollowedUnread()
+          }
           break
         case 'fetch_message':
           // For fetch_message, we don't need to do a full refetch since
@@ -2032,7 +2330,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           break
       }
     },
-    [refreshSessionsQuietly]
+    [refreshSessionsQuietly, unfollowedOpen, refreshUnfollowedQuietly, refreshUnfollowedUnread]
   )
 
   // Check login status and fetch accounts on mount
@@ -2073,10 +2371,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       console.log('[usePrivateMessages] Navigate to session received:', params)
       console.log('[usePrivateMessages] Current sessions count:', sessionsRef.current.length)
 
-      // Find the session in the current list
-      let session = sessionsRef.current.find(
-        s => s.talker_id === params.talkerId && s.session_type === params.sessionType
-      )
+      // Find the session in the current lists
+      const isTargetSession = (s: BilibiliSession) =>
+        s.talker_id === params.talkerId && s.session_type === params.sessionType
+      let session = findListedSession(isTargetSession)
 
       console.log('[usePrivateMessages] Found session in ref:', session ? 'yes' : 'no')
 
@@ -2086,7 +2384,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         const refreshedSessions = await refreshSessionsQuietly()
 
         // Use the returned sessions directly (avoids race condition with ref sync)
-        session = refreshedSessions.find(s => s.talker_id === params.talkerId && s.session_type === params.sessionType)
+        session = refreshedSessions.find(isTargetSession)
+        // Missing from the main list, it may be folded into 未关注人消息
+        if (!session && unfollowFoldRef.current) session = (await refreshUnfollowedQuietly()).find(isTargetSession)
         console.log('[usePrivateMessages] After refresh, found session:', session ? 'yes' : 'no')
       }
 
@@ -2095,6 +2395,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         // the notification was for
         console.log('[usePrivateMessages] Selecting session:', session.talker_id)
         if (params.customerServiceShop && isCustomerServiceSession(session)) setActiveShop(params.customerServiceShop)
+        // A folded chat opens beside 未关注人消息's list, where it's listed
+        if (isFolded(session)) setUnfollowedOpen(true)
         selectSession(session)
       } else {
         console.log('[usePrivateMessages] Session still not found after refresh')
@@ -2107,7 +2409,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       console.log('[usePrivateMessages] Cleaning up navigation listener')
       cleanup()
     }
-  }, [selectSession, refreshSessionsQuietly, setActiveShop])
+  }, [selectSession, refreshSessionsQuietly, setActiveShop, findListedSession, refreshUnfollowedQuietly, isFolded])
 
   // Auto-connect WebSocket when logged in
   useEffect(() => {
@@ -2155,6 +2457,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     activeCustomerService,
     selectCustomerService,
     sendCustomerServiceReply,
+
+    // 收起未关注人消息 and 未关注人消息
+    unfollowFold,
+    unfollowed,
+    toggleUnfollowFold,
+    openUnfollowed,
+    closeUnfollowed,
+    loadMoreUnfollowed,
 
     // Actions
     checkLogin,

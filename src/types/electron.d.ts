@@ -1,8 +1,10 @@
 import type {
   BilibiliCredentials,
+  BilibiliLinkSettingResponse,
   BilibiliMessagesResponse,
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
+  BilibiliSingleUnreadResponse,
   BilibiliUserCardsResponse,
   CustomerServiceMessagesResponse,
   CustomerServiceSendMessageResponse,
@@ -10,9 +12,12 @@ import type {
 } from './bilibili'
 
 export interface FetchSessionsParams {
+  /** What to list, a SESSION_LIST_TYPE; the main list by default */
   sessionType?: string
   size?: string
   endTs?: string
+  /** Fold chats with people the user doesn't follow out of the main list, as 收起未关注人消息 does */
+  unfollowFold?: boolean
 }
 
 export interface FetchMessagesParams {
@@ -89,6 +94,16 @@ export interface SetTopParams {
 }
 
 export interface SetTopResult {
+  success: boolean
+  error?: string
+}
+
+export interface SetUnfollowFoldParams {
+  /** Turn 收起未关注人消息 on or off for the signed-in account */
+  enabled: boolean
+}
+
+export interface SetUnfollowFoldResult {
   success: boolean
   error?: string
 }
@@ -332,6 +347,8 @@ export interface ElectronAPI {
     fetchSessions: (params: FetchSessionsParams) => Promise<BilibiliSessionsResponse | ErrorResponse>
     fetchMessages: (params: FetchMessagesParams) => Promise<BilibiliMessagesResponse | ErrorResponse>
     fetchUsers: (params: FetchUsersParams) => Promise<BilibiliUserCardsResponse | ErrorResponse>
+    fetchSingleUnread: () => Promise<BilibiliSingleUnreadResponse | ErrorResponse>
+    fetchLinkSetting: () => Promise<BilibiliLinkSettingResponse | ErrorResponse>
 
     // Actions
     updateAck: (params: UpdateAckParams) => Promise<UpdateAckResponse | ErrorResponse>
@@ -339,6 +356,7 @@ export interface ElectronAPI {
     uploadImage: (params: UploadImageParams) => Promise<UploadImageResult>
     setDnd: (params: SetDndParams) => Promise<SetDndResult>
     setTop: (params: SetTopParams) => Promise<SetTopResult>
+    setUnfollowFold: (params: SetUnfollowFoldParams) => Promise<SetUnfollowFoldResult>
 
     // Customer service chats (客服消息)
     customerService: {
