@@ -123,6 +123,13 @@ export interface UnfollowedFold {
   open: boolean
 }
 
+/** A first page of 未关注人消息 as fetched, with its unread, null when only that failed to load */
+interface UnfollowedPage {
+  sessions: BilibiliSession[]
+  hasMore: boolean
+  unread: number | null
+}
+
 export interface UsePrivateMessagesReturn {
   // State
   sessions: BilibiliSession[]
@@ -240,11 +247,19 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const unfollowedSessionsRef = useRef<BilibiliSession[]>([])
   const [unfollowedUnread, setUnfollowedUnread] = useState(0)
   const [hasMoreUnfollowed, setHasMoreUnfollowed] = useState(false)
-  const [unfollowedNextEndTs, setUnfollowedNextEndTs] = useState<number | null>(null)
   const [loadingMoreUnfollowed, setLoadingMoreUnfollowed] = useState(false)
   const [unfollowedOpen, setUnfollowedOpen] = useState(false)
+  // Where 未关注人消息's next page starts, null at its end, and whether one is loading. Refs, as a second call can
+  // come before a render does and would load the same page again.
+  const unfollowedNextEndTsRef = useRef<number | null>(null)
+  const loadingMoreUnfollowedRef = useRef(false)
+  // Bumped by every full load of the session lists and by the account changing, so a page or a quiet refresh
+  // that a newer load, another account or another fold setting overtook doesn't land
+  const listsLoadRef = useRef(0)
   // Bumped by every load of 未关注人消息 and by the account changing, so only the latest load lands
   const unfollowedLoadRef = useRef(0)
+  // Bumped by every count of 未关注人消息's unread, so an older one can't land last
+  const unfollowedUnreadLoadRef = useRef(0)
   const unfollowed = useMemo<UnfollowedFold | null>(
     () =>
       unfollowFold
@@ -271,16 +286,6 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     setUnfollowFold(folded)
     if (!folded) setUnfollowedOpen(false)
   }, [])
-
-  // Forget 未关注人消息 and the setting that folds it, which belong to the account signing out
-  const resetUnfollowed = useCallback(() => {
-    unfollowedLoadRef.current++
-    applyUnfollowFold(null)
-    setUnfollowed([])
-    setUnfollowedUnread(0)
-    setHasMoreUnfollowed(false)
-    setUnfollowedNextEndTs(null)
-  }, [applyUnfollowFold, setUnfollowed])
 
   // Helper to merge emoji infos into the map
   const mergeEmojiInfos = useCallback((emojiInfos: BilibiliEmojiInfo[] | undefined) => {
@@ -489,74 +494,84 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [])
 
-  // Read 收起未关注人消息 for the signed-in account. Unread, nothing folds: a guess shouldn't hide chats.
-  const readUnfollowFold = useCallback(async (): Promise<boolean> => {
+  // Read 收起未关注人消息 for the signed-in account; null when it can't be read
+  const readUnfollowFold = useCallback(async (): Promise<boolean | null> => {
     try {
       const data = await window.electronAPI.bilibili.fetchLinkSetting()
-      if (!isErrorResponse(data) && data.code === 0) {
-        const folded = data.data?.show_unfollowed_msg === 1
-        applyUnfollowFold(folded)
-        return folded
-      }
+      if (!isErrorResponse(data) && data.code === 0) return data.data?.show_unfollowed_msg === 1
       console.error('[usePrivateMessages] Failed to read 收起未关注人消息:', isErrorResponse(data) ? data.error : data)
     } catch (err) {
       console.error('[usePrivateMessages] Failed to read 收起未关注人消息:', err)
     }
-    applyUnfollowFold(null)
-    return false
-  }, [applyUnfollowFold])
+    return null
+  }, [])
 
-  // Load 未关注人消息's first page and its unread, without a spinner, or empty it with the fold off. Resolves
-  // to the chats it lists, left as they were when the page fails or another load takes over.
-  const loadUnfollowed = useCallback(
-    async (folded: boolean): Promise<BilibiliSession[]> => {
-      const load = ++unfollowedLoadRef.current
-      if (!folded) {
-        setUnfollowed([])
-        setUnfollowedUnread(0)
-        setHasMoreUnfollowed(false)
-        setUnfollowedNextEndTs(null)
-        return []
+  // Fetch 未关注人消息's first page and its unread, null when the page fails; its unread is null when only that fails
+  const fetchUnfollowed = useCallback(async (): Promise<UnfollowedPage | null> => {
+    try {
+      const [page, unread] = await Promise.all([
+        window.electronAPI.bilibili.fetchSessions({
+          sessionType: String(SESSION_LIST_TYPE.UNFOLLOWED),
+          unfollowFold: true,
+        }),
+        window.electronAPI.bilibili.fetchSingleUnread(),
+      ])
+      if (isErrorResponse(page) || page.code !== 0) {
+        console.error('[usePrivateMessages] Failed to fetch 未关注人消息:', page)
+        return null
+      }
+      const unreadCounted = !isErrorResponse(unread) && unread.code === 0
+      if (!unreadCounted) console.error('[usePrivateMessages] Failed to fetch 未关注人消息 unread:', unread)
+
+      return {
+        sessions: page.data?.session_list || [],
+        hasMore: page.data?.has_more === 1,
+        unread: unreadCounted ? (unread.data?.unfollow_unread ?? 0) : null,
+      }
+    } catch (err) {
+      console.error('[usePrivateMessages] Failed to fetch 未关注人消息:', err)
+      return null
+    }
+  }, [])
+
+  // Show 未关注人消息 from a first page, or empty it (with the fold off, say)
+  const showUnfollowed = useCallback(
+    (page: UnfollowedPage | null) => {
+      const list = page?.sessions ?? []
+      setUnfollowed(list)
+      setHasMoreUnfollowed(!!page?.hasMore)
+      unfollowedNextEndTsRef.current = page?.hasMore && list.length > 0 ? list[list.length - 1].session_ts : null
+      if (page?.unread !== null) {
+        unfollowedUnreadLoadRef.current++
+        setUnfollowedUnread(page?.unread ?? 0)
       }
 
-      try {
-        const [page, unread] = await Promise.all([
-          window.electronAPI.bilibili.fetchSessions({
-            sessionType: String(SESSION_LIST_TYPE.UNFOLLOWED),
-            unfollowFold: true,
-          }),
-          window.electronAPI.bilibili.fetchSingleUnread(),
-        ])
-        if (load !== unfollowedLoadRef.current) return unfollowedSessionsRef.current
-
-        if (!isErrorResponse(unread) && unread.code === 0) {
-          setUnfollowedUnread(unread.data?.unfollow_unread ?? 0)
-        } else {
-          console.error('[usePrivateMessages] Failed to fetch 未关注人消息 unread:', unread)
-        }
-        if (isErrorResponse(page) || page.code !== 0) {
-          console.error('[usePrivateMessages] Failed to fetch 未关注人消息:', page)
-          return unfollowedSessionsRef.current
-        }
-
-        const list = page.data?.session_list || []
-        setUnfollowed(list)
-        setHasMoreUnfollowed(page.data?.has_more === 1)
-        setUnfollowedNextEndTs(list.length > 0 ? list[list.length - 1].session_ts : null)
-
-        // Its chats are all with users, who come without account_info; a refresh only asks after new ones
-        const uidsToFetch = list
-          .filter(session => !session.account_info?.name && !userCacheRef.current[session.talker_id])
-          .map(session => session.talker_id)
-        if (uidsToFetch.length > 0) fetchUserInfoBatch(uidsToFetch)
-        return list
-      } catch (err) {
-        console.error('[usePrivateMessages] Failed to fetch 未关注人消息:', err)
-        return unfollowedSessionsRef.current
-      }
+      // Its chats are all with users, who come without account_info; a refresh only asks after new ones
+      const uidsToFetch = list
+        .filter(session => !session.account_info?.name && !userCacheRef.current[session.talker_id])
+        .map(session => session.talker_id)
+      if (uidsToFetch.length > 0) fetchUserInfoBatch(uidsToFetch)
     },
     [setUnfollowed, fetchUserInfoBatch]
   )
+
+  // Forget 未关注人消息 and the setting that folds it, and drop the list loads still out, as the account they
+  // belong to signs out or another signs in
+  const forgetAccountLists = useCallback(() => {
+    listsLoadRef.current++
+    unfollowedLoadRef.current++
+    applyUnfollowFold(null)
+    showUnfollowed(null)
+  }, [applyUnfollowFold, showUnfollowed])
+
+  // Refresh 未关注人消息 from its first page. Resolves to the chats it lists, which stay as they were when the
+  // page fails, or when a newer load or the fold turning off overtakes it.
+  const loadUnfollowed = useCallback(async (): Promise<BilibiliSession[]> => {
+    const load = ++unfollowedLoadRef.current
+    const page = await fetchUnfollowed()
+    if (page && load === unfollowedLoadRef.current && unfollowFoldRef.current) showUnfollowed(page)
+    return unfollowedSessionsRef.current
+  }, [fetchUnfollowed, showUnfollowed])
 
   const unfollowedRefreshRef = useRef<Promise<BilibiliSession[]> | null>(null)
   const unfollowedNextRefreshRef = useRef<Promise<BilibiliSession[]> | null>(null)
@@ -565,7 +580,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // refresh runs share one more after it, which can't have been sent before what they ask about.
   const refreshUnfollowedQuietly = useCallback((): Promise<BilibiliSession[]> => {
     const start = (): Promise<BilibiliSession[]> => {
-      const refresh: Promise<BilibiliSession[]> = loadUnfollowed(unfollowFoldRef.current).finally(() => {
+      const refresh: Promise<BilibiliSession[]> = loadUnfollowed().finally(() => {
         if (unfollowedRefreshRef.current === refresh) unfollowedRefreshRef.current = null
       })
       unfollowedRefreshRef.current = refresh
@@ -583,10 +598,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
   // Refresh only 未关注人消息's unread, which reading its chats elsewhere changes
   const refreshUnfollowedUnread = useCallback(async () => {
-    const load = unfollowedLoadRef.current
+    const load = ++unfollowedUnreadLoadRef.current
     try {
       const data = await window.electronAPI.bilibili.fetchSingleUnread()
-      if (load !== unfollowedLoadRef.current || !unfollowFoldRef.current) return
+      if (load !== unfollowedUnreadLoadRef.current || !unfollowFoldRef.current) return
       if (!isErrorResponse(data) && data.code === 0) setUnfollowedUnread(data.data?.unfollow_unread ?? 0)
     } catch (err) {
       console.error('[usePrivateMessages] Failed to fetch 未关注人消息 unread:', err)
@@ -595,18 +610,20 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
   // Load the next page of 未关注人消息
   const loadMoreUnfollowed = useCallback(async () => {
-    if (!hasMoreUnfollowed || unfollowedNextEndTs === null || loadingMoreUnfollowed) return
+    const endTs = unfollowedNextEndTsRef.current
+    if (endTs === null || loadingMoreUnfollowedRef.current) return
 
-    const load = unfollowedLoadRef.current
+    loadingMoreUnfollowedRef.current = true
     setLoadingMoreUnfollowed(true)
+    const load = unfollowedLoadRef.current
     try {
       const data = await window.electronAPI.bilibili.fetchSessions({
         sessionType: String(SESSION_LIST_TYPE.UNFOLLOWED),
         unfollowFold: true,
-        endTs: String(unfollowedNextEndTs),
+        endTs: String(endTs),
       })
-      // A reload, or another account, took over meanwhile
-      if (load !== unfollowedLoadRef.current) return
+      // A reload, another account or the fold turning off took over meanwhile
+      if (load !== unfollowedLoadRef.current || !unfollowFoldRef.current) return
 
       if (isErrorResponse(data)) {
         throw new Error(data.error || 'Failed to fetch more sessions')
@@ -616,9 +633,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       }
 
       const sessionList = data.data?.session_list || []
+      const hasMore = data.data?.has_more === 1 && sessionList.length > 0
       setUnfollowed([...unfollowedSessionsRef.current, ...sessionList])
-      setHasMoreUnfollowed(data.data?.has_more === 1)
-      setUnfollowedNextEndTs(sessionList.length > 0 ? sessionList[sessionList.length - 1].session_ts : null)
+      setHasMoreUnfollowed(hasMore)
+      unfollowedNextEndTsRef.current = hasMore ? sessionList[sessionList.length - 1].session_ts : null
 
       const uidsToFetch = sessionList
         .filter(session => !session.account_info?.name && !userCacheRef.current[session.talker_id])
@@ -627,9 +645,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     } catch (err) {
       console.error('[usePrivateMessages] Failed to load more of 未关注人消息:', err)
     } finally {
+      loadingMoreUnfollowedRef.current = false
       setLoadingMoreUnfollowed(false)
     }
-  }, [hasMoreUnfollowed, unfollowedNextEndTs, loadingMoreUnfollowed, setUnfollowed, fetchUserInfoBatch])
+  }, [setUnfollowed, fetchUserInfoBatch])
 
   // List 未关注人消息's chats in place of the main list, refreshed as Bilibili's web client does on opening them
   const openUnfollowed = useCallback(() => {
@@ -761,15 +780,22 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   }, [])
 
   // Load the signed-in account's sessions from the first page. Its 收起未关注人消息 setting, read first unless
-  // given, decides whether chats with people it doesn't follow list here or in 未关注人消息. Throws when the
-  // list fails to load.
+  // given (unreadable, nothing folds), decides whether chats with people it doesn't follow list here or in
+  // 未关注人消息. Both lists show together once both have loaded, so no chat goes missing between them or shows
+  // in both; when either fails, what's shown stays and this throws. Resolves to false when a newer load or
+  // another account overtook it, which leaves everything to that one.
   const loadSessions = useCallback(
-    async (folded?: boolean) => {
-      const fold = folded ?? (await readUnfollowFold())
-      const [data] = await Promise.all([
+    async (folded?: boolean): Promise<boolean> => {
+      const load = ++listsLoadRef.current
+      const setting = folded ?? (await readUnfollowFold())
+      if (load !== listsLoadRef.current) return false
+
+      const fold = setting === true
+      const [data, unfollowedPage] = await Promise.all([
         window.electronAPI.bilibili.fetchSessions({ unfollowFold: fold }),
-        loadUnfollowed(fold),
+        fold ? fetchUnfollowed() : null,
       ])
+      if (load !== listsLoadRef.current) return false
 
       if (isErrorResponse(data)) {
         throw new Error(data.error || 'Failed to fetch sessions')
@@ -778,6 +804,15 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (data.code !== 0) {
         throw new Error(data.message || 'Failed to fetch sessions')
       }
+
+      if (fold && !unfollowedPage) {
+        throw new Error('Failed to fetch 未关注人消息')
+      }
+
+      applyUnfollowFold(setting)
+      // Refreshes of 未关注人消息 sent before this would land over it
+      unfollowedLoadRef.current++
+      showUnfollowed(unfollowedPage)
 
       const sessionList = data.data?.session_list || []
       setSessions(sessionList)
@@ -800,8 +835,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (uidsToFetch.length > 0) {
         fetchUserInfoBatch(uidsToFetch)
       }
+      return true
     },
-    [readUnfollowFold, loadUnfollowed, fetchUserInfoBatch]
+    [readUnfollowFold, fetchUnfollowed, applyUnfollowFold, showUnfollowed, fetchUserInfoBatch]
   )
 
   // Logout
@@ -825,7 +861,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       setUserCache({})
       setHasMoreSessions(false)
       setNextEndTs(null)
-      resetUnfollowed()
+      forgetAccountLists()
 
       // Check login - this may remove additional expired accounts on the backend
       const loginResult = await window.electronAPI.bilibili.checkLogin()
@@ -854,15 +890,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     } catch (err) {
       console.error('Failed to logout:', err)
     }
-  }, [loadSessions, resetUnfollowed, userInfo?.mid])
+  }, [loadSessions, forgetAccountLists, userInfo?.mid])
 
   const fetchSessions = useCallback(async () => {
     setLoading(true)
     setError(null)
 
     try {
-      await loadSessions()
-      setIsConnected(true)
+      if (await loadSessions()) setIsConnected(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch sessions')
       setIsConnected(false)
@@ -874,6 +909,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Turn 收起未关注人消息 on or off. It's the account's setting on Bilibili, so its other clients follow.
   const toggleUnfollowFold = useCallback(
     async (enabled: boolean): Promise<boolean> => {
+      const load = listsLoadRef.current
       try {
         const result = await window.electronAPI.bilibili.setUnfollowFold({ enabled })
         if (!result.success) {
@@ -885,11 +921,6 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           })
           return false
         }
-
-        applyUnfollowFold(enabled)
-        // The lists fold or unfold with it, as set: reading it back this soon could still see the old value
-        loadSessions(enabled).catch(err => console.error('Failed to reload sessions:', err))
-        return true
       } catch (err) {
         console.error('Failed to change 收起未关注人消息:', err)
         toastManager.add({
@@ -899,19 +930,37 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         })
         return false
       }
+
+      // Another account signed in, or the lists reloaded, while it saved: that load read the setting itself
+      if (load !== listsLoadRef.current) return true
+
+      // The lists fold or unfold with it, as set: reading it back this soon could still see the old value
+      try {
+        await loadSessions(enabled)
+      } catch (err) {
+        console.error('Failed to reload sessions:', err)
+        toastManager.add({
+          type: 'error',
+          title: '会话刷新失败',
+          description: '收起未关注人消息已更改，刷新会话后生效',
+        })
+      }
+      return true
     },
-    [applyUnfollowFold, loadSessions]
+    [loadSessions]
   )
 
   const loadMoreSessions = useCallback(async () => {
     if (!hasMoreSessions || nextEndTs === null || loadingMore) return
 
     setLoadingMore(true)
+    const load = listsLoadRef.current
+    const fold = unfollowFoldRef.current
 
     try {
       const data = await window.electronAPI.bilibili.fetchSessions({
         endTs: String(nextEndTs),
-        unfollowFold: unfollowFoldRef.current,
+        unfollowFold: fold,
       })
 
       if (isErrorResponse(data)) {
@@ -921,6 +970,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (data.code !== 0) {
         throw new Error(data.message || 'Failed to fetch more sessions')
       }
+
+      // A full load, another account or the fold setting changing overtook this page
+      if (load !== listsLoadRef.current || fold !== unfollowFoldRef.current) return
 
       const sessionList = data.data?.session_list || []
       setSessions(prev => [...prev, ...sessionList])
@@ -1248,7 +1300,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
             // Update local session state to reflect read status
             updateSession(
-              s => s.talker_id === session.talker_id,
+              s => s.talker_id === session.talker_id && s.session_type === session.session_type,
               s => ({ ...s, unread_count: 0 })
             )
           } catch (ackErr) {
@@ -1338,7 +1390,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
           // Update session unread count
           updateSession(
-            s => s.talker_id === session.talker_id,
+            s => s.talker_id === session.talker_id && s.session_type === session.session_type,
             s => ({ ...s, unread_count: 0 })
           )
         }
@@ -1434,7 +1486,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         // Update the session's last_msg and session_ts
         updateSession(
-          s => s.talker_id === selectedSession.talker_id,
+          s => s.talker_id === selectedSession.talker_id && s.session_type === selectedSession.session_type,
           s => ({
             ...s,
             session_ts: Date.now() * 1000, // Microsecond timestamp
@@ -1734,7 +1786,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         // Update the session's last_msg and session_ts
         updateSession(
-          s => s.talker_id === selectedSession.talker_id,
+          s => s.talker_id === selectedSession.talker_id && s.session_type === selectedSession.session_type,
           s => ({
             ...s,
             session_ts: Date.now() * 1000,
@@ -1821,7 +1873,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setUserCache({})
         setHasMoreSessions(false)
         setNextEndTs(null)
-        resetUnfollowed()
+        forgetAccountLists()
 
         // Re-check login with new account - this may remove expired accounts
         const loginResult = await window.electronAPI.bilibili.checkLogin()
@@ -1850,7 +1902,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         console.error('[usePrivateMessages] Failed to switch account:', err)
       }
     },
-    [loadSessions, resetUnfollowed]
+    [loadSessions, forgetAccountLists]
   )
 
   // Remove an account
@@ -1884,7 +1936,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
               setSelectedSession(null)
               setMessages([])
               setUserCache({})
-              resetUnfollowed()
+              forgetAccountLists()
             }
           }
         } else {
@@ -1905,7 +1957,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         }
       }
     },
-    [activeAccountMid, switchAccount, resetUnfollowed]
+    [activeAccountMid, switchAccount, forgetAccountLists]
   )
 
   // Start adding a new account (shows QR dialog)
@@ -1986,8 +2038,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Silent background refresh of sessions - no loading spinner
   // Returns the fetched sessions for immediate use (avoids race condition with ref sync)
   const refreshSessionsQuietly = useCallback(async (): Promise<BilibiliSession[]> => {
+    const load = listsLoadRef.current
+    const fold = unfollowFoldRef.current
     try {
-      const data = await window.electronAPI.bilibili.fetchSessions({ unfollowFold: unfollowFoldRef.current })
+      const data = await window.electronAPI.bilibili.fetchSessions({ unfollowFold: fold })
 
       if (isErrorResponse(data) || data.code !== 0) {
         console.error('[usePrivateMessages] Silent session refresh failed')
@@ -1995,6 +2049,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       }
 
       const sessionList = data.data?.session_list || []
+      // A full load, another account or the fold setting changing overtook it: only lookups use what it fetched
+      if (load !== listsLoadRef.current || fold !== unfollowFoldRef.current) return sessionList
+
       setSessions(sessionList)
       setHasMoreSessions(data.data?.has_more === 1)
 
@@ -2311,10 +2368,16 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       console.log('[usePrivateMessages] Session update notification:', notification)
 
       switch (notification.type) {
-        case 'session_list':
+        case 'session_list': {
           // Silent background refresh - no spinner
           refreshSessionsQuietly()
+          // A folded chat changed, by Do Not Disturb or a pin set on another client, say: it's in 未关注人消息
+          const uid = notification.sessionId?.privateId?.uid
+          if (unfollowFoldRef.current && uid && unfollowedSessionsRef.current.some(s => s.talker_id === uid)) {
+            refreshUnfollowedQuietly()
+          }
           break
+        }
         case 'total_unread':
           refreshSessionsQuietly()
           // Reading 未关注人消息's chats elsewhere changes its unread too, and with its chats listed, theirs

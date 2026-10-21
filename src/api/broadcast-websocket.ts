@@ -496,9 +496,15 @@ export class BroadcastWebSocketManager {
       if (payload.commandMsgs && payload.commandMsgs.length > 0) {
         for (const cmdMsg of payload.commandMsgs) {
           if (cmdMsg.updateSessionListCommand) {
+            const id = cmdMsg.updateSessionListCommand.sessionId
             this.config.onSessionUpdate?.({
               type: 'session_list',
-              sessionId: cmdMsg.updateSessionListCommand.sessionId as SessionUpdateNotification['sessionId'],
+              // Its ids are uint64, which protobufjs can decode as Longs, and those don't cross IPC as numbers
+              sessionId: id && {
+                privateId: id.privateId && { uid: Number(id.privateId.uid) },
+                groupId: id.groupId && { groupId: Number(id.groupId.groupId) },
+                systemId: id.systemId && { systemMsgType: Number(id.systemId.systemMsgType) },
+              },
             })
           } else if (cmdMsg.updateTotalUnreadCommand) {
             this.config.onSessionUpdate?.({
