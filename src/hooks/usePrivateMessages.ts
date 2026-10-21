@@ -256,10 +256,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Bumped by every full load of the session lists and by the account changing, so a page or a quiet refresh
   // that a newer load, another account or another fold setting overtook doesn't land
   const listsLoadRef = useRef(0)
+  // Bumped only by the account changing, for work that a reload of the same account must not cancel
+  const listsAccountRef = useRef(0)
   // Bumped by every load of 未关注人消息 and by the account changing, so only the latest load lands
   const unfollowedLoadRef = useRef(0)
-  // Bumped by every count of 未关注人消息's unread, so an older one can't land last
-  const unfollowedUnreadLoadRef = useRef(0)
   const unfollowed = useMemo<UnfollowedFold | null>(
     () =>
       unfollowFold
@@ -541,10 +541,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       setUnfollowed(list)
       setHasMoreUnfollowed(!!page?.hasMore)
       unfollowedNextEndTsRef.current = page?.hasMore && list.length > 0 ? list[list.length - 1].session_ts : null
-      if (page?.unread !== null) {
-        unfollowedUnreadLoadRef.current++
-        setUnfollowedUnread(page?.unread ?? 0)
-      }
+      if (page?.unread !== null) setUnfollowedUnread(page?.unread ?? 0)
 
       // Its chats are all with users, who come without account_info; a refresh only asks after new ones
       const uidsToFetch = list
@@ -559,6 +556,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // belong to signs out or another signs in
   const forgetAccountLists = useCallback(() => {
     listsLoadRef.current++
+    listsAccountRef.current++
     unfollowedLoadRef.current++
     applyUnfollowFold(null)
     showUnfollowed(null)
@@ -595,18 +593,6 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     })
     return unfollowedNextRefreshRef.current
   }, [loadUnfollowed])
-
-  // Refresh only 未关注人消息's unread, which reading its chats elsewhere changes
-  const refreshUnfollowedUnread = useCallback(async () => {
-    const load = ++unfollowedUnreadLoadRef.current
-    try {
-      const data = await window.electronAPI.bilibili.fetchSingleUnread()
-      if (load !== unfollowedUnreadLoadRef.current || !unfollowFoldRef.current) return
-      if (!isErrorResponse(data) && data.code === 0) setUnfollowedUnread(data.data?.unfollow_unread ?? 0)
-    } catch (err) {
-      console.error('[usePrivateMessages] Failed to fetch 未关注人消息 unread:', err)
-    }
-  }, [])
 
   // Load the next page of 未关注人消息
   const loadMoreUnfollowed = useCallback(async () => {
@@ -909,7 +895,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Turn 收起未关注人消息 on or off. It's the account's setting on Bilibili, so its other clients follow.
   const toggleUnfollowFold = useCallback(
     async (enabled: boolean): Promise<boolean> => {
-      const load = listsLoadRef.current
+      const account = listsAccountRef.current
       try {
         const result = await window.electronAPI.bilibili.setUnfollowFold({ enabled })
         if (!result.success) {
@@ -931,10 +917,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         return false
       }
 
-      // Another account signed in, or the lists reloaded, while it saved: that load read the setting itself
-      if (load !== listsLoadRef.current) return true
+      // Another account signed in while it saved, and its lists follow its own setting
+      if (account !== listsAccountRef.current) return true
 
-      // The lists fold or unfold with it, as set: reading it back this soon could still see the old value
+      // The lists fold or unfold with it, as set, overtaking any reload that read it before it saved: reading it
+      // back this soon could still see the old value
       try {
         await loadSessions(enabled)
       } catch (err) {
@@ -2371,20 +2358,17 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         case 'session_list': {
           // Silent background refresh - no spinner
           refreshSessionsQuietly()
-          // A folded chat changed, by Do Not Disturb or a pin set on another client, say: it's in 未关注人消息
+          // A chat the main list doesn't have, changed by a pin or Do Not Disturb set on another client, say, may
+          // be one of 未关注人消息's, loaded or not
           const uid = notification.sessionId?.privateId?.uid
-          if (unfollowFoldRef.current && uid && unfollowedSessionsRef.current.some(s => s.talker_id === uid)) {
-            refreshUnfollowedQuietly()
-          }
+          const listed = sessionsRef.current.some(s => s.session_type === SESSION_TYPE.USER && s.talker_id === uid)
+          if (unfollowFoldRef.current && uid && !listed) refreshUnfollowedQuietly()
           break
         }
         case 'total_unread':
           refreshSessionsQuietly()
-          // Reading 未关注人消息's chats elsewhere changes its unread too, and with its chats listed, theirs
-          if (unfollowFoldRef.current) {
-            if (unfollowedOpen) refreshUnfollowedQuietly()
-            else refreshUnfollowedUnread()
-          }
+          // Reading 未关注人消息's chats elsewhere changes their unread and its count, which refresh together
+          if (unfollowFoldRef.current) refreshUnfollowedQuietly()
           break
         case 'fetch_message':
           // For fetch_message, we don't need to do a full refetch since
@@ -2393,7 +2377,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           break
       }
     },
-    [refreshSessionsQuietly, unfollowedOpen, refreshUnfollowedQuietly, refreshUnfollowedUnread]
+    [refreshSessionsQuietly, refreshUnfollowedQuietly]
   )
 
   // Check login status and fetch accounts on mount
