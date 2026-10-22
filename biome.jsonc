@@ -33,7 +33,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
+      "preset": "recommended",
       "suspicious": {
         "noDuplicateProperties": "off",
         "noDuplicateCustomProperties": "off",
@@ -44,15 +44,11 @@
         "noImportantStyles": "off"
       },
       "nursery": {
-        // https://biomejs.dev/linter/rules/use-sorted-classes/
+        // https://biomejs.dev/linter/rules/use-tailwind-sorted-classes/
         // https://github.com/biomejs/biome/issues/1274#issuecomment-3490774696
-        "useSortedClasses": {
+        "useTailwindSortedClasses": {
           "fix": "safe",
-          "level": "warn",
-          "options": {
-            "attributes": ["classList"],
-            "functions": ["cn", "clsx", "cva", "tw"]
-          }
+          "level": "warn"
         }
       },
       // This should be removed after all css modules are migrated to tailwind
@@ -114,5 +110,22 @@
     "parser": {
       "tailwindDirectives": true
     }
+  },
+  // Biome 2.6 formats Markdown and YAML by default; leave them to the editor, as before.
+  "markdown": {
+    "formatter": {
+      "enabled": false
+    }
+  },
+  "yaml": {
+    "formatter": {
+      "enabled": false
+    }
+  },
+  "tailwind": {
+    "attributes": ["class", "className", "classList"],
+    "mergeFunctions": ["cn", "clsx", "tw"],
+    "variantFunctions": ["cva"],
+    "stylesheet": "./src/globals.css"
   }
 }
