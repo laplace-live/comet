@@ -26,11 +26,11 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
 
       <div className='flex flex-1 items-center justify-center p-8'>
         <div className='w-full max-w-md space-y-3'>
-          <div className='select-none text-center'>
+          <div className='text-center select-none'>
             <img src={appLogo} alt='LAPLACE Comet' width={80} height={80} className='mx-auto mb-2 size-20' />
-            <h1 className='font-bold font-logo text-3xl tracking-tight'>LAPLACE Comet</h1>
+            <h1 className='font-logo text-3xl font-bold tracking-tight'>LAPLACE Comet</h1>
             <Tooltip>
-              <TooltipTrigger className='mx-auto flex cursor-help items-center gap-1 text-base text-muted-foreground tracking-tight'>
+              <TooltipTrigger className='mx-auto flex cursor-help items-center gap-1 text-base tracking-tight text-muted-foreground'>
                 隐私优先的哔哩哔哩私信管理器
                 <HelpCircle className='size-4' aria-hidden='true' />
               </TooltipTrigger>
@@ -64,7 +64,7 @@ export function LoginScreen({ onLoginSuccess }: LoginScreenProps) {
               </Button>
             )}
 
-            <p className='flex select-none items-center justify-center gap-2 text-muted-foreground text-sm'>
+            <p className='flex items-center justify-center gap-2 text-sm text-muted-foreground select-none'>
               {status === 'waiting_scan' && (
                 <span className='relative flex size-2'>
                   <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-amber-500 opacity-75' />

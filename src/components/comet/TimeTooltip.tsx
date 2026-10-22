@@ -29,8 +29,8 @@ interface ZoneRowProps {
 
 function ZoneRow({ label, value }: ZoneRowProps) {
   return (
-    <div className='flex items-center gap-2 whitespace-nowrap text-xs leading-tight'>
-      <span className='w-12 rounded bg-secondary px-1 text-center font-mono text-secondary-foreground text-xs'>
+    <div className='flex items-center gap-2 text-xs leading-tight whitespace-nowrap'>
+      <span className='w-12 rounded bg-secondary px-1 text-center font-mono text-xs text-secondary-foreground'>
         {label}
       </span>
       <span className='font-mono tabular-nums'>{value}</span>

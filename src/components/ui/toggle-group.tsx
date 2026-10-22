@@ -30,8 +30,8 @@ function ToggleGroup({
         variant === 'default'
           ? 'gap-0.5'
           : orientation === 'horizontal'
-            ? '*:not-first:before:-start-[0.5px] *:not-last:before:-end-[0.5px] *:not-first:rounded-s-none *:not-last:rounded-e-none *:not-first:border-s-0 *:not-last:border-e-0 *:not-first:before:rounded-s-none *:not-last:before:rounded-e-none'
-            : '*:not-first:before:-top-[0.5px] *:not-last:before:-bottom-[0.5px] flex-col *:not-first:rounded-t-none *:not-last:rounded-b-none *:not-first:border-t-0 *:not-last:border-b-0 *:not-last:before:hidden *:not-first:before:rounded-t-none *:not-last:before:rounded-b-none dark:*:last:before:hidden dark:*:first:before:block',
+            ? '*:not-first:rounded-s-none *:not-first:border-s-0 *:not-last:rounded-e-none *:not-last:border-e-0 *:not-first:before:-start-[0.5px] *:not-first:before:rounded-s-none *:not-last:before:-end-[0.5px] *:not-last:before:rounded-e-none'
+            : 'flex-col *:not-first:rounded-t-none *:not-first:border-t-0 *:not-last:rounded-b-none *:not-last:border-b-0 *:not-first:before:-top-[0.5px] *:not-first:before:rounded-t-none *:not-last:before:-bottom-[0.5px] *:not-last:before:hidden *:not-last:before:rounded-b-none dark:*:first:before:block dark:*:last:before:hidden',
         className
       )}
       data-size={size}

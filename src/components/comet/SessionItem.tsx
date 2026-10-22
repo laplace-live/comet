@@ -52,7 +52,7 @@ export function SessionItem({ session, draftKey, isSelected, userCache, onClick 
     <button
       type='button'
       className={cn(
-        'flex w-full select-none items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-accent/50',
+        'flex w-full items-center gap-3 px-4 py-2 text-left transition-colors select-none hover:bg-accent/50',
         {
           'bg-accent': isSelected,
         }
@@ -90,14 +90,14 @@ export function SessionItem({ session, draftKey, isSelected, userCache, onClick 
             )}
           </div>
           {session.last_msg && (
-            <span className='flex-none text-muted-foreground text-xs'>
+            <span className='flex-none text-xs text-muted-foreground'>
               {timeFromNow(session.last_msg.timestamp * 1000)}
             </span>
           )}
         </div>
 
         <div className='flex items-center justify-between gap-2'>
-          <p className='truncate text-muted-foreground text-sm'>
+          <p className='truncate text-sm text-muted-foreground'>
             {draft ? (
               <>
                 <span className='text-destructive'>[草稿]</span> {draft}

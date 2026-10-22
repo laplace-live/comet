@@ -61,20 +61,20 @@ export function AboutDialog() {
           <DialogDescription>应用程序信息</DialogDescription>
         </DialogHeader>
         <DialogPanel>
-          <div className='mt-10 select-none space-y-4'>
+          <div className='mt-10 space-y-4 select-none'>
             <div className='flex flex-col items-center gap-2'>
               <img src={appLogo} alt='LAPLACE Comet' width={64} height={64} className='size-16' />
               <div className='space-y-1 text-center'>
-                <h3 className='font-bold font-logo text-3xl'>LAPLACE Comet</h3>
+                <h3 className='font-logo text-3xl font-bold'>LAPLACE Comet</h3>
                 <p className='text-muted-foreground'>Privacy-first Bilibili PM Manager</p>
-                <p className='text-muted-foreground text-sm'>
+                <p className='text-sm text-muted-foreground'>
                   Version <span className='select-text'>{version}</span> ·{' '}
                   <a href='https://github.com/laplace-live/comet' target='_blank' rel='noopener noreferrer'>
                     Source
                   </a>
                 </p>
 
-                {updateStatusText && <p className='text-muted-foreground text-sm'>{updateStatusText}</p>}
+                {updateStatusText && <p className='text-sm text-muted-foreground'>{updateStatusText}</p>}
 
                 <Button
                   variant='outline'
@@ -91,7 +91,7 @@ export function AboutDialog() {
             <Separator />
 
             <div className='flex flex-col items-center'>
-              <p className='text-muted-foreground text-sm'>Tech otakus destroy the world</p>
+              <p className='text-sm text-muted-foreground'>Tech otakus destroy the world</p>
               <a
                 href='https://laplace.live'
                 target='_blank'

@@ -35,7 +35,7 @@ export function VerifiedBadge({ official, size = 'sm', className = '' }: Verifie
       </TooltipTrigger>
       <TooltipPopup side='right' className='max-w-48'>
         <p className='font-medium'>{isOrganization ? '机构认证' : '个人认证'}</p>
-        {official.title && <p className='text-muted-foreground text-xs'>{official.title}</p>}
+        {official.title && <p className='text-xs text-muted-foreground'>{official.title}</p>}
       </TooltipPopup>
     </Tooltip>
   )

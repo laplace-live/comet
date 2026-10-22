@@ -288,16 +288,16 @@ function ChatView({
       {/* Drag overlay indicator */}
       {isDragging && (
         <div className='pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-primary/10'>
-          <div className='flex flex-col items-center gap-3 rounded-2xl border-2 border-primary border-dashed bg-background/80 px-12 py-8'>
+          <div className='flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-primary bg-background/80 px-12 py-8'>
             <ImagePlus className='size-12 text-primary' aria-hidden='true' />
-            <span className='font-medium text-lg text-primary'>松开以发送图片</span>
+            <span className='text-lg font-medium text-primary'>松开以发送图片</span>
           </div>
         </div>
       )}
 
       {/* Chat Header */}
       <div
-        className={`app-region-drag flex flex-none select-none items-center gap-3 border-border/50 border-b bg-white/80 px-4 py-3 backdrop-blur-xl dark:bg-zinc-900/80 ${isMacOS ? 'pt-11' : ''}`}
+        className={`app-region-drag flex flex-none items-center gap-3 border-b border-border/50 bg-white/80 px-4 py-3 backdrop-blur-xl select-none dark:bg-zinc-900/80 ${isMacOS ? 'pt-11' : ''}`}
       >
         <Button variant='ghost' size='icon' className='app-region-no-drag md:hidden' onClick={onBack} aria-label='返回'>
           <ArrowLeft aria-hidden='true' />
@@ -340,7 +340,7 @@ function ChatView({
                 {badgeLabel}
               </Badge>
             )}
-            <span className='text-muted-foreground text-xs'>{messages.length || '-'} 条消息</span>
+            <span className='text-xs text-muted-foreground'>{messages.length || '-'} 条消息</span>
           </div>
         </div>
 
@@ -488,7 +488,7 @@ function EmptyState() {
         <div className='mb-6 flex size-24 items-center justify-center rounded-3xl bg-linear-to-br from-zinc-100 to-zinc-200 dark:from-zinc-800 dark:to-zinc-900'>
           <MessageSquare className='size-12 opacity-50' aria-hidden='true' />
         </div>
-        <p className='font-medium text-lg'>选择一个会话开始聊天</p>
+        <p className='text-lg font-medium'>选择一个会话开始聊天</p>
         <p className='text-sm'>从左侧列表中选择一个会话查看消息</p>
       </div>
     </>

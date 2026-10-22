@@ -269,7 +269,7 @@ export function MessageInput({
                     className='max-h-80 max-w-full rounded-lg object-contain'
                   />
                 </div>
-                <div className='flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-muted-foreground text-sm'>
+                <div className='flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-sm text-muted-foreground'>
                   <span className='max-w-48 truncate' title={pendingImage.file.name}>
                     {pendingImage.file.name}
                   </span>
@@ -303,7 +303,7 @@ export function MessageInput({
       </Dialog>
 
       {/* Message Input Area */}
-      <div className='flex-none border-border/50 border-t bg-white/80 p-4 backdrop-blur-xl dark:bg-zinc-900/80'>
+      <div className='flex-none border-t border-border/50 bg-white/80 p-4 backdrop-blur-xl dark:bg-zinc-900/80'>
         <div className='flex items-end gap-2'>
           {/* Hidden file input */}
           <input

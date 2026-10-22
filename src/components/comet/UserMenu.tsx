@@ -53,16 +53,16 @@ export function UserMenu({
   const hasMultipleAccounts = accounts.length > 1
 
   return (
-    <div className='flex-none border-border/50 border-t'>
+    <div className='flex-none border-t border-border/50'>
       <Menu>
-        <MenuTrigger className='flex w-full select-none items-center gap-3 px-4 py-2 outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring'>
+        <MenuTrigger className='flex w-full items-center gap-3 px-4 py-2 transition-colors outline-none select-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring'>
           <Avatar className='size-10'>
             {userInfo.face && <AvatarImage src={enforceHttps(userInfo.face)} alt={userInfo.uname} />}
             <AvatarFallback className='text-sm'>{userInfo.uname.charAt(0)}</AvatarFallback>
           </Avatar>
           <div className='flex flex-1 flex-col items-start overflow-hidden text-left'>
-            <span className='w-full truncate font-medium text-sm'>{userInfo.uname}</span>
-            {userInfo.mid && <span className='text-muted-foreground text-xs'>UID:{userInfo.mid}</span>}
+            <span className='w-full truncate text-sm font-medium'>{userInfo.uname}</span>
+            {userInfo.mid && <span className='text-xs text-muted-foreground'>UID:{userInfo.mid}</span>}
           </div>
         </MenuTrigger>
         <MenuPopup align='start' side='top' className='min-w-56'>
@@ -71,7 +71,7 @@ export function UserMenu({
             <MenuGroupLabel className='flex flex-col items-start gap-2 font-normal'>
               <div className='flex flex-col'>
                 <span className='truncate'>{userInfo.uname}</span>
-                {userInfo.mid && <span className='text-muted-foreground text-xs'>UID:{userInfo.mid}</span>}
+                {userInfo.mid && <span className='text-xs text-muted-foreground'>UID:{userInfo.mid}</span>}
               </div>
               {isConnected && (
                 <Badge variant='success' className='gap-1 px-1.5 py-0.5 text-xs'>
@@ -117,7 +117,7 @@ export function UserMenu({
                           <span className={`w-full truncate text-sm ${isExpired ? 'text-muted-foreground' : ''}`}>
                             {account.uname}
                           </span>
-                          {isExpired && <span className='text-amber-500 text-xs'>需重新登录</span>}
+                          {isExpired && <span className='text-xs text-amber-500'>需重新登录</span>}
                         </div>
                         {isExpired ? (
                           <RefreshCw className='size-4 text-amber-500' aria-hidden='true' />

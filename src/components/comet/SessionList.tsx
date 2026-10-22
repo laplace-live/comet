@@ -174,17 +174,17 @@ export function SessionList({
 
   return (
     <div
-      className={`flex w-full flex-col border-border/50 border-r bg-white/50 md:w-80 lg:w-96 dark:bg-zinc-900/50 ${isHidden ? 'hidden md:flex' : 'flex'}`}
+      className={`flex w-full flex-col border-r border-border/50 bg-white/50 md:w-80 lg:w-96 dark:bg-zinc-900/50 ${isHidden ? 'hidden md:flex' : 'flex'}`}
     >
       {/* Draggable title bar area - only needed on macOS for traffic lights */}
       {isMacOS && <div className='app-region-drag h-8 flex-none' />}
 
-      <div className='flex-none space-y-3 border-border/50 border-b p-4'>
+      <div className='flex-none space-y-3 border-b border-border/50 p-4'>
         <div className='sr-only select-none'>
-          <h2 className='font-semibold text-lg'>会话列表</h2>
+          <h2 className='text-lg font-semibold'>会话列表</h2>
         </div>
         {showingUnfollowed && (
-          <div className='app-region-no-drag flex select-none items-center gap-1'>
+          <div className='app-region-no-drag flex items-center gap-1 select-none'>
             <Button variant='ghost' size='icon-sm' onClick={onCloseUnfollowed} aria-label='返回'>
               <ArrowLeft aria-hidden='true' />
             </Button>

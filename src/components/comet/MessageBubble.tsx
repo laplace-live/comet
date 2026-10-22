@@ -149,7 +149,7 @@ function renderMessageContent(message: BilibiliMessage, emojiInfoMap: EmojiInfoM
   } catch {
     // If content is not JSON, render as plain text
     return (
-      <p className='wrap-break-word whitespace-break-spaces text-sm leading-relaxed'>
+      <p className='text-sm leading-relaxed wrap-break-word whitespace-break-spaces'>
         {typeof message.content === 'string' ? message.content : '[无法解析的消息]'}
       </p>
     )
@@ -236,12 +236,12 @@ function parseTextWithEmojis(text: string, emojiInfoMap: EmojiInfoMap): React.Re
 function renderTextContent(content: { content?: unknown }, emojiInfoMap: EmojiInfoMap): React.ReactNode {
   const text = extractTextContent(content.content) || extractTextContent(content)
   if (!text) {
-    return <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>[空消息]</p>
+    return <p className='text-sm leading-relaxed wrap-break-word break-all whitespace-break-spaces'>[空消息]</p>
   }
 
   const parsedContent = parseTextWithEmojis(text, emojiInfoMap)
 
-  return <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>{parsedContent}</p>
+  return <p className='text-sm leading-relaxed wrap-break-word break-all whitespace-break-spaces'>{parsedContent}</p>
 }
 
 // Image message
@@ -342,7 +342,7 @@ function renderNotificationContent(content: {
       {title && <p className='font-semibold'>{title}</p>}
 
       {/* Description text */}
-      {text && <p className='text-muted-foreground text-sm'>{text}</p>}
+      {text && <p className='text-sm text-muted-foreground'>{text}</p>}
 
       {/* Modules list */}
       {modules && modules.length > 0 && (
@@ -431,8 +431,8 @@ function renderVideoPushContent(content: {
           </div>
         )}
         <div className='flex min-w-0 flex-1 flex-col justify-center gap-1'>
-          <p className='line-clamp-2 font-medium text-sm leading-snug'>{title || desc || '视频'}</p>
-          <div className='flex items-center gap-2 text-muted-foreground text-xs'>
+          <p className='line-clamp-2 text-sm leading-snug font-medium'>{title || desc || '视频'}</p>
+          <div className='flex items-center gap-2 text-xs text-muted-foreground'>
             {pubDate && <span>{pubDate}</span>}
             {content.danmaku !== undefined && (
               <span className='flex items-center gap-0.5'>
@@ -444,8 +444,8 @@ function renderVideoPushContent(content: {
         </div>
       </a>
       {attachMsg && (
-        <div className='border-border/50 border-t px-3 py-2'>
-          <p className='text-muted-foreground text-xs'>
+        <div className='border-t border-border/50 px-3 py-2'>
+          <p className='text-xs text-muted-foreground'>
             <span className='font-medium text-foreground'>UP主赠言：</span> {attachMsg}
           </p>
         </div>
@@ -499,9 +499,9 @@ function renderShareContent(content: {
         </div>
       )}
       <div className='space-y-0.5 p-2'>
-        {source && <p className='text-muted-foreground text-xs'>{source}</p>}
-        <p className='line-clamp-2 font-medium text-sm'>{title || '分享内容'}</p>
-        {desc && <p className='line-clamp-2 text-muted-foreground text-xs'>{desc}</p>}
+        {source && <p className='text-xs text-muted-foreground'>{source}</p>}
+        <p className='line-clamp-2 text-sm font-medium'>{title || '分享内容'}</p>
+        {desc && <p className='line-clamp-2 text-xs text-muted-foreground'>{desc}</p>}
       </div>
     </a>
   )
@@ -523,7 +523,7 @@ function renderSystemTipContent(content: { content?: string }): React.ReactNode 
       typeof content.content === 'string' ? JSON.parse(content.content) : []
 
     if (!Array.isArray(tipItems) || tipItems.length === 0) {
-      return <p className='text-center text-muted-foreground text-xs'>[系统提示]</p>
+      return <p className='text-center text-xs text-muted-foreground'>[系统提示]</p>
     }
 
     return (
@@ -563,7 +563,7 @@ function renderSystemTipContent(content: { content?: string }): React.ReactNode 
   } catch {
     // Fallback if parsing fails
     const text = extractTextContent(content)
-    return <p className='text-center text-muted-foreground text-xs'>{text || '[系统提示]'}</p>
+    return <p className='text-center text-xs text-muted-foreground'>{text || '[系统提示]'}</p>
   }
 }
 
@@ -590,9 +590,9 @@ function renderAiGeneratedContent(content: {
 
     if (!Array.isArray(paragraphs) || paragraphs.length === 0) {
       return isSystemLike ? (
-        <p className='text-center text-muted-foreground text-xs'>[AI 消息]</p>
+        <p className='text-center text-xs text-muted-foreground'>[AI 消息]</p>
       ) : (
-        <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>[AI 消息]</p>
+        <p className='text-sm leading-relaxed wrap-break-word break-all whitespace-break-spaces'>[AI 消息]</p>
       )
     }
 
@@ -622,25 +622,25 @@ function renderAiGeneratedContent(content: {
 
     if (!fullText) {
       return isSystemLike ? (
-        <p className='text-center text-muted-foreground text-xs'>[AI 消息]</p>
+        <p className='text-center text-xs text-muted-foreground'>[AI 消息]</p>
       ) : (
-        <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>[AI 消息]</p>
+        <p className='text-sm leading-relaxed wrap-break-word break-all whitespace-break-spaces'>[AI 消息]</p>
       )
     }
 
     // System-like messages (sub_type 4) are left-aligned with muted styling
     if (isSystemLike) {
       return (
-        <p className='whitespace-pre-wrap text-xs'>
+        <p className='text-xs whitespace-pre-wrap'>
           <span className='text-muted-foreground'>{fullText}</span>
         </p>
       )
     }
 
     // Normal AI chat messages use regular text styling
-    return <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>{fullText}</p>
+    return <p className='text-sm leading-relaxed wrap-break-word break-all whitespace-break-spaces'>{fullText}</p>
   } catch {
-    return <p className='text-center text-muted-foreground text-xs'>[AI 消息]</p>
+    return <p className='text-center text-xs text-muted-foreground'>[AI 消息]</p>
   }
 }
 
@@ -650,7 +650,7 @@ function renderDefaultContent(content: Record<string, unknown>, msgType: number)
   const text = extractTextContent(content)
 
   if (text) {
-    return <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>{text}</p>
+    return <p className='text-sm leading-relaxed wrap-break-word break-all whitespace-break-spaces'>{text}</p>
   }
 
   return <p className='text-sm'>[消息类型 {msgType}]</p>
@@ -663,7 +663,7 @@ function renderCustomerServiceLink(link: CustomerServiceLink): React.ReactNode {
       href={link.url}
       target='_blank'
       rel='noopener noreferrer'
-      className='inline-flex items-center gap-1 text-sky-600 text-sm hover:underline dark:text-sky-400'
+      className='inline-flex items-center gap-1 text-sm text-sky-600 hover:underline dark:text-sky-400'
     >
       {link.text}
       <ExternalLink className='size-3.5' aria-hidden='true' />
@@ -735,7 +735,7 @@ function CustomerServiceChoices({
 
   return (
     <div className='space-y-2'>
-      <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>{content.text}</p>
+      <p className='text-sm leading-relaxed wrap-break-word break-all whitespace-break-spaces'>{content.text}</p>
       {content.choices.length > 0 && (
         <div className='flex flex-col gap-1'>
           {content.choices.map((choice, index) => {
@@ -779,7 +779,7 @@ function renderCustomerServiceContent(
     case 'text':
       return (
         <div className='space-y-2'>
-          <p className='wrap-break-word whitespace-break-spaces break-all text-sm leading-relaxed'>
+          <p className='text-sm leading-relaxed wrap-break-word break-all whitespace-break-spaces'>
             {parseTextWithEmojis(content.text, emojiInfoMap)}
           </p>
           {content.image && renderImageContent({ url: content.image })}
@@ -800,7 +800,7 @@ function renderCustomerServiceContent(
     case 'card':
       return (
         <div className='space-y-2'>
-          <p className='font-medium text-sm'>{content.title}</p>
+          <p className='text-sm font-medium'>{content.title}</p>
           {content.details.length > 0 && (
             <div className='space-y-1'>
               {content.details.map(detail => (
@@ -1011,7 +1011,7 @@ export function MessageBubble({
     // Show revoke event in developer mode
     return (
       <div className='flex items-center justify-center gap-1 py-1'>
-        <div className='flex items-center gap-2 rounded-full border border-amber-500/50 border-dashed bg-amber-50 px-3 py-1 text-amber-700 text-xs dark:bg-amber-950/30 dark:text-amber-400'>
+        <div className='flex items-center gap-2 rounded-full border border-dashed border-amber-500/50 bg-amber-50 px-3 py-1 text-xs text-amber-700 dark:bg-amber-950/30 dark:text-amber-400'>
           <Code className='size-3' aria-hidden='true' />
           <span>撤回事件 (msg_type: {MSG_TYPE.REVOKE})</span>
         </div>
@@ -1026,7 +1026,7 @@ export function MessageBubble({
   if (customerServiceContent?.kind === 'notice') {
     return (
       <div className='flex items-center justify-center gap-1 py-1'>
-        <div className='rounded-full bg-zinc-100 px-3 py-1 text-center text-muted-foreground text-xs dark:bg-zinc-800/50'>
+        <div className='rounded-full bg-zinc-100 px-3 py-1 text-center text-xs text-muted-foreground dark:bg-zinc-800/50'>
           {renderCustomerServiceContent(customerServiceContent, emojiInfoMap)}
         </div>
         {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
@@ -1039,7 +1039,7 @@ export function MessageBubble({
   if (message.msg_type === MSG_TYPE.SYSTEM_TIP || message.msg_type === MSG_TYPE.FAN_GROUP_SYSTEM) {
     return (
       <div className='flex items-center justify-center gap-1 py-1'>
-        <div className='rounded-full bg-zinc-100 px-3 py-1 text-muted-foreground text-xs dark:bg-zinc-800/50'>
+        <div className='rounded-full bg-zinc-100 px-3 py-1 text-xs text-muted-foreground dark:bg-zinc-800/50'>
           {renderMessageContent(message, emojiInfoMap)}
         </div>
         {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
@@ -1082,7 +1082,7 @@ export function MessageBubble({
   if (message.msg_status === 1 && !developerMode) {
     return (
       <div className='flex justify-center py-1'>
-        <div className='rounded-full bg-zinc-100 px-3 py-1 text-muted-foreground text-xs dark:bg-zinc-800/50'>
+        <div className='rounded-full bg-zinc-100 px-3 py-1 text-xs text-muted-foreground dark:bg-zinc-800/50'>
           {isSent ? '你撤回了一条消息' : '对方撤回了一条消息'}
         </div>
       </div>
@@ -1182,16 +1182,16 @@ export function MessageBubble({
               href={bilibiliSpaceUrl}
               target='_blank'
               rel='noopener noreferrer'
-              className='truncate text-muted-foreground text-xs hover:text-foreground hover:underline'
+              className='truncate text-xs text-muted-foreground hover:text-foreground hover:underline'
             >
               {senderName}
             </a>
           ) : (
-            <span className='truncate text-muted-foreground text-xs'>{senderName}</span>
+            <span className='truncate text-xs text-muted-foreground'>{senderName}</span>
           ))}
         {/* Developer mode indicator for recalled messages */}
         {isRecalledInDevMode && (
-          <div className='flex items-center gap-1 text-amber-600 text-xs dark:text-amber-400'>
+          <div className='flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400'>
             <Undo2 className='size-3' aria-hidden='true' />
             <span>已撤回</span>
           </div>
@@ -1239,7 +1239,7 @@ export function MessageBubble({
           </ContextMenuPopup>
         </ContextMenu>
         <div className={`flex items-center gap-1.5 ${isSent ? 'flex-row-reverse' : ''}`}>
-          <TimeTooltip timestamp={message.timestamp} className='cursor-default px-1 text-muted-foreground text-xs'>
+          <TimeTooltip timestamp={message.timestamp} className='cursor-default px-1 text-xs text-muted-foreground'>
             {formatTime(message.timestamp)}
           </TimeTooltip>
           {sourceLabel && (

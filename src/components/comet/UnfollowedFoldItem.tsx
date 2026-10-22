@@ -27,7 +27,7 @@ export function UnfollowedFoldItem({ newest, unread, userCache, onClick }: Unfol
   return (
     <button
       type='button'
-      className='flex w-full select-none items-center gap-3 px-4 py-2 text-left transition-colors hover:bg-accent/50'
+      className='flex w-full items-center gap-3 px-4 py-2 text-left transition-colors select-none hover:bg-accent/50'
       onClick={onClick}
     >
       <div className='flex size-10 flex-none items-center justify-center rounded-full bg-[#fb7299] text-white ring-2 ring-border/50'>
@@ -38,14 +38,14 @@ export function UnfollowedFoldItem({ newest, unread, userCache, onClick }: Unfol
         <div className='flex items-center justify-between gap-2'>
           <span className='truncate font-medium'>未关注人消息</span>
           {newest.last_msg && (
-            <span className='flex-none text-muted-foreground text-xs'>
+            <span className='flex-none text-xs text-muted-foreground'>
               {timeFromNow(newest.last_msg.timestamp * 1000)}
             </span>
           )}
         </div>
 
         <div className='flex items-center justify-between gap-2'>
-          <p className='truncate text-muted-foreground text-sm'>{preview}</p>
+          <p className='truncate text-sm text-muted-foreground'>{preview}</p>
           {/* The count in front of the preview says it in words */}
           {unread > 0 && <span className='size-2 flex-none rounded-full bg-destructive' aria-hidden='true' />}
         </div>

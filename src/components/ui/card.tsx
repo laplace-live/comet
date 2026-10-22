@@ -37,7 +37,7 @@ function CardHeader({ className, render, ...props }: useRender.ComponentProps<'d
 
 function CardTitle({ className, render, ...props }: useRender.ComponentProps<'div'>) {
   const defaultProps = {
-    className: cn('font-semibold text-lg leading-none', className),
+    className: cn('text-lg leading-none font-semibold', className),
     'data-slot': 'card-title',
   }
 
@@ -50,7 +50,7 @@ function CardTitle({ className, render, ...props }: useRender.ComponentProps<'di
 
 function CardDescription({ className, render, ...props }: useRender.ComponentProps<'div'>) {
   const defaultProps = {
-    className: cn('text-muted-foreground text-sm', className),
+    className: cn('text-sm text-muted-foreground', className),
     'data-slot': 'card-description',
   }
 

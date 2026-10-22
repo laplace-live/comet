@@ -19,7 +19,7 @@ function Meter({ className, children, ...props }: MeterPrimitive.Root.Props) {
 }
 
 function MeterLabel({ className, ...props }: MeterPrimitive.Label.Props) {
-  return <MeterPrimitive.Label className={cn('font-medium text-sm', className)} data-slot='meter-label' {...props} />
+  return <MeterPrimitive.Label className={cn('text-sm font-medium', className)} data-slot='meter-label' {...props} />
 }
 
 function MeterTrack({ className, ...props }: MeterPrimitive.Track.Props) {

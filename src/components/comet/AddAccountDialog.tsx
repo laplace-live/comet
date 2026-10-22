@@ -34,7 +34,7 @@ export function AddAccountDialog({ open, onOpenChange, onSuccess, reauthAccount 
         </SheetHeader>
 
         <div className='flex flex-col items-center space-y-4 py-6'>
-          <h2 className='select-none font-semibold text-lg'>{isReauthMode ? '重新登录' : '添加新账号'}</h2>
+          <h2 className='text-lg font-semibold select-none'>{isReauthMode ? '重新登录' : '添加新账号'}</h2>
           {isReauthMode && reauthAccount && (
             <div className='flex items-center gap-2 text-amber-600'>
               <AlertTriangle className='size-4' aria-hidden='true' />
@@ -54,7 +54,7 @@ export function AddAccountDialog({ open, onOpenChange, onSuccess, reauthAccount 
 
           {/* Status indicator */}
           {status === 'waiting_scan' && (
-            <div className='flex select-none items-center gap-2 text-muted-foreground text-sm'>
+            <div className='flex items-center gap-2 text-sm text-muted-foreground select-none'>
               <span className='relative flex size-2'>
                 <span className='absolute inline-flex h-full w-full animate-ping rounded-full bg-sky-400 opacity-75' />
                 <span className='relative inline-flex size-2 rounded-full bg-sky-500' />
@@ -63,7 +63,7 @@ export function AddAccountDialog({ open, onOpenChange, onSuccess, reauthAccount 
             </div>
           )}
 
-          <p className='select-none text-center text-muted-foreground text-sm'>{getStatusText()}</p>
+          <p className='text-center text-sm text-muted-foreground select-none'>{getStatusText()}</p>
         </div>
       </SheetContent>
     </Sheet>

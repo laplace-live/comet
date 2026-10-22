@@ -133,7 +133,7 @@ function SheetFooter({
       className={cn(
         'flex flex-col-reverse gap-2 px-6 sm:flex-row sm:justify-end',
         variant === 'default' && 'border-t bg-muted/50 py-4',
-        variant === 'bare' && 'in-[[data-slot=sheet-popup]:has([data-slot=sheet-panel])]:pt-3 pt-4 pb-6',
+        variant === 'bare' && 'pt-4 pb-6 in-[[data-slot=sheet-popup]:has([data-slot=sheet-panel])]:pt-3',
         className
       )}
       data-slot='sheet-footer'
@@ -155,7 +155,7 @@ function SheetTitle({ className, ...props }: SheetPrimitive.Title.Props) {
 function SheetDescription({ className, ...props }: SheetPrimitive.Description.Props) {
   return (
     <SheetPrimitive.Description
-      className={cn('text-muted-foreground text-sm', className)}
+      className={cn('text-sm text-muted-foreground', className)}
       data-slot='sheet-description'
       {...props}
     />
@@ -171,7 +171,7 @@ function SheetPanel({
     <ScrollArea scrollFade={scrollFade}>
       <div
         className={cn(
-          'px-6 in-[[data-slot=sheet-popup]:has([data-slot=sheet-header])]:pt-1 in-[[data-slot=sheet-popup]:not(:has([data-slot=sheet-header]))]:pt-6 in-[[data-slot=sheet-popup]:not(:has([data-slot=sheet-footer]))]:pb-6! in-[[data-slot=sheet-popup]:not(:has([data-slot=sheet-footer].border-t))]:pb-1 pb-6',
+          'px-6 pb-6 in-[[data-slot=sheet-popup]:has([data-slot=sheet-header])]:pt-1 in-[[data-slot=sheet-popup]:not(:has([data-slot=sheet-footer]))]:pb-6! in-[[data-slot=sheet-popup]:not(:has([data-slot=sheet-footer].border-t))]:pb-1 in-[[data-slot=sheet-popup]:not(:has([data-slot=sheet-header]))]:pt-6',
           className
         )}
         data-slot='sheet-panel'

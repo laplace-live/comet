@@ -69,12 +69,12 @@ function SortableAccountItem({ account, index, activeAccountMid }: SortableAccou
       </Avatar>
       <div className='flex flex-1 flex-col items-start overflow-hidden'>
         <span className={`w-full truncate text-sm ${isExpired ? 'text-muted-foreground' : ''}`}>{account.uname}</span>
-        {isExpired && <span className='text-amber-500 text-xs'>需重新登录</span>}
+        {isExpired && <span className='text-xs text-amber-500'>需重新登录</span>}
       </div>
       <div className='flex items-center gap-2'>
         {isActive && <Check className='size-4 text-primary' aria-hidden='true' />}
         {shortcutKey !== null && (
-          <kbd className='rounded bg-muted px-1.5 py-0.5 font-mono text-muted-foreground text-xs'>
+          <kbd className='rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground'>
             {modifierKey}+{shortcutKey}
           </kbd>
         )}
@@ -181,8 +181,8 @@ export function SettingsDialog({
             {localAccounts.length > 1 && (
               <div className='space-y-4'>
                 <div className='space-y-0.5'>
-                  <h3 className='font-medium text-sm'>账号顺序</h3>
-                  <p className='text-muted-foreground text-xs'>
+                  <h3 className='text-sm font-medium'>账号顺序</h3>
+                  <p className='text-xs text-muted-foreground'>
                     拖拽调整账号顺序，快捷键将按此顺序分配（{modifierKey}+1 至 {modifierKey}+0）
                   </p>
                 </div>
@@ -208,10 +208,10 @@ export function SettingsDialog({
               {localAccounts.length > 1 && <Separator />}
               <div className='flex items-center justify-between gap-4'>
                 <div className='space-y-0.5'>
-                  <label htmlFor='unfollow-fold' className='font-medium text-sm'>
+                  <label htmlFor='unfollow-fold' className='text-sm font-medium'>
                     收起未关注人消息
                   </label>
-                  <p className='text-muted-foreground text-xs'>
+                  <p className='text-xs text-muted-foreground'>
                     开启后，未关注人消息将被折叠起来。与哔哩哔哩同步，仅对当前账号生效
                   </p>
                 </div>
@@ -229,10 +229,10 @@ export function SettingsDialog({
               <Separator />
               <div className='flex items-center justify-between gap-4'>
                 <div className='space-y-0.5'>
-                  <label htmlFor='developer-mode' className='font-medium text-sm'>
+                  <label htmlFor='developer-mode' className='text-sm font-medium'>
                     开发者模式
                   </label>
-                  <p className='text-muted-foreground text-xs'>显示消息事件的原始内容，便于调试消息列表</p>
+                  <p className='text-xs text-muted-foreground'>显示消息事件的原始内容，便于调试消息列表</p>
                 </div>
                 <Switch id='developer-mode' checked={developerMode} onCheckedChange={setDeveloperMode} />
               </div>

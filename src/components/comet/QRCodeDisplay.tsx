@@ -45,7 +45,7 @@ export function QRCodeDisplay({ qrImageUrl, status, error, onRefresh }: QRCodeDi
           )}
         </>
       ) : (
-        <div className='text-center text-muted-foreground text-sm'>{error || 'Failed to load QR code'}</div>
+        <div className='text-center text-sm text-muted-foreground'>{error || 'Failed to load QR code'}</div>
       )}
     </div>
   )
