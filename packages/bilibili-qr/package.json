@@ -1,0 +1,49 @@
+{
+  "name": "@laplace.live/bilibili-qr",
+  "version": "0.0.0",
+  "description": "Bilibili QR code login: issue the code, poll it, and collect the session cookies",
+  "license": "AGPL-3.0",
+  "type": "module",
+  "author": "LAPLACE Live! <s@laplace.live>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/laplace-live/comet.git",
+    "directory": "packages/bilibili-qr"
+  },
+  "homepage": "https://github.com/laplace-live/comet/tree/master/packages/bilibili-qr#readme",
+  "keywords": [
+    "bilibili",
+    "login",
+    "qrcode"
+  ],
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true,
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/*.test.ts\"",
+    "prepublishOnly": "pnpm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

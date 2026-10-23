@@ -2,6 +2,7 @@
 // User Agent
 // ============================================================================
 
+/** Also in packages/bilibili-qr/src/constants.ts, for its DEFAULT_HEADERS: this file can't import the package */
 export const CHROME_VERSION = '149'
 
 export const USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION}.0.0.0 Safari/537.36`
@@ -13,10 +14,6 @@ export const USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit
 export const BILIBILI_API = {
   /** Main API endpoint */
   MAIN: 'https://api.bilibili.com',
-  /** Passport/authentication API */
-  PASSPORT: 'https://passport.bilibili.com',
-  /** Biligame passport API for QR login ticket exchange */
-  PASSPORT_GAME: 'https://passport.biligame.com',
   /** VC (Video Community) API - used for messaging */
   VC: 'https://api.vc.bilibili.com',
   /** Message center */
@@ -26,9 +23,6 @@ export const BILIBILI_API = {
   /** Broadcast WebSocket */
   BROADCAST_WS: 'wss://broadcast.chat.bilibili.com:7826',
 } as const
-
-/** Allowed origins for QR login ticket exchange and redirects. */
-export const BILIBILI_LOGIN_ORIGINS: ReadonlySet<string> = new Set([BILIBILI_API.PASSPORT, BILIBILI_API.PASSPORT_GAME])
 
 // ============================================================================
 // HTTP Headers
@@ -77,11 +71,7 @@ export const COMMON_HEADERS = {
 // ============================================================================
 
 export const BILIBILI_ENDPOINTS = {
-  // Authentication
-  /** Generate QR code for login */
-  QR_GENERATE: `${BILIBILI_API.PASSPORT}/x/passport-login/web/qrcode/generate`,
-  /** Poll QR code login status */
-  QR_POLL: `${BILIBILI_API.PASSPORT}/x/passport-login/web/qrcode/poll`,
+  // Authentication (QR code login itself goes through @laplace.live/bilibili-qr)
   /** Check login status / get current user info */
   NAV: `${BILIBILI_API.MAIN}/x/web-interface/nav`,
 

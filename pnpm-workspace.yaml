@@ -1,3 +1,9 @@
+# The app is the root package; libraries it shares live in packages/. pnpm always includes the
+# root, but changesets only versions it when it is listed here too.
+packages:
+  - .
+  - packages/*
+
 nodeLinker: hoisted
 blockExoticSubdeps: false
 allowBuilds:

@@ -6,7 +6,7 @@ import globals from 'globals'
 import * as tseslint from 'typescript-eslint'
 
 export default defineConfig([
-  globalIgnores(['dist/', 'out/', '.vite/', 'references/', 'src/assets/tray-icons.generated.ts']),
+  globalIgnores(['dist/', 'packages/*/dist/', 'out/', '.vite/', 'references/', 'src/assets/tray-icons.generated.ts']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

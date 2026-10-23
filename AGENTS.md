@@ -6,6 +6,8 @@ This file provides guidance to coding agents when working with code in this repo
 
 LAPLACE Comet is a privacy-first Electron desktop application for managing Bilibili private messages. Built with Electron + React 19 + TypeScript.
 
+The repo is a pnpm workspace: the app is the root package (`laplace-comet`), and `packages/` holds the libraries it shares with other projects, published to npm.
+
 ## Commands
 
 ```bash
@@ -13,6 +15,8 @@ pnpm start          # Start dev mode with hot reload
 pnpm make           # Create distributable packages for current platform
 pnpm package        # Package app without creating installers
 pnpm lint           # Run ESLint
+pnpm typecheck      # tsc for the app, then every package's own typecheck
+pnpm test           # Package tests, the main-process API tests, then the Electron renderer tests
 pnpm generate-icons # Generate app icons (uses bun)
 pnpm screenshots    # Capture laplace.live's screenshots of the app into screenshots/
 ```
@@ -36,6 +40,7 @@ pnpm screenshots    # Capture laplace.live's screenshots of the app into screens
 - `src/stores/` - Zustand stores for settings
 - `src/lib/` - Shared utilities (`const.ts` for API constants/endpoints, `ipc.ts` for IPC contract, `utils.ts` for helpers)
 - `src/types/` - Type definitions (`bilibili.ts` for API types, `electron.d.ts` for IPC types)
+- `packages/bilibili-qr/` - `@laplace.live/bilibili-qr`, Bilibili QR code login: issuing the code, polling it, and collecting the session cookies a confirmed login hands over. `src/api/bilibili.ts` wraps it in the QR IPC handlers and draws the QR image itself, since the package renders nothing (so a CLI can use it too). It runs on any standard `fetch`, so it takes no Electron or Node-only API, no `@/` import and no runtime dependency.
 
 ### State Management
 
@@ -79,7 +84,7 @@ The IPC system uses:
 
 ## Code Conventions
 
-- **Import alias**: `@/` maps to `./src/`
+- **Import alias**: `@/` maps to `./src/` in the app; packages import their own files relatively, with the `.ts` extension (Node runs their tests on the source)
 - **Formatting**: Biome (2-space indent, single quotes, no semicolons, 120 char line width)
 - **Import ordering**: Biome organizes imports by groups (node/packages, types, components, etc.)
 - **Tailwind class sorting**: Use `cn()` from `@/lib/utils` for conditional classes (Biome auto-sorts)
@@ -93,8 +98,9 @@ The IPC system uses:
   ```
 
   `--minor` for new features and substantial behavior changes, `--patch` for fixes and small changes — size decides the bump, not visibility. Start the summary with `feat:`/`fix:`/`perf:`/`chore:`, then **one capitalized plain sentence under ~80 chars, written for users** — no rationale, no mechanism, no second line. The prefix is stripped and the rest ships verbatim as the GitHub Release notes ([README](README.md#releasing)).
+- **Name every package the change touches.** A change to `packages/bilibili-qr` needs its own entry (`pnpm exec changeset add --patch @laplace.live/bilibili-qr -m "fix: …"`), written for the developers using it. When the app's users would notice it too, add a `laplace-comet` entry: the app takes the package as a devDependency, bundled into its build, so changesets never releases the app on the package's behalf.
 - No changeset for CI, docs, tests, dev-only tooling, or refactors with no user-visible effect.
-- **Never bump `version` in `package.json`, push a `v*` tag, or hand-edit `CHANGELOG.md`** — merging the Release workflow's version PR does all three.
+- **Never bump a `version` in a `package.json`, push a release tag, or hand-edit a `CHANGELOG.md`** — merging the Release workflow's version PR does all three. It tags each bumped package `<name>@<version>`; the app's `laplace-comet@<version>` tag (`v<version>` up to 1.4.0) is what builds and ships a release.
 
 ## Important Files
 

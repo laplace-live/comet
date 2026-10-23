@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { cookieStringFromCredentials, generateQRCode, pollQRCode, QRLoginError } from '@laplace.live/bilibili-qr'
 import { Byte, Encoder } from '@nuintun/qrcode'
 import { ipcMain, safeStorage } from 'electron'
 import Store from 'electron-store'
@@ -9,8 +10,6 @@ import type {
   BilibiliLinkSettingResponse,
   BilibiliMessagesResponse,
   BilibiliNavResponse,
-  BilibiliQRCodeGenerateResponse,
-  BilibiliQRCodePollResponse,
   BilibiliSendMessageResponse,
   BilibiliSessionsResponse,
   BilibiliSingleUnreadResponse,
@@ -32,8 +31,6 @@ import { SESSION_TYPE } from '@/types/bilibili'
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, COMMON_HEADERS, getImageExtension, LOGIN_CONFIG } from '@/lib/const'
 import { IpcChannel } from '@/lib/ipc'
-
-import { resolveQRCodeCredentials } from './qr-login'
 
 /**
  * Preserve large integer fields as strings in JSON response text.
@@ -500,18 +497,6 @@ function clearAllAccounts(): Promise<void> {
 // Export for use by other modules (like WebSocket)
 export { clearAllAccounts, getAccounts, getActiveAccount, getActiveAccountMid, getCredentials }
 
-// Helper function to build cookie string from credentials
-export function cookieStringFromCredentials(credentials: BilibiliCredentials): string {
-  return [
-    `SESSDATA=${encodeURIComponent(credentials.SESSDATA)}`,
-    `DedeUserID=${credentials.DedeUserID}`,
-    credentials.DedeUserID__ckMd5 ? `DedeUserID__ckMd5=${credentials.DedeUserID__ckMd5}` : '',
-    `bili_jct=${credentials.bili_jct}`,
-  ]
-    .filter(Boolean)
-    .join('; ')
-}
-
 /**
  * Cookie header for requests gated by gaia risk control, which requires the buvid3/buvid4
  * device-fingerprint cookies in addition to the login credentials.
@@ -611,29 +596,29 @@ export function registerBilibiliIpcHandlers() {
   // Generate QR code for login
   ipcMain.handle(IpcChannel.BILIBILI_QR_GENERATE, async () => {
     try {
-      const resp = await fetch(BILIBILI_ENDPOINTS.QR_GENERATE, {
-        headers: { ...COMMON_HEADERS },
+      const { url, response } = await generateQRCode({
+        headers: COMMON_HEADERS,
         signal: AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT),
       })
 
-      if (!resp.ok) return { error: `生成二维码失败（HTTP ${resp.status}），请重试`, code: resp.status }
-
-      const data: BilibiliQRCodeGenerateResponse = await resp.json()
-
-      if (data.code !== 0 || !data.data?.url || !data.data.qrcode_key) {
-        return { error: data.message || 'Failed to generate QR code', code: data.code }
-      }
-
       // Generate QR code as data URL
       const encoder = new Encoder({ level: 'H' })
-      const qrcode = encoder.encode(new Byte(data.data.url))
+      const qrcode = encoder.encode(new Byte(url))
       const qrImageUrl = qrcode.toDataURL(4)
 
       return {
-        ...data,
+        ...response,
         qrImageUrl,
       }
     } catch (error) {
+      if (error instanceof QRLoginError) {
+        switch (error.reason) {
+          case 'http':
+            return { error: `生成二维码失败（HTTP ${error.status}），请重试`, code: error.status }
+          case 'api':
+            return { error: error.apiMessage || 'Failed to generate QR code', code: error.code }
+        }
+      }
       console.error('Failed to generate QR code:', error)
       return { error: 'Failed to generate QR code', code: 500 }
     }
@@ -650,28 +635,11 @@ export function registerBilibiliIpcHandlers() {
 
     try {
       const signal = AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT)
-      const url = new URL(BILIBILI_ENDPOINTS.QR_POLL)
-      url.searchParams.set('qrcode_key', qrcodeKey)
+      const result = await pollQRCode(qrcodeKey, { headers: COMMON_HEADERS, signal })
 
-      const resp = await fetch(url.toString(), {
-        headers: { ...COMMON_HEADERS },
-        signal,
-      })
-
-      if (!resp.ok) return { error: `查询登录状态失败（HTTP ${resp.status}），请刷新二维码重试`, code: resp.status }
-
-      const data: BilibiliQRCodePollResponse = await resp.json()
-
-      if (data.code !== 0) {
-        return { error: data.message || '查询登录状态失败，请刷新二维码重试', code: data.code }
-      }
-      if (typeof data.data?.code !== 'number') {
-        return { error: '登录状态响应无效，请刷新二维码重试', code: 502 }
-      }
-
-      // If login successful, extract and store credentials
-      if (data.data.code === 0) {
-        const credentials = await resolveQRCodeCredentials(data.data.url, resp.headers, signal)
+      // If login successful, store credentials
+      if (result.status === 'success') {
+        const { credentials } = result
         let userInfo: StoredAccountUserInfo = {
           mid: credentials.DedeUserID,
           uname: `User ${credentials.DedeUserID}`,
@@ -694,14 +662,24 @@ export function registerBilibiliIpcHandlers() {
         }
 
         return {
-          ...data,
+          ...result.response,
           credentials,
           userInfo,
         }
       }
 
-      return data
+      return result.response
     } catch (error) {
+      if (error instanceof QRLoginError) {
+        switch (error.reason) {
+          case 'http':
+            return { error: `查询登录状态失败（HTTP ${error.status}），请刷新二维码重试`, code: error.status }
+          case 'api':
+            return { error: error.apiMessage || '查询登录状态失败，请刷新二维码重试', code: error.code }
+          case 'response':
+            return { error: '登录状态响应无效，请刷新二维码重试', code: 502 }
+        }
+      }
       // Fetch errors can contain the one-use ticket URL; do not log credentials.
       const timedOut = error instanceof Error && error.name === 'TimeoutError'
       return {

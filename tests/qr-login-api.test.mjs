@@ -30,7 +30,9 @@ let handlers
 let api
 let channels
 let endpoints
+let qrEndpoints
 let qrStatus
+let cookieStringFromCredentials
 
 before(async () => {
   const bundle = await build({
@@ -61,7 +63,11 @@ before(async () => {
           export { handlers } from 'electron'
           export { IpcChannel as channels } from '@/lib/ipc'
           export { BILIBILI_ENDPOINTS as endpoints } from '@/lib/const'
-          export { QR_CODE_STATUS as qrStatus } from '@/types/bilibili'
+          export {
+            cookieStringFromCredentials,
+            QR_CODE_STATUS as qrStatus,
+            QR_LOGIN_ENDPOINTS as qrEndpoints,
+          } from '@laplace.live/bilibili-qr'
         `
           if (id.startsWith('\0qr-login-test:')) return mockModules[id.slice('\0qr-login-test:'.length)]
         },
@@ -73,7 +79,7 @@ before(async () => {
     .flatMap(result => result.output)
     .find(item => item.type === 'chunk' && item.isEntry)
   assert.ok(chunk, 'Vite must build the test entry')
-  ;({ api, handlers, channels, endpoints, qrStatus } = await import(
+  ;({ api, handlers, channels, endpoints, qrEndpoints, qrStatus, cookieStringFromCredentials } = await import(
     `data:text/javascript;base64,${Buffer.from(chunk.code).toString('base64')}`
   ))
   api.registerBilibiliIpcHandlers()
@@ -172,7 +178,7 @@ test('legacy URL credentials complete login and persist the active account', asy
     pollResponse(),
     (url, init) => {
       assert.equal(url, endpoints.NAV)
-      assert.equal(new Headers(init.headers).get('Cookie'), api.cookieStringFromCredentials(credentials))
+      assert.equal(new Headers(init.headers).get('Cookie'), cookieStringFromCredentials(credentials))
       return navResponse()
     },
   ])
@@ -336,6 +342,22 @@ for (const payload of [{ code: -400, message: 'Fixture API error' }, { code: 0 }
   })
 }
 
+for (const [message, error] of [
+  ['Fixture API error', 'Fixture API error'],
+  ['', '查询登录状态失败，请刷新二维码重试'],
+]) {
+  test(`a refused poll shows Bilibili's explanation, or the app's own without one: ${JSON.stringify(message)}`, async t => {
+    mockFetch(t, [Response.json({ code: -400, message })])
+    assert.deepEqual(await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' }), { error, code: -400 })
+    await assertNoAccount()
+  })
+}
+
+test('a refused QR code request without an explanation gets the generic error', async t => {
+  mockFetch(t, [Response.json({ code: -400, message: '' })])
+  assert.deepEqual(await invoke(channels.BILIBILI_QR_GENERATE), { error: 'Failed to generate QR code', code: -400 })
+})
+
 test('scanned status remains pending without account creation', async t => {
   const payload = { code: 0, data: { code: qrStatus.WAITING_CONFIRM, message: 'Scanned, waiting for confirmation' } }
   mockFetch(t, [Response.json(payload)])
@@ -348,7 +370,7 @@ test('two logins that finish together both keep their account', async t => {
   // Each poll signs in its own account; NAV answers for whichever account the cookie carries
   t.mock.method(globalThis, 'fetch', async (input, init = {}) => {
     const url = new URL(String(input))
-    if (`${url.origin}${url.pathname}` === endpoints.QR_POLL) {
+    if (`${url.origin}${url.pathname}` === qrEndpoints.POLL) {
       return pollResponse(url.searchParams.get('qrcode_key') === 'other-key' ? legacyUrl(other) : legacyUrl())
     }
     const mid = Number(/DedeUserID=(\d+)/.exec(new Headers(init.headers).get('Cookie'))?.[1])

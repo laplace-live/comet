@@ -1,11 +1,13 @@
-import type { BilibiliCredentials } from '@/types/bilibili'
+import type { BilibiliCredentials, QRLoginOptions } from './types.ts'
 
-import { BILIBILI_API, BILIBILI_LOGIN_ORIGINS, COMMON_HEADERS } from '@/lib/const'
+import { PASSPORT, QR_LOGIN_ORIGINS } from './constants.ts'
+import { QRLoginError } from './errors.ts'
+import { send } from './request.ts'
 
 const COOKIE_NAMES: readonly string[] = ['SESSDATA', 'DedeUserID', 'DedeUserID__ckMd5', 'bili_jct']
 const REDIRECT_STATUSES: ReadonlySet<number> = new Set([301, 302, 303, 307, 308])
-const TICKET_REFERER = `${BILIBILI_API.PASSPORT}/`
-const MISSING_CREDENTIALS = '登录成功但无法获取完整凭证，请刷新二维码重试'
+const TICKET_REFERER = `${PASSPORT}/`
+const MISSING_CREDENTIALS = 'The login was confirmed, but Bilibili handed over incomplete credentials'
 
 function credentialsFromCookies(cookies: Map<string, string>): BilibiliCredentials | null {
   const SESSDATA = cookies.get('SESSDATA')
@@ -22,15 +24,15 @@ function credentialsFromCookies(cookies: Map<string, string>): BilibiliCredentia
 function collectCookies(headers: Headers, cookies: Map<string, string>): void {
   // Read individual headers: splitting on commas corrupts Expires and cookie values.
   for (const header of headers.getSetCookie()) {
-    const pair = header.split(';', 1)[0]
+    const pair = header.split(';', 1)[0] ?? ''
     const separator = pair.indexOf('=')
     if (separator < 0) continue
     const name = pair.slice(0, separator).trim()
     if (!COOKIE_NAMES.includes(name)) continue
     try {
       cookies.set(name, decodeURIComponent(pair.slice(separator + 1)))
-    } catch {
-      throw new Error(MISSING_CREDENTIALS)
+    } catch (cause) {
+      throw new QRLoginError('credentials', MISSING_CREDENTIALS, { cause })
     }
   }
 }
@@ -39,15 +41,15 @@ function collectCookies(headers: Headers, cookies: Map<string, string>): void {
 export async function resolveQRCodeCredentials(
   loginUrl: string | undefined,
   headers: Headers,
-  signal: AbortSignal
+  options: QRLoginOptions
 ): Promise<BilibiliCredentials> {
   const cookies = new Map<string, string>()
   let url: URL | undefined
   if (loginUrl) {
     try {
       url = new URL(loginUrl)
-    } catch {
-      throw new Error(MISSING_CREDENTIALS)
+    } catch (cause) {
+      throw new QRLoginError('credentials', MISSING_CREDENTIALS, { cause })
     }
     for (const name of COOKIE_NAMES) {
       const value = url.searchParams.get(name)
@@ -59,17 +61,13 @@ export async function resolveQRCodeCredentials(
   const credentials = credentialsFromCookies(cookies)
   if (credentials) return credentials
 
-  // Node fetch has no cookie jar and automatic redirects hide intermediate Set-Cookie
+  // fetch keeps no cookie jar, and automatic redirects hide intermediate Set-Cookie
   // headers, so collect them at each hop. Never send a login ticket to another origin.
   for (let redirects = 0; url && redirects < 5; redirects++) {
-    if (!BILIBILI_LOGIN_ORIGINS.has(url.origin) || url.username || url.password) {
-      throw new Error('登录凭证地址无效，请刷新二维码重试')
+    if (!QR_LOGIN_ORIGINS.has(url.origin) || url.username || url.password) {
+      throw new QRLoginError('credentials', "The login ticket points outside Bilibili's passport")
     }
-    const response = await fetch(url, {
-      headers: { ...COMMON_HEADERS, Referer: TICKET_REFERER },
-      redirect: 'manual',
-      signal,
-    })
+    const response = await send(url, options, { headers: { Referer: TICKET_REFERER }, redirect: 'manual' })
     collectCookies(response.headers, cookies)
     await response.body?.cancel()
     const resolved = credentialsFromCookies(cookies)
@@ -80,5 +78,17 @@ export async function resolveQRCodeCredentials(
     url = new URL(location, url)
   }
 
-  throw new Error(MISSING_CREDENTIALS)
+  throw new QRLoginError('credentials', MISSING_CREDENTIALS)
+}
+
+/** The `Cookie` header that signs a request in with `credentials` */
+export function cookieStringFromCredentials(credentials: BilibiliCredentials): string {
+  return [
+    `SESSDATA=${encodeURIComponent(credentials.SESSDATA)}`,
+    `DedeUserID=${credentials.DedeUserID}`,
+    credentials.DedeUserID__ckMd5 ? `DedeUserID__ckMd5=${credentials.DedeUserID__ckMd5}` : '',
+    `bili_jct=${credentials.bili_jct}`,
+  ]
+    .filter(Boolean)
+    .join('; ')
 }
