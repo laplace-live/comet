@@ -3,10 +3,14 @@ name: Build and Release
 on:
   push:
     branches: [main, master]
-    # v<version>, pushed by release.yml (changesets) with the release bot's
-    # token so this trigger fires (GITHUB_TOKEN pushes start no workflows).
+    # laplace-comet@<version>, pushed by release.yml (changesets) with the
+    # release bot's token so this trigger fires (GITHUB_TOKEN pushes start no
+    # workflows). Releases up to 1.4.0 were tagged v<version>, so changesets
+    # tags laplace-comet@1.4.0 the first time it runs with the app still on
+    # 1.4.0: that tag must not build and ship 1.4.0 a second time.
     tags:
-      - "v*"
+      - "laplace-comet@*"
+      - "!laplace-comet@1.4.0"
   pull_request:
     branches: [main, master]
   workflow_dispatch:
@@ -54,8 +58,13 @@ jobs:
       - name: Run linter
         run: pnpm lint
 
+      # What `changeset publish` builds for npm: a package that fails to build
+      # would block the release, the app's tag included.
+      - name: Build workspace packages
+        run: pnpm --filter "./packages/**" build
+
       - name: Import Apple Certificate
-        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/v')
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/laplace-comet@')
         # if: matrix.os == 'macos-latest'
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
@@ -92,7 +101,7 @@ jobs:
           rm $RUNNER_TEMP/certificate.p12
 
       - name: Prepare Apple API Key
-        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/v')
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/laplace-comet@')
         # if: matrix.os == 'macos-latest'
         env:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -109,7 +118,7 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
 
       - name: Build application (Release)
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/laplace-comet@')
         run: pnpm make
         env:
           NODE_ENV: production
@@ -118,13 +127,13 @@ jobs:
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
 
       - name: Build application (Development)
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ !startsWith(github.ref, 'refs/tags/laplace-comet@') }}
         run: pnpm make
         env:
           NODE_ENV: development
 
       - name: Sign Windows binaries with Trusted Signing
-        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/v')
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/laplace-comet@')
         uses: azure/trusted-signing-action@v2
         with:
           azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
@@ -140,13 +149,13 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Extract version from tag
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: startsWith(github.ref, 'refs/tags/laplace-comet@')
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+        run: echo "VERSION=${GITHUB_REF#refs/tags/laplace-comet@}" >> $GITHUB_OUTPUT
         shell: bash
 
       - name: Upload Windows Release to R2
-        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/v')
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/laplace-comet@')
         env:
           # R2 bucket-scoped tokens are rejected by the REST route wrangler
           # uses, but work on the S3-compatible API, so upload via aws CLI.
@@ -178,7 +187,7 @@ jobs:
         shell: bash
 
       - name: Upload macOS Release to R2
-        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/v')
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/laplace-comet@')
         env:
           # R2 bucket-scoped tokens are rejected by the REST route wrangler
           # uses, but work on the S3-compatible API, so upload via aws CLI.
@@ -216,7 +225,7 @@ jobs:
       # Release files for the github-release job, which publishes the release
       # with all of them attached at once: releases are immutable once published.
       - name: Upload release files (Windows)
-        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/v')
+        if: matrix.os == 'windows-latest' && startsWith(github.ref, 'refs/tags/laplace-comet@')
         uses: actions/upload-artifact@v7
         with:
           name: release-win
@@ -227,7 +236,7 @@ jobs:
             out/make/squirrel.windows/x64/RELEASES
 
       - name: Upload release files (macOS)
-        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/v')
+        if: matrix.os == 'macos-latest' && startsWith(github.ref, 'refs/tags/laplace-comet@')
         uses: actions/upload-artifact@v7
         with:
           name: release-darwin
@@ -237,7 +246,7 @@ jobs:
             out/make/zip/darwin/**/RELEASES.json
 
       - name: Upload artifacts for debugging (Windows)
-        if: matrix.os == 'windows-latest' && !startsWith(github.ref, 'refs/tags/v')
+        if: matrix.os == 'windows-latest' && !startsWith(github.ref, 'refs/tags/laplace-comet@')
         uses: actions/upload-artifact@v7
         with:
           name: build-win-${{ github.sha }}
@@ -248,7 +257,7 @@ jobs:
           retention-days: 7
 
       - name: Upload artifacts for debugging (macOS)
-        if: matrix.os == 'macos-latest' && !startsWith(github.ref, 'refs/tags/v')
+        if: matrix.os == 'macos-latest' && !startsWith(github.ref, 'refs/tags/laplace-comet@')
         uses: actions/upload-artifact@v7
         with:
           name: build-darwin-${{ github.sha }}
@@ -260,7 +269,7 @@ jobs:
   # every installer attached at once.
   github-release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/laplace-comet@')
     runs-on: ubuntu-latest
     # One publisher per tag: a rerun queues behind a running one instead of racing over the same draft.
     concurrency:
@@ -284,7 +293,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          sh .github/scripts/changelog-section.sh CHANGELOG.md "${TAG#v}" > notes.md
+          sh .github/scripts/changelog-section.sh CHANGELOG.md "${TAG#laplace-comet@}" > notes.md
           # An immutable release can't take an installer later, so refuse to publish without all of them.
           for pattern in '*.exe' '*.nupkg' 'RELEASES' '*.zip' 'RELEASES.json'; do
             if [ -z "$(find dist -type f -name "$pattern")" ]; then

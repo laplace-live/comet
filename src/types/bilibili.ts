@@ -511,45 +511,10 @@ export const CS_MSG_TYPE = {
   ARCHIVE: 10027, // Video card
 } as const
 
-// QR Code Login Types
-export interface BilibiliQRCodeGenerateResponse {
-  code: number
-  message: string
-  ttl: number
-  data: {
-    url: string
-    qrcode_key: string
-  }
-}
-
-export interface BilibiliQRCodePollResponse {
-  code: number
-  message: string
-  ttl: number
-  data: {
-    url: string
-    refresh_token: string
-    timestamp: number
-    code: number // 0: success, 86101: waiting for scan, 86090: scanned waiting for confirm, 86038: expired
-    message: string
-  }
-}
-
-// QR Code Poll Status
-export const QR_CODE_STATUS = {
-  SUCCESS: 0,
-  WAITING_SCAN: 86101,
-  WAITING_CONFIRM: 86090,
-  EXPIRED: 86038,
-} as const
-
-// Stored login credentials
-export interface BilibiliCredentials {
-  SESSDATA: string
-  DedeUserID: number
-  DedeUserID__ckMd5?: string
-  bili_jct: string
-}
+// The stored login credentials and the QR code poll status, defined by the login package; import its other names,
+// such as the QR code response types, from the package itself
+export type { BilibiliCredentials } from '@laplace.live/bilibili-qr'
+export { QR_CODE_STATUS } from '@laplace.live/bilibili-qr'
 
 // Nav response (for checking login status)
 export interface BilibiliNavResponse {

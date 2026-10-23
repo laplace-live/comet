@@ -50,7 +50,7 @@ Get the latest development builds with cutting-edge features:
 
 #### Prerequisites
 
-- [Node.js](https://nodejs.org/) v22.13 or later (v22.18 or later for `pnpm screenshots`, which runs TypeScript directly)
+- [Node.js](https://nodejs.org/) v22.18 or later: `pnpm test` and `pnpm screenshots` run TypeScript directly
 - [pnpm](https://pnpm.io/)
 
 #### Steps
@@ -90,8 +90,16 @@ Get the latest development builds with cutting-edge features:
 | `pnpm package` | Package the app without creating installers |
 | `pnpm make` | Create distributable packages for current platform |
 | `pnpm lint` | Run ESLint on the codebase |
+| `pnpm typecheck` | Typecheck the app and the packages |
+| `pnpm test` | Run the packages' tests, then the app's |
 | `pnpm generate-icons` | Generate app icons for all platforms |
 | `pnpm screenshots` | Capture the website's screenshots of the app into `screenshots/` ([how it works](docs/screenshots.md)) |
+
+### Packages
+
+The repo is a pnpm workspace: the app is the root package, and `packages/` holds what other projects can use too, published to npm.
+
+- [`@laplace.live/bilibili-qr`](packages/bilibili-qr) — Bilibili QR code login: issue the code, poll it, and collect the session cookies
 
 ## Security
 
@@ -104,9 +112,9 @@ LAPLACE Comet prioritizes user privacy and security:
 
 ## Releasing
 
-Versions and the changelog are managed by [Changesets](https://changesets.dev). Never bump `version` in `package.json`, push a `v*` tag, or edit `CHANGELOG.md` by hand.
+Versions and the changelogs are managed by [Changesets](https://changesets.dev). Never bump a `version` in a `package.json`, push a release tag, or edit a `CHANGELOG.md` by hand.
 
-1. Every user-facing change ships with a changeset in the same commit. Run `pnpm exec changeset`, or add a file under `.changeset/` yourself:
+1. Every user-facing change ships with a changeset in the same commit, naming each package it touches: `laplace-comet` for the app, `@laplace.live/bilibili-qr` for the package. The app's release never follows a package's on its own, so a package change the app's users would notice names both. Run `pnpm exec changeset`, or add a file under `.changeset/` yourself:
 
    ```md
    ---
@@ -117,9 +125,11 @@ Versions and the changelog are managed by [Changesets](https://changesets.dev). 
    ```
 
    Use `minor` for new features and substantial behavior changes, `patch` for fixes and small changes. Start the summary with `feat:`, `fix:`, `perf:` or `chore:`, then one capitalized sentence written for users — the prefix is stripped, and the rest lands verbatim in `CHANGELOG.md` and the GitHub Release. CI, docs, and refactors with no user-visible effect need no changeset; `pnpm exec changeset status` lists what is pending.
-2. While changesets sit on `master`, the Release workflow keeps a `chore: version packages` PR open that bumps the version and updates `CHANGELOG.md`.
-3. Merging that PR tags `v<version>` and creates the GitHub Release from the new changelog entry. The tag triggers Build and Release, which signs the macOS and Windows builds, uploads them to the auto-update feed, and attaches the installers to that release.
+2. While changesets sit on `master`, the Release workflow keeps a `chore: version packages` PR open that bumps the versions and updates each `CHANGELOG.md`.
+3. Merging that PR publishes the bumped npm packages, then tags every package whose current version has no `<name>@<version>` tag yet, bumped or not. The app's tag, `laplace-comet@<version>` (`v<version>` up to 1.4.0, so Build and Release skips `laplace-comet@1.4.0`), triggers Build and Release, which signs the macOS and Windows builds, uploads them to the auto-update feed, and publishes the GitHub Release from the new changelog entry with the installers attached.
 4. Then refresh the website's screenshots on the updated `master` with `pnpm screenshots` and commit the PNGs it rewrites. The About shot shows the version, which only that merge bumps, so they change with every release ([docs/screenshots.md](docs/screenshots.md)).
+
+The Release workflow publishes to npm through [trusted publishing](https://docs.npmjs.com/trusted-publishers), with no token. npm only trusts a workflow for a package that already exists, and a failed publish pushes no tags, not even the app's. So a new package needs a one-time manual first publish before the version PR that first bumps it merges: from a clean checkout of `master`, run `pnpm --filter <name> publish --access public --no-provenance` (provenance needs CI; the workflow adds it to every later version), then in the package's settings on npmjs.com, add GitHub Actions as a trusted publisher with repository `laplace-live/comet` and workflow `release.yml`.
 
 ## Contributing
 

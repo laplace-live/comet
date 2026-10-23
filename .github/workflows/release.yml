@@ -1,10 +1,12 @@
 name: Release
 
 # Changesets flow (laplace-persona / laplace-jupiter pattern): while changesets
-# exist on master, keep a "chore: version packages" PR open (version bump +
-# CHANGELOG.md). Once it merges, `changeset git-tag` tags v<version>, and the
-# action pushes the tag. The tag fires build.yml, which signs, uploads to R2
-# and publishes the GitHub Release with the CHANGELOG notes and the installers
+# exist on master, keep a "chore: version packages" PR open (version bumps +
+# CHANGELOG.md files). Once it merges, the publish script below publishes the
+# bumped npm packages, then tags every package whose current version has no
+# <name>@<version> tag yet, and the action pushes the tags. The app's,
+# laplace-comet@<version>, fires build.yml, which signs, uploads to R2 and
+# publishes the GitHub Release with the CHANGELOG notes and the installers
 # attached: releases are immutable once published, so it can't be created
 # first and filled in later.
 #
@@ -20,6 +22,8 @@ concurrency: ${{ github.workflow }}-${{ github.ref }}
 
 permissions:
   contents: read
+  # npm trusted publishing (OIDC) and its provenance attestations
+  id-token: write
 
 jobs:
   release:
@@ -43,8 +47,11 @@ jobs:
           node-version: 24
           cache: "pnpm"
 
+      # No dependency lifecycle scripts: any step of this job can mint the OIDC
+      # token npm trusts to publish @laplace.live/bilibili-qr, and nothing it
+      # runs (pnpm, the changesets CLI, tsc) needs the builds allowBuilds permits.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       # Requires the laplace-release-bot GitHub App installed on this repo with
       # Contents and Pull requests read & write, its Client ID and private key
@@ -59,19 +66,28 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Create version PR or tag release
+      - name: Create version PR or publish release
         uses: changesets/action@v2
         with:
           version-script: pnpm exec changeset version
-          # Nothing is published to npm: `changeset git-tag` only creates the
-          # v<version> tag locally (skipping one that already exists), and the
-          # action pushes it through the API.
-          publish-script: pnpm exec changeset git-tag
+          # `changeset publish` publishes the non-private packages
+          # (@laplace.live/bilibili-qr) whose version isn't on npm yet, then
+          # `changeset git-tag` creates every <name>@<version> tag that doesn't
+          # exist yet, the private app's included (privatePackages.tag), whether
+          # or not that version was just bumped; the action pushes the tags
+          # through the API. pnpm publishes via npm's trusted publishing (OIDC),
+          # so no npm token is set anywhere.
+          # A failed publish pushes no tag at all: `changeset publish` alone
+          # would still tag the app (it only devDepends on the package, so both
+          # share one publish batch), and the action pushes every tag it
+          # reports, exit code or not. The action runs this without a shell,
+          # hence `sh -c`.
+          publish-script: sh -c "pnpm exec changeset publish --no-git-tag && pnpm exec changeset git-tag"
           commit-message: "chore: version packages [skip ci]"
           pr-title: "chore: version packages"
           # Releases are immutable once published, so nothing can be attached
-          # afterwards: the action only pushes the tag, and build.yml, which
-          # the tag fires, publishes the release with its installers.
+          # afterwards: the action only pushes the tags, and build.yml, which
+          # the app's tag fires, publishes the release with its installers.
           create-github-releases: false
           # Must be passed as an input: v2 doesn't read the `GITHUB_TOKEN` env var.
           github-token: ${{ steps.app-token.outputs.token }}

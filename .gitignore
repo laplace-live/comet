@@ -91,4 +91,7 @@ typings/
 # Electron-Forge
 out/
 
+# Workspace package builds, published to npm only
+packages/*/dist/
+
 references/

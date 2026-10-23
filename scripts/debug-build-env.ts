@@ -176,7 +176,7 @@ if (process.env.GITHUB_ACTIONS) {
   console.log(`   GitHub Ref: ${process.env.GITHUB_REF}`)
   console.log(`   GitHub Event: ${process.env.GITHUB_EVENT_NAME}`)
   console.log(`   Is Tag: ${process.env.GITHUB_REF?.startsWith('refs/tags/')}`)
-  console.log(`   Is Release: ${process.env.GITHUB_REF?.startsWith('refs/tags/v')}`)
+  console.log(`   Is Release: ${process.env.GITHUB_REF?.startsWith('refs/tags/laplace-comet@')}`)
 }
 
 console.log('\n=== End of Debug Information ===')

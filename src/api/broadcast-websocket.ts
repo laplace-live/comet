@@ -3,6 +3,7 @@
  * Handles real-time message notifications via WebSocket
  */
 
+import { cookieStringFromCredentials } from '@laplace.live/bilibili-qr'
 import { BrowserWindow, ipcMain } from 'electron'
 import type protobuf from 'protobufjs'
 import { WebSocket } from 'ws'
@@ -14,7 +15,7 @@ import { IGNORED_WS_MSG_TYPES } from '@/types/bilibili'
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, USER_AGENT, WEBSOCKET_CONFIG } from '@/lib/const'
 import { IpcChannel, IpcEvent } from '@/lib/ipc'
 
-import { cookieStringFromCredentials, getCredentials } from '@/api/bilibili'
+import { getCredentials } from '@/api/bilibili'
 import { getMessageType, MessageTypes, TargetPaths } from '@/proto/broadcast'
 
 // Generate UUID v1-like identifier

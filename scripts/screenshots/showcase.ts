@@ -3,14 +3,14 @@
 // field fails `pnpm typecheck` instead of drifting a picture. Everyone in it is made up.
 
 import { createHash } from 'node:crypto'
+import type { BilibiliQRCodeGenerateResponse, BilibiliQRCodePollResponse } from '@laplace.live/bilibili-qr'
+import { QR_CODE_STATUS, QR_LOGIN_ENDPOINTS } from '@laplace.live/bilibili-qr'
 
 import type {
   BilibiliLinkSettingResponse,
   BilibiliMessage,
   BilibiliMessagesResponse,
   BilibiliNavResponse,
-  BilibiliQRCodeGenerateResponse,
-  BilibiliQRCodePollResponse,
   BilibiliSession,
   BilibiliSessionsResponse,
   BilibiliSingleUnreadResponse,
@@ -22,9 +22,9 @@ import type {
 } from '@/types/bilibili'
 import type { UpdateAckResponse } from '@/types/electron'
 
-import { MSG_SOURCE, MSG_TYPE, QR_CODE_STATUS, SESSION_LIST_TYPE, SESSION_TYPE } from '@/types/bilibili'
+import { MSG_SOURCE, MSG_TYPE, SESSION_LIST_TYPE, SESSION_TYPE } from '@/types/bilibili'
 
-import { BILIBILI_API, BILIBILI_ENDPOINTS } from '@/lib/const'
+import { BILIBILI_ENDPOINTS } from '@/lib/const'
 
 import { type Face, fanArt } from './art.ts'
 
@@ -327,7 +327,7 @@ const QR_URL = `https://account.bilibili.com/h5/account-h5/auth/scan-web?navhide
 /** The legacy login URL, credentials in its query, which the app reads without a ticket exchange. */
 function loginUrl(key: AccountKey): string {
   const { mid } = ACCOUNTS[key]
-  const url = new URL(`${BILIBILI_API.PASSPORT_GAME}/x/passport-login/web/crossDomain`)
+  const url = new URL('https://passport.biligame.com/x/passport-login/web/crossDomain')
   url.searchParams.set('DedeUserID', String(mid))
   url.searchParams.set('DedeUserID__ckMd5', createHash('md5').update(String(mid)).digest('hex').slice(0, 16))
   url.searchParams.set('SESSDATA', `showcase-${key}`)
@@ -381,11 +381,11 @@ export function createShowcase(): Showcase {
     // Each `data` is typed where it's written: `satisfies` on the reply wouldn't flag a field the app's
     // types no longer have inside a value built beforehand.
     switch (`${url.origin}${url.pathname}`) {
-      case BILIBILI_ENDPOINTS.QR_GENERATE: {
+      case QR_LOGIN_ENDPOINTS.GENERATE: {
         const data: BilibiliQRCodeGenerateResponse['data'] = { url: QR_URL, qrcode_key: QR_KEY }
         return Response.json({ ...ok, data } satisfies BilibiliQRCodeGenerateResponse)
       }
-      case BILIBILI_ENDPOINTS.QR_POLL: {
+      case QR_LOGIN_ENDPOINTS.POLL: {
         const confirmed = scanned
         scanned = null
         const data: BilibiliQRCodePollResponse['data'] =
