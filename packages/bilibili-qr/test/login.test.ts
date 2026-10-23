@@ -168,6 +168,17 @@ for (const body of ['<html>', 'null', '{"code":0}', '{"code":0,"data":{}}']) {
   })
 }
 
+test("an answer that isn't JSON rejects without quoting it", async () => {
+  // A JSON parse error quotes the text around where it failed
+  const { fetch } = fakeFetch(new Response('ticket=fixture-secret'))
+  await assert.rejects(pollQRCode('fixture-key', { fetch }), error => {
+    assert.ok(error instanceof QRLoginError)
+    assert.equal(error.reason, 'response')
+    assert.ok(!inspect(error).includes('ticket='), 'the error must not carry the answer')
+    return true
+  })
+})
+
 test('a legacy login URL carries the credentials itself', async () => {
   const { fetch, calls } = fakeFetch(confirmed(legacyUrl()))
   const result = await pollQRCode('fixture-key', { fetch })

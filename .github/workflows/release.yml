@@ -47,8 +47,11 @@ jobs:
           node-version: 24
           cache: "pnpm"
 
+      # No dependency lifecycle scripts: any step of this job can mint the OIDC
+      # token npm trusts to publish @laplace.live/bilibili-qr, and nothing it
+      # runs (pnpm, the changesets CLI, tsc) needs the builds allowBuilds permits.
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
       # Requires the laplace-release-bot GitHub App installed on this repo with
       # Contents and Pull requests read & write, its Client ID and private key

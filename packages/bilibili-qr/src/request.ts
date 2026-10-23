@@ -38,8 +38,9 @@ export async function readAccepted<T>(response: Response): Promise<Partial<T>> {
   let body: unknown
   try {
     body = JSON.parse(text)
-  } catch (cause) {
-    throw new QRLoginError('response', 'Bilibili answered with something other than JSON', { cause })
+  } catch {
+    // Not as `cause`: a JSON parse error quotes the text around its position, which can be a login
+    throw new QRLoginError('response', 'Bilibili answered with something other than JSON')
   }
 
   if (typeof body !== 'object' || body === null || !('code' in body) || typeof body.code !== 'number') {
