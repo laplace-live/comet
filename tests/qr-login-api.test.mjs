@@ -33,6 +33,8 @@ let endpoints
 let qrEndpoints
 let qrStatus
 let cookieStringFromCredentials
+let commonHeaders
+let defaultHeaders
 
 before(async () => {
   const bundle = await build({
@@ -62,9 +64,10 @@ before(async () => {
           export * as api from '@/api/bilibili'
           export { handlers } from 'electron'
           export { IpcChannel as channels } from '@/lib/ipc'
-          export { BILIBILI_ENDPOINTS as endpoints } from '@/lib/const'
+          export { BILIBILI_ENDPOINTS as endpoints, COMMON_HEADERS as commonHeaders } from '@/lib/const'
           export {
             cookieStringFromCredentials,
+            DEFAULT_HEADERS as defaultHeaders,
             QR_CODE_STATUS as qrStatus,
             QR_LOGIN_ENDPOINTS as qrEndpoints,
           } from '@laplace.live/bilibili-qr'
@@ -79,9 +82,17 @@ before(async () => {
     .flatMap(result => result.output)
     .find(item => item.type === 'chunk' && item.isEntry)
   assert.ok(chunk, 'Vite must build the test entry')
-  ;({ api, handlers, channels, endpoints, qrEndpoints, qrStatus, cookieStringFromCredentials } = await import(
-    `data:text/javascript;base64,${Buffer.from(chunk.code).toString('base64')}`
-  ))
+  ;({
+    api,
+    handlers,
+    channels,
+    endpoints,
+    qrEndpoints,
+    qrStatus,
+    cookieStringFromCredentials,
+    commonHeaders,
+    defaultHeaders,
+  } = await import(`data:text/javascript;base64,${Buffer.from(chunk.code).toString('base64')}`))
   api.registerBilibiliIpcHandlers()
 })
 
@@ -333,25 +344,31 @@ test('a stalled QR poll times out with an error and creates no account', async t
   await assertNoAccount()
 })
 
-for (const payload of [{ code: -400, message: 'Fixture API error' }, { code: 0 }, { code: 0, data: {} }, null]) {
-  test(`outer API failure or malformed payload returns an actionable error: ${JSON.stringify(payload)}`, async t => {
+const INVALID_POLL = { error: '登录状态响应无效，请刷新二维码重试', code: 502 }
+for (const [payload, expected] of [
+  // A refusal shows Bilibili's explanation, or the app's own without one
+  [
+    { code: -400, message: 'Fixture API error' },
+    { error: 'Fixture API error', code: -400 },
+  ],
+  [
+    { code: -400, message: '' },
+    { error: '查询登录状态失败，请刷新二维码重试', code: -400 },
+  ],
+  [{ code: 0 }, INVALID_POLL],
+  [{ code: 0, data: {} }, INVALID_POLL],
+  [null, INVALID_POLL],
+]) {
+  test(`a refused or malformed poll answer returns an actionable error: ${JSON.stringify(payload)}`, async t => {
     mockFetch(t, [Response.json(payload)])
-    const result = await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
-    assert.equal(typeof result.error, 'string')
+    assert.deepEqual(await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' }), expected)
     await assertNoAccount()
   })
 }
 
-for (const [message, error] of [
-  ['Fixture API error', 'Fixture API error'],
-  ['', '查询登录状态失败，请刷新二维码重试'],
-]) {
-  test(`a refused poll shows Bilibili's explanation, or the app's own without one: ${JSON.stringify(message)}`, async t => {
-    mockFetch(t, [Response.json({ code: -400, message })])
-    assert.deepEqual(await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' }), { error, code: -400 })
-    await assertNoAccount()
-  })
-}
+test("the login package's DEFAULT_HEADERS stay the app's COMMON_HEADERS, so a Chrome bump reaches both", () => {
+  assert.deepEqual(defaultHeaders, commonHeaders)
+})
 
 test('a refused QR code request without an explanation gets the generic error', async t => {
   mockFetch(t, [Response.json({ code: -400, message: '' })])

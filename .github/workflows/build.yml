@@ -5,9 +5,12 @@ on:
     branches: [main, master]
     # laplace-comet@<version>, pushed by release.yml (changesets) with the
     # release bot's token so this trigger fires (GITHUB_TOKEN pushes start no
-    # workflows). Releases up to 1.4.0 were tagged v<version>.
+    # workflows). Releases up to 1.4.0 were tagged v<version>, so changesets
+    # tags laplace-comet@1.4.0 the first time it runs with the app still on
+    # 1.4.0: that tag must not build and ship 1.4.0 a second time.
     tags:
       - "laplace-comet@*"
+      - "!laplace-comet@1.4.0"
   pull_request:
     branches: [main, master]
   workflow_dispatch:

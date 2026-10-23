@@ -100,7 +100,7 @@ The IPC system uses:
   `--minor` for new features and substantial behavior changes, `--patch` for fixes and small changes — size decides the bump, not visibility. Start the summary with `feat:`/`fix:`/`perf:`/`chore:`, then **one capitalized plain sentence under ~80 chars, written for users** — no rationale, no mechanism, no second line. The prefix is stripped and the rest ships verbatim as the GitHub Release notes ([README](README.md#releasing)).
 - **Name every package the change touches.** A change to `packages/bilibili-qr` needs its own entry (`pnpm exec changeset add --patch @laplace.live/bilibili-qr -m "fix: …"`), written for the developers using it. When the app's users would notice it too, add a `laplace-comet` entry: the app takes the package as a devDependency, bundled into its build, so changesets never releases the app on the package's behalf.
 - No changeset for CI, docs, tests, dev-only tooling, or refactors with no user-visible effect.
-- **Never bump a `version` in a `package.json`, push a release tag, or hand-edit a `CHANGELOG.md`** — merging the Release workflow's version PR does all three. It tags each bumped package `<name>@<version>`; the app's `laplace-comet@<version>` tag (`v<version>` up to 1.4.0) is what builds and ships a release.
+- **Never bump a `version` in a `package.json`, push a release tag, or hand-edit a `CHANGELOG.md`** — merging the Release workflow's version PR does all three. It tags every package whose current version has no `<name>@<version>` tag yet; the app's `laplace-comet@<version>` tag (`v<version>` up to 1.4.0) is what builds and ships a release.
 
 ## Important Files
 

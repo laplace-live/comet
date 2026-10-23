@@ -48,8 +48,9 @@ export async function resolveQRCodeCredentials(
   if (loginUrl) {
     try {
       url = new URL(loginUrl)
-    } catch (cause) {
-      throw new QRLoginError('credentials', MISSING_CREDENTIALS, { cause })
+    } catch {
+      // Not as `cause`: a URL parse error carries the URL, which holds the login
+      throw new QRLoginError('credentials', MISSING_CREDENTIALS)
     }
     for (const name of COOKIE_NAMES) {
       const value = url.searchParams.get(name)
@@ -68,14 +69,20 @@ export async function resolveQRCodeCredentials(
       throw new QRLoginError('credentials', "The login ticket points outside Bilibili's passport")
     }
     const response = await send(url, options, { headers: { Referer: TICKET_REFERER }, redirect: 'manual' })
-    collectCookies(response.headers, cookies)
+    // Only the headers matter: release the body before collectCookies can throw
     await response.body?.cancel()
+    collectCookies(response.headers, cookies)
     const resolved = credentialsFromCookies(cookies)
     if (resolved) return resolved
 
     const location = response.headers.get('location')
     if (!REDIRECT_STATUSES.has(response.status) || !location) break
-    url = new URL(location, url)
+    try {
+      url = new URL(location, url)
+    } catch {
+      // Not as `cause`: a URL parse error carries its base, the ticket URL
+      throw new QRLoginError('credentials', "The login ticket's redirect isn't a valid URL")
+    }
   }
 
   throw new QRLoginError('credentials', MISSING_CREDENTIALS)

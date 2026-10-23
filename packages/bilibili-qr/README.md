@@ -5,8 +5,9 @@ and confirms it in the Bilibili app, and collect the session cookies. Extracted 
 [LAPLACE Comet](https://github.com/laplace-live/comet), which signs in this way.
 
 It needs a `fetch` that shows `Set-Cookie` headers (`Headers#getSetCookie()`) and returns redirects as they are
-(`redirect: 'manual'`), as Node.js 22 or later, Bun, Deno and Cloudflare Workers do; its tests run on Node.js. Not
-in a web page, where browsers hide both from scripts.
+(`redirect: 'manual'`), as Node.js 22 or later, Bun, Deno and Cloudflare Workers do (Workers from compatibility date
+2023-03-01, which brought `getSetCookie()`); its tests run on Node.js. Not in a web page, where browsers hide both
+from scripts.
 
 No runtime dependencies, and it draws nothing: show the code's `url` with whatever suits the app, such as
 [`qrcode-terminal`](https://github.com/gtanner/qrcode-terminal) in a terminal or

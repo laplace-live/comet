@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
+import { inspect } from 'node:util'
 
 import {
   type BilibiliCredentials,
@@ -9,6 +10,7 @@ import {
   pollQRCode,
   QR_CODE_STATUS,
   QR_LOGIN_ENDPOINTS,
+  QRLoginError,
 } from '../src/index.ts'
 
 const credentials: BilibiliCredentials = {
@@ -94,6 +96,21 @@ test('headers replace the default headers', async () => {
   const { fetch, calls } = fakeFetch(Response.json(generated))
   await generateQRCode({ fetch, headers })
   assert.deepEqual(calls[0]?.init.headers, headers)
+})
+
+test('header names ignore case, so a later spelling replaces an earlier one instead of joining it', async () => {
+  const headers = { ...DEFAULT_HEADERS, 'user-agent': 'fixture-agent', referer: 'https://www.bilibili.com/' }
+  const { fetch, calls } = fakeFetch(confirmed(ticketUrl), new Response(null, { headers: cookieHeaders(cookies) }))
+  await pollQRCode('fixture-key', { fetch, headers })
+  const sent = calls.map(call => new Headers(call.init.headers))
+  assert.deepEqual(
+    sent.map(header => header.get('User-Agent')),
+    ['fixture-agent', 'fixture-agent']
+  )
+  assert.deepEqual(
+    sent.map(header => header.get('Referer')),
+    ['https://www.bilibili.com/', 'https://passport.bilibili.com/']
+  )
 })
 
 test('requests go through the global fetch by default', async t => {
@@ -189,20 +206,28 @@ test('a ticket is exchanged at its own origin, keeping the cookies of a redirect
 test('cookies are collected across approved passport redirects', async () => {
   const nextUrl = 'https://passport.bilibili.com/x/passport-login/web/crossDomain?ticket=fixture-next'
   const { SESSDATA, ...remaining } = cookies
-  assert.deepEqual(
-    await login(
-      confirmed(ticketUrl),
-      () => {
-        const headers = cookieHeaders({ SESSDATA: SESSDATA ?? '' })
-        headers.set('Location', nextUrl)
-        return new Response(null, { status: 302, headers })
-      },
-      url => {
-        assert.equal(url, nextUrl)
-        return new Response(null, { headers: cookieHeaders(remaining) })
-      }
-    ),
-    credentials
+  const signal = new AbortController().signal
+  const { fetch, calls } = fakeFetch(
+    confirmed(ticketUrl),
+    () => {
+      const headers = cookieHeaders({ SESSDATA: SESSDATA ?? '' })
+      headers.set('Location', nextUrl)
+      return new Response(null, { status: 302, headers })
+    },
+    url => {
+      assert.equal(url, nextUrl)
+      return new Response(null, { headers: cookieHeaders(remaining) })
+    }
+  )
+  const result = await pollQRCode('fixture-key', { fetch, signal })
+  assert.deepEqual(result.status === 'success' && result.credentials, credentials)
+  assert.ok(
+    calls.slice(1).every(call => call.init.redirect === 'manual'),
+    'every hop is followed by hand'
+  )
+  assert.ok(
+    calls.every(call => call.init.signal === signal),
+    "every hop listens to the caller's signal"
   )
 })
 
@@ -230,6 +255,38 @@ test('a ticket redirect to another origin is not followed', async () => {
   )
   await assert.rejects(pollQRCode('fixture-key', { fetch }), { reason: 'credentials' })
   assert.equal(calls.length, 2)
+})
+
+/** Rejects as a credentials failure that, printed the way `console.error` prints it, shows nothing of `secret` */
+async function rejectsWithout(secret: string, ...steps: Step[]): Promise<void> {
+  await assert.rejects(pollQRCode('fixture-key', { fetch: fakeFetch(...steps).fetch }), error => {
+    assert.ok(error instanceof QRLoginError)
+    assert.equal(error.reason, 'credentials')
+    assert.ok(!inspect(error).includes(secret), 'the error must not carry the login')
+    return true
+  })
+}
+
+test("a login URL that doesn't parse rejects without carrying it", () =>
+  rejectsWithout('fixture-session', confirmed(legacyUrl().replace('.com/', '.com:99999/'))))
+
+test("a ticket redirect that doesn't parse rejects without carrying the ticket", () =>
+  rejectsWithout(
+    'ticket=fixture',
+    confirmed(ticketUrl),
+    new Response(null, { status: 302, headers: { Location: 'http://[' } })
+  ))
+
+test("a ticket exchange answer's body is released even when its cookies don't decode", async () => {
+  let cancelled = false
+  const body = new ReadableStream({
+    cancel() {
+      cancelled = true
+    },
+  })
+  const { fetch } = fakeFetch(confirmed(ticketUrl), new Response(body, { headers: { 'Set-Cookie': 'bili_jct=%ZZ' } }))
+  await assert.rejects(pollQRCode('fixture-key', { fetch }), { reason: 'credentials' })
+  assert.ok(cancelled, 'an unread body holds its connection')
 })
 
 test('a ticket redirect loop ends after five requests', async () => {

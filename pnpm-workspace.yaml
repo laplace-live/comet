@@ -3,6 +3,8 @@
 packages:
   - .
   - packages/*
+# The root is the app, so `pnpm add` there means it: no `-w` needed, as before the workspace.
+ignoreWorkspaceRootCheck: true
 
 nodeLinker: hoisted
 blockExoticSubdeps: false

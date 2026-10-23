@@ -38,8 +38,11 @@ export interface QRLoginOptions {
   headers?: Readonly<Record<string, string>>
   /** Aborts the call, every request it makes included */
   signal?: AbortSignal
-  /** Sends the requests; the global `fetch` by default */
-  fetch?: typeof fetch
+  /**
+   * Sends the requests; the global `fetch` by default. Not `typeof fetch`, which a plain function can't satisfy where
+   * the runtime's `fetch` has extra members, such as Bun's `fetch.preconnect`.
+   */
+  fetch?: (input: string | URL, init: RequestInit) => Promise<Response>
 }
 
 export interface GeneratedQRCode {

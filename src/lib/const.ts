@@ -2,7 +2,11 @@
 // User Agent
 // ============================================================================
 
-/** Also in packages/bilibili-qr/src/constants.ts, for its DEFAULT_HEADERS: this file can't import the package */
+/**
+ * Also in packages/bilibili-qr/src/constants.ts, for its DEFAULT_HEADERS: this file must not import the package, as
+ * forge.config.ts loads it through jiti. Bump both: tests/qr-login-api.test.mjs fails while DEFAULT_HEADERS and
+ * COMMON_HEADERS differ
+ */
 export const CHROME_VERSION = '149'
 
 export const USER_AGENT = `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_VERSION}.0.0.0 Safari/537.36`

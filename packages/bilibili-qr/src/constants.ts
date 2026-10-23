@@ -20,7 +20,7 @@ export const QR_CODE_STATUS = {
   EXPIRED: 86038,
 } as const
 
-/** The app's CHROME_VERSION in src/lib/const.ts, which can't import this package */
+/** The app's CHROME_VERSION in src/lib/const.ts, which can't import this package; the app's tests keep them equal */
 const CHROME_VERSION = '149'
 
 /** Chrome on Windows calling Bilibili's API: the headers every request sends unless `headers` replaces them */

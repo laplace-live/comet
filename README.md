@@ -50,7 +50,7 @@ Get the latest development builds with cutting-edge features:
 
 #### Prerequisites
 
-- [Node.js](https://nodejs.org/) v22.13 or later (v22.18 or later for `pnpm screenshots`, which runs TypeScript directly)
+- [Node.js](https://nodejs.org/) v22.18 or later: `pnpm test` and `pnpm screenshots` run TypeScript directly
 - [pnpm](https://pnpm.io/)
 
 #### Steps
@@ -126,7 +126,7 @@ Versions and the changelogs are managed by [Changesets](https://changesets.dev).
 
    Use `minor` for new features and substantial behavior changes, `patch` for fixes and small changes. Start the summary with `feat:`, `fix:`, `perf:` or `chore:`, then one capitalized sentence written for users — the prefix is stripped, and the rest lands verbatim in `CHANGELOG.md` and the GitHub Release. CI, docs, and refactors with no user-visible effect need no changeset; `pnpm exec changeset status` lists what is pending.
 2. While changesets sit on `master`, the Release workflow keeps a `chore: version packages` PR open that bumps the versions and updates each `CHANGELOG.md`.
-3. Merging that PR publishes the bumped npm packages and tags each bumped package `<name>@<version>`. The app's tag, `laplace-comet@<version>` (`v<version>` up to 1.4.0), triggers Build and Release, which signs the macOS and Windows builds, uploads them to the auto-update feed, and publishes the GitHub Release from the new changelog entry with the installers attached.
+3. Merging that PR publishes the bumped npm packages, then tags every package whose current version has no `<name>@<version>` tag yet, bumped or not. The app's tag, `laplace-comet@<version>` (`v<version>` up to 1.4.0, so Build and Release skips `laplace-comet@1.4.0`), triggers Build and Release, which signs the macOS and Windows builds, uploads them to the auto-update feed, and publishes the GitHub Release from the new changelog entry with the installers attached.
 4. Then refresh the website's screenshots on the updated `master` with `pnpm screenshots` and commit the PNGs it rewrites. The About shot shows the version, which only that merge bumps, so they change with every release ([docs/screenshots.md](docs/screenshots.md)).
 
 The Release workflow publishes to npm through [trusted publishing](https://docs.npmjs.com/trusted-publishers), with no token. npm only trusts a workflow for a package that already exists, and a failed publish pushes no tag, the app's included, so a new package needs a one-time manual first publish before the version PR that first bumps it merges: from a clean checkout of `master`, run `pnpm --filter <name> publish --access public`, then in the package's settings on npmjs.com, add GitHub Actions as a trusted publisher with repository `laplace-live/comet` and workflow `release.yml`.

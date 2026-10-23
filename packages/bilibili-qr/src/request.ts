@@ -9,7 +9,19 @@ export function send(
   { fetch: request = fetch, headers = DEFAULT_HEADERS, signal }: QRLoginOptions,
   init: { headers?: Record<string, string>; redirect?: RequestRedirect } = {}
 ): Promise<Response> {
-  return request(url, { ...init, headers: { ...headers, ...init.headers }, signal })
+  return request(url, { ...init, headers: mergeHeaders(headers, init.headers), signal })
+}
+
+/**
+ * The headers in order, each name replacing any earlier one. Header names ignore case, so `referer` and `Referer`
+ * are one header: kept apart, fetch would send both values joined into one.
+ */
+function mergeHeaders(...sources: Array<Readonly<Record<string, string>> | undefined>): Record<string, string> {
+  const merged = new Map<string, [string, string]>()
+  for (const source of sources) {
+    for (const [name, value] of Object.entries(source ?? {})) merged.set(name.toLowerCase(), [name, value])
+  }
+  return Object.fromEntries(merged.values())
 }
 
 /**
