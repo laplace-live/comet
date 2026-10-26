@@ -154,8 +154,8 @@ importers:
   packages/bilibili-qr:
     devDependencies:
       '@types/node':
-        specifier: ^24.19.2
-        version: 24.19.2
+        specifier: ^26.6.5
+        version: 26.6.5
       typescript:
         specifier: ^6.0.3
         version: 6.0.3
