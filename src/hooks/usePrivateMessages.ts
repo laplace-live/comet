@@ -915,6 +915,65 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [loadSessions, resetAccountState, beginAccountTransition, endAccountTransition])
 
+  /**
+   * Reconcile renderer state after the backend has committed an active-account change (`setActiveAccount`,
+   * `removeAccount`, or `logout`). Retries once if `checkLogin` or `getAccounts` fails, and never loads
+   * sessions or connects WebSocket without a verified `userInfo` profile.
+   */
+  const reconcileCommittedAccount = useCallback(
+    async (transitionId: number): Promise<void> => {
+      let loginResult: CheckLoginResult | null = null
+      let lastError: unknown = null
+
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const checked = await window.electronAPI.bilibili.checkLogin()
+          authCheckSeqRef.current++
+          setUserInfo(checked)
+          loginResult = checked
+
+          const accountsResult = await window.electronAPI.bilibili.getAccounts()
+          authCheckSeqRef.current++
+          setAccounts(accountsResult.accounts)
+          setActiveAccountMid(accountsResult.activeAccountMid)
+          lastError = null
+          break
+        } catch (err) {
+          lastError = err
+        }
+      }
+
+      if (lastError || !loginResult) {
+        connectedMidRef.current = null
+        setUserInfo(null)
+        resetAccountState()
+        initialLoadFailedRef.current = true
+        setIsConnected(false)
+        throw lastError ?? new Error('Failed to reconcile active account')
+      }
+
+      if (loginResult.isLogin) {
+        connectedMidRef.current = loginResult.mid ?? null
+        setIsConnected(true)
+        try {
+          await loadSessions()
+        } catch (err) {
+          if (sessionsRef.current.length === 0) {
+            initialLoadFailedRef.current = true
+          }
+          console.error('[usePrivateMessages] Failed to fetch sessions for the active account:', err)
+        }
+        if (endAccountTransition(transitionId)) {
+          await window.electronAPI.bilibili.wsConnect()
+        }
+      } else {
+        initialLoadFailedRef.current = false
+        setIsConnected(false)
+      }
+    },
+    [loadSessions, resetAccountState, endAccountTransition]
+  )
+
   // Logout
   const logout = useCallback(async () => {
     explicitAccountActionsRef.current++
@@ -935,47 +994,17 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       // Clear current session state
       connectedMidRef.current = null
+      setUserInfo(null)
       resetAccountState()
 
-      // Check login - this may remove additional expired accounts on the backend
-      const loginResult = await window.electronAPI.bilibili.checkLogin()
-      authCheckSeqRef.current++
-      setUserInfo(loginResult)
-
-      // Refresh accounts AFTER checkLogin since it may have removed expired accounts
-      const accountsResult = await window.electronAPI.bilibili.getAccounts()
-      authCheckSeqRef.current++
-      setAccounts(accountsResult.accounts)
-      setActiveAccountMid(accountsResult.activeAccountMid)
-
-      if (loginResult.isLogin) {
-        connectedMidRef.current = loginResult.mid ?? null
-        setIsConnected(true)
-        // Fetch sessions for the new account
-        try {
-          await loadSessions()
-        } catch (err) {
-          if (sessionsRef.current.length === 0) {
-            initialLoadFailedRef.current = true
-          }
-          console.error('Failed to fetch sessions for the next account:', err)
-        }
-        if (endAccountTransition(transitionId)) {
-          // Reconnect WebSocket for the new account
-          await window.electronAPI.bilibili.wsConnect()
-        }
-        return
-      }
-
-      // No remaining accounts or login failed - go to logged out state
-      setIsConnected(false)
+      await reconcileCommittedAccount(transitionId)
     } catch (err) {
       console.error('Failed to logout:', err)
     } finally {
       endAccountTransition(transitionId)
       explicitAccountActionsRef.current--
     }
-  }, [loadSessions, resetAccountState, userInfo?.mid, beginAccountTransition, endAccountTransition])
+  }, [resetAccountState, userInfo?.mid, beginAccountTransition, endAccountTransition, reconcileCommittedAccount])
 
   /** Fetch the active account's initial session list without disconnecting on transient failures */
   const fetchSessions = useCallback(async () => {
@@ -1975,59 +2004,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         accountSwitched = true
         setActiveAccountMid(mid)
         connectedMidRef.current = null
+        setUserInfo(null)
         resetAccountState()
         initialLoadFailedRef.current = true
 
-        // Re-check login with new account - this may remove expired accounts
-        const loginResult = await window.electronAPI.bilibili.checkLogin()
-        authCheckSeqRef.current++
-        setUserInfo(loginResult)
-
-        // Refresh accounts AFTER checkLogin since it may have removed expired accounts
-        // This ensures frontend state matches backend state
-        const accountsResult = await window.electronAPI.bilibili.getAccounts()
-        authCheckSeqRef.current++
-        setAccounts(accountsResult.accounts)
-        setActiveAccountMid(accountsResult.activeAccountMid)
-
-        if (loginResult.isLogin) {
-          connectedMidRef.current = loginResult.mid ?? null
-          setIsConnected(true)
-          // Fetch sessions for the new account
-          try {
-            await loadSessions()
-          } catch (err) {
-            if (sessionsRef.current.length === 0) {
-              initialLoadFailedRef.current = true
-            }
-            console.error('[usePrivateMessages] Failed to fetch sessions for the new account:', err)
-          }
-          if (endAccountTransition(transitionId)) {
-            // Reconnect WebSocket
-            await window.electronAPI.bilibili.wsConnect()
-          }
-        } else {
-          initialLoadFailedRef.current = false
-          setIsConnected(false)
-        }
+        await reconcileCommittedAccount(transitionId)
       } catch (err) {
         console.error('[usePrivateMessages] Failed to switch account:', err)
-        if (accountSwitched) {
-          connectedMidRef.current = mid
-          initialLoadFailedRef.current = true
-          try {
-            await loadSessions()
-          } catch (loadErr) {
-            console.error('[usePrivateMessages] Failed to load sessions for switched account:', loadErr)
-          }
-          if (endAccountTransition(transitionId)) {
-            try {
-              await window.electronAPI.bilibili.wsConnect()
-            } catch (wsErr) {
-              console.error('[usePrivateMessages] Failed to connect WebSocket for switched account:', wsErr)
-            }
-          }
-        } else {
+        if (!accountSwitched) {
           await restorePreviousWebSocket()
         }
       } finally {
@@ -2035,7 +2019,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         explicitAccountActionsRef.current--
       }
     },
-    [loadSessions, resetAccountState, beginAccountTransition, endAccountTransition]
+    [resetAccountState, beginAccountTransition, endAccountTransition, reconcileCommittedAccount]
   )
 
   /** Remove a stored account by mid and switch or reset state when removing the active account */
@@ -2045,6 +2029,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       authCheckSeqRef.current++
       const wasActiveAccount = mid === activeAccountMid
       const transitionId = wasActiveAccount ? beginAccountTransition() : null
+      let accountRemoved = false
 
       try {
         // If removing the active account, disconnect WS first
@@ -2056,21 +2041,21 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         const result = await window.electronAPI.bilibili.removeAccount({ mid })
         authCheckSeqRef.current++
         if (result.success) {
+          accountRemoved = true
           useDrafts.getState().clearAccountDrafts(mid)
           setAccounts(result.remainingAccounts)
           setActiveAccountMid(result.activeAccountMid)
 
-          // If we removed the active account, we need to reload state
+          // If we removed the active account, clear its state immediately and reconcile with the new active account
           if (wasActiveAccount) {
-            if (result.activeAccountMid) {
-              // There's another account, switch to it (switchAccount takes over transition ownership)
-              await switchAccount(result.activeAccountMid)
+            connectedMidRef.current = null
+            setUserInfo(null)
+            resetAccountState()
+            if (result.activeAccountMid && transitionId !== null) {
+              initialLoadFailedRef.current = true
+              await reconcileCommittedAccount(transitionId)
             } else {
-              // No more accounts, reset to logged out state
-              connectedMidRef.current = null
               setIsConnected(false)
-              setUserInfo(null)
-              resetAccountState()
             }
           }
         } else {
@@ -2081,8 +2066,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         }
       } catch (err) {
         console.error('[usePrivateMessages] Failed to remove account:', err)
-        // Reconnect WebSocket if we disconnected it before the error
-        if (transitionId !== null && endAccountTransition(transitionId)) {
+        // Reconnect WebSocket only if the active account was not removed before the error
+        if (!accountRemoved && transitionId !== null && endAccountTransition(transitionId)) {
           try {
             await window.electronAPI.bilibili.wsConnect()
           } catch (wsErr) {
@@ -2096,7 +2081,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         explicitAccountActionsRef.current--
       }
     },
-    [activeAccountMid, switchAccount, resetAccountState, beginAccountTransition, endAccountTransition]
+    [activeAccountMid, resetAccountState, beginAccountTransition, endAccountTransition, reconcileCommittedAccount]
   )
 
   // Start adding a new account (shows QR dialog)

@@ -916,28 +916,32 @@ export function registerBilibiliIpcHandlers() {
       (profile.face && profile.face !== account.userInfo.face) ||
       (profile.uname && profile.uname !== account.userInfo.uname)
     ) {
-      await changeAccounts(async () => {
-        const accounts = await getAccounts()
-        const stored = accounts.find(a => a.userInfo.mid === account.userInfo.mid)
-        if (!stored) return
+      try {
+        await changeAccounts(async () => {
+          const accounts = await getAccounts()
+          const stored = accounts.find(a => a.userInfo.mid === account.userInfo.mid)
+          if (!stored) return
 
-        let needsSave = false
-        if (stored.isExpired && stored.credentials.SESSDATA === account.credentials.SESSDATA) {
-          stored.isExpired = false
-          needsSave = true
-        }
-        if (profile.face && profile.face !== stored.userInfo.face) {
-          stored.userInfo.face = profile.face
-          needsSave = true
-        }
-        if (profile.uname && profile.uname !== stored.userInfo.uname) {
-          stored.userInfo.uname = profile.uname
-          needsSave = true
-        }
-        if (needsSave) {
-          await saveAccounts(accounts)
-        }
-      })
+          let needsSave = false
+          if (stored.isExpired && stored.credentials.SESSDATA === account.credentials.SESSDATA) {
+            stored.isExpired = false
+            needsSave = true
+          }
+          if (profile.face && profile.face !== stored.userInfo.face) {
+            stored.userInfo.face = profile.face
+            needsSave = true
+          }
+          if (profile.uname && profile.uname !== stored.userInfo.uname) {
+            stored.userInfo.uname = profile.uname
+            needsSave = true
+          }
+          if (needsSave) {
+            await saveAccounts(accounts)
+          }
+        })
+      } catch (error) {
+        console.warn('Failed to persist updated profile during login check:', error)
+      }
     }
 
     return { isLogin: true, ...profile }
