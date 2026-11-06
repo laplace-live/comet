@@ -492,6 +492,68 @@ test('asking for the next page of 未关注人消息 twice at once loads it once
   assert(folded() === `${STRANGER},${FAN}`, `the next page should land once, got ${folded()}`)
 })
 
+test('a background checkLogin during switchAccount does not overwrite the switched account', async () => {
+  await setup(false)
+  const disconnectGate = deferred<void>()
+  const staleAccountsGate = deferred<void>()
+  const origGetAccounts = window.electronAPI.bilibili.getAccounts
+  let pauseNextGetAccounts = true
+  window.electronAPI.bilibili.getAccounts = async () => {
+    if (pauseNextGetAccounts) {
+      pauseNextGetAccounts = false
+      await staleAccountsGate.promise
+      return {
+        accounts: [
+          { mid: ME, uname: 'me', isExpired: false },
+          { mid: OTHER_ACCOUNT, uname: 'other', isExpired: false },
+        ],
+        activeAccountMid: ME,
+      }
+    }
+    return origGetAccounts()
+  }
+
+  let disconnectPaused = false
+  window.electronAPI.bilibili.wsDisconnect = async () => {
+    if (!disconnectPaused) {
+      disconnectPaused = true
+      await disconnectGate.promise
+    }
+    return { success: true }
+  }
+
+  // 1) A checkLogin that starts before switchAccount, pauses inside getAccounts(), and resolves after switchAccount
+  let inFlightCheck!: Promise<boolean>
+  await flush(() => {
+    inFlightCheck = current.checkLogin()
+  })
+  let switching!: Promise<void>
+  await flush(() => {
+    switching = current.switchAccount(OTHER_ACCOUNT)
+  })
+
+  // 2) A periodic checkLogin that fires while switchAccount is waiting on wsDisconnect is skipped immediately
+  const midSwitchCheck = await current.checkLogin()
+  assert(midSwitchCheck === false, 'periodic checkLogin during switchAccount should be skipped')
+
+  await flush(async () => {
+    disconnectGate.resolve()
+    await switching
+  })
+  await flush(async () => {
+    staleAccountsGate.resolve()
+    await inFlightCheck
+  })
+  assert(
+    current.userInfo?.mid === OTHER_ACCOUNT,
+    `switched account should remain ${OTHER_ACCOUNT}, got ${current.userInfo?.mid}`
+  )
+  assert(
+    current.activeAccountMid === OTHER_ACCOUNT,
+    `activeAccountMid should remain ${OTHER_ACCOUNT}, got ${current.activeAccountMid}`
+  )
+})
+
 void (async () => {
   const report: typeof globals.__rendererTestResults = { tests: [] }
   for (const { name, run } of tests) {

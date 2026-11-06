@@ -659,19 +659,26 @@ function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
       await saveAccounts(accounts)
     })
 
+  const fetchWithRefreshTimeout: typeof fetch = (input, init) =>
+    fetch(input, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(LOGIN_CONFIG.COOKIE_REFRESH_TIMEOUT)])
+        : AbortSignal.timeout(LOGIN_CONFIG.COOKIE_REFRESH_TIMEOUT),
+    })
+
   const promise = (async () => {
-    const signal = AbortSignal.timeout(LOGIN_CONFIG.COOKIE_REFRESH_TIMEOUT)
     try {
       const { refresh, timestamp } = await checkCookieRefresh(credentials, {
+        fetch: fetchWithRefreshTimeout,
         headers: COMMON_HEADERS,
-        signal,
       })
       if (!refresh) return
 
       await refreshCookies(credentials, refreshToken, {
+        fetch: fetchWithRefreshTimeout,
         headers: COMMON_HEADERS,
         timestamp,
-        signal,
         onCredentialsRotated: async rotated => {
           if (rotated.credentials.DedeUserID !== mid) {
             throw new Error('Refreshed cookies belong to a different UID')
