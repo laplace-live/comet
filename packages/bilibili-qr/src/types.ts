@@ -112,6 +112,16 @@ export interface CookieRefreshOptions extends QRLoginOptions {
    * `Date.now()` by default
    */
   timestamp?: number
+  /**
+   * Invoked after `COOKIE_REFRESH_ENDPOINTS.REFRESH` issues new credentials and `refresh_token`, and before
+   * `COOKIE_REFRESH_ENDPOINTS.CONFIRM` invalidates the previous token on Bilibili's servers, so callers can
+   * persist the rotated credentials before the old token is retired
+   */
+  onCredentialsRotated?: (rotated: {
+    credentials: BilibiliCredentials
+    refreshToken: string
+    response: BilibiliCookieRefreshResponse
+  }) => void | Promise<void>
 }
 
 export interface CookieRefreshStatus {

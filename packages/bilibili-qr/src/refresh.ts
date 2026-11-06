@@ -60,18 +60,11 @@ const FORM_CONTENT_TYPE = 'application/x-www-form-urlencoded'
 const REFRESH_CSRF_PATTERN = /<div\s+id=["']1-name["']\s*>([^<]+)<\/div>/i
 const MISSING_REFRESH_CREDENTIALS = 'The cookies were refreshed, but Bilibili handed over incomplete credentials'
 
-let correspondKeyPromise: Promise<CryptoKey> | undefined
-
+/** Import Bilibili's RSA-OAEP public key (`SHA-256`) for `correspondPath` encryption */
 function getCorrespondKey(): Promise<CryptoKey> {
-  if (!correspondKeyPromise) {
-    correspondKeyPromise = crypto.subtle
-      .importKey('jwk', CORRESPOND_PUBLIC_KEY_JWK, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, ['encrypt'])
-      .catch(error => {
-        correspondKeyPromise = undefined
-        throw error
-      })
-  }
-  return correspondKeyPromise
+  return crypto.subtle.importKey('jwk', CORRESPOND_PUBLIC_KEY_JWK, { name: 'RSA-OAEP', hash: 'SHA-256' }, false, [
+    'encrypt',
+  ])
 }
 
 /**
@@ -116,6 +109,7 @@ export async function checkCookieRefresh(
   return { refresh, timestamp, response: body as BilibiliCookieInfoResponse }
 }
 
+/** Fetch `/correspond/1/{correspondPath}` and extract the SSR `refresh_csrf` token from `<div id="1-name">` */
 async function fetchRefreshCsrf(
   correspondPath: string,
   cookieHeader: string,
@@ -150,7 +144,7 @@ export async function refreshCookies(
     throw new QRLoginError('credentials', 'A refresh_token is required to refresh cookies')
   }
 
-  const { timestamp = Date.now(), ...requestOptions } = options
+  const { timestamp = Date.now(), onCredentialsRotated, ...requestOptions } = options
   const oldCookieHeader = cookieStringFromCredentials(credentials)
   const correspondPath = await getCorrespondPath(timestamp)
   const refreshCsrf = await fetchRefreshCsrf(correspondPath, oldCookieHeader, requestOptions)
@@ -174,6 +168,13 @@ export async function refreshCookies(
     throw new QRLoginError('response', 'Bilibili answered without a refresh_token')
   }
   const nextCredentials = resolveCookieCredentials(refreshResponse.headers, MISSING_REFRESH_CREDENTIALS)
+  const rotated: RefreshedCookies = {
+    credentials: nextCredentials,
+    refreshToken: nextRefreshToken,
+    response: refreshBody as BilibiliCookieRefreshResponse,
+  }
+
+  await onCredentialsRotated?.(rotated)
 
   try {
     const confirmResponse = await send(COOKIE_REFRESH_ENDPOINTS.CONFIRM, requestOptions, {
@@ -194,9 +195,5 @@ export async function refreshCookies(
     // credentials so the caller does not lose the new session.
   }
 
-  return {
-    credentials: nextCredentials,
-    refreshToken: nextRefreshToken,
-    response: refreshBody as BilibiliCookieRefreshResponse,
-  }
+  return rotated
 }

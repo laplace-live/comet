@@ -340,9 +340,49 @@ test('cookieStringFromCredentials encodes SESSDATA back for the Cookie header', 
   )
 })
 
-test('getCorrespondPath encrypts refresh_timestamp into a 1024-bit RSA-OAEP hex path', async () => {
+test('getCorrespondPath encrypts refresh_timestamp into a 1024-bit RSA-OAEP hex path', async t => {
+  const realImportKey = globalThis.crypto.subtle.importKey.bind(globalThis.crypto.subtle)
+  const realEncrypt = globalThis.crypto.subtle.encrypt.bind(globalThis.crypto.subtle)
+  let importedFormat: KeyFormat | undefined
+  let importedKeyData: JsonWebKey | BufferSource | undefined
+  let importedAlgorithm: AlgorithmIdentifier | RsaHashedImportParams | EcKeyImportParams | HmacImportParams | undefined
+  let encryptedPlaintext = ''
+
+  t.mock.method(
+    globalThis.crypto.subtle,
+    'importKey',
+    async (
+      format: KeyFormat,
+      keyData: JsonWebKey | BufferSource,
+      algorithm: AlgorithmIdentifier | RsaHashedImportParams | EcKeyImportParams | HmacImportParams,
+      extractable: boolean,
+      keyUsages: readonly KeyUsage[]
+    ) => {
+      importedFormat = format
+      importedKeyData = keyData
+      importedAlgorithm = algorithm
+      return realImportKey(format as 'jwk', keyData as JsonWebKey, algorithm, extractable, keyUsages)
+    }
+  )
+  t.mock.method(
+    globalThis.crypto.subtle,
+    'encrypt',
+    async (algorithm: AlgorithmIdentifier | RsaOaepParams, key: CryptoKey, data: BufferSource) => {
+      encryptedPlaintext = new TextDecoder().decode(data)
+      return realEncrypt(algorithm, key, data)
+    }
+  )
+
   const path = await getCorrespondPath(1_700_000_000_000)
   assert.match(path, /^[0-9a-f]{256}$/)
+  assert.equal(importedFormat, 'jwk')
+  assert.deepEqual(importedKeyData, {
+    kty: 'RSA',
+    n: 'y4HdjgJHBlbaBN04VERG4qNBIFHP6a3GozCl75AihQloSWCXC5HDNgyinEnhaQ_4-gaMud_GF50elYXLlCToR9se9Z8z433U3KjM-3Yx7ptKkmQNAMggQwAVKgq3zYAoidNEWuxpkY_mAitTSRLnsJW-NCTa0bqBFF6Wm1MxgfE',
+    e: 'AQAB',
+  })
+  assert.deepEqual(importedAlgorithm, { name: 'RSA-OAEP', hash: 'SHA-256' })
+  assert.equal(encryptedPlaintext, 'refresh_1700000000000')
   await assert.rejects(getCorrespondPath(Number.NaN), RangeError)
 })
 
@@ -401,22 +441,31 @@ test('refreshCookies exchanges refresh_csrf and refresh_token for new cookies an
     Response.json({ code: 0, message: '0', ttl: 1 })
   )
 
+  let callsCountWhenRotated = -1
   const result = await refreshCookies(credentials, 'old-refresh-token', {
     fetch,
     signal,
     timestamp: 1_700_000_000_000,
+    onCredentialsRotated: rotated => {
+      callsCountWhenRotated = calls.length
+      assert.deepEqual(rotated, {
+        credentials: nextCredentials,
+        refreshToken: 'next-refresh-token',
+        response: refreshBody,
+      })
+    },
   })
   assert.deepEqual(result, {
     credentials: nextCredentials,
     refreshToken: 'next-refresh-token',
     response: refreshBody,
   })
+  assert.equal(callsCountWhenRotated, 2, 'onCredentialsRotated runs before confirm/refresh')
   assert.equal(calls.length, 3)
 
-  assert.match(
-    calls[0]?.url ?? '',
-    new RegExp(`^${COOKIE_REFRESH_ENDPOINTS.CORRESPOND.replaceAll('/', '\\/')}\\/[0-9a-f]{256}$`)
-  )
+  const correspondPrefix = `${COOKIE_REFRESH_ENDPOINTS.CORRESPOND}/`
+  assert.ok((calls[0]?.url ?? '').startsWith(correspondPrefix))
+  assert.match((calls[0]?.url ?? '').slice(correspondPrefix.length), /^[0-9a-f]{256}$/)
   assert.equal(new Headers(calls[0]?.init.headers).get('Cookie'), cookieStringFromCredentials(credentials))
 
   assert.equal(calls[1]?.url, COOKIE_REFRESH_ENDPOINTS.REFRESH)

@@ -519,6 +519,13 @@ test('BILIBILI_REAUTH_ACCOUNT updates credentials and refreshToken', async t => 
   await assertStored(nextCredentials, userInfo)
   const storedAccounts = await api.getAccounts()
   assert.equal(storedAccounts[0]?.refreshToken, 'reauth-refresh-token')
+
+  const sameSessionReauth = await invoke(channels.BILIBILI_REAUTH_ACCOUNT, {
+    mid: credentials.DedeUserID,
+    credentials: nextCredentials,
+  })
+  assert.equal(sameSessionReauth.success, true)
+  assert.equal((await api.getAccounts())[0]?.refreshToken, 'reauth-refresh-token')
 })
 
 test('BILIBILI_CHECK_LOGIN starts a fresh check when the active account changes while a check is in flight', async t => {
@@ -557,6 +564,6 @@ test('BILIBILI_CHECK_LOGIN starts a fresh check when the active account changes 
   firstNav.resolve(navResponse())
 
   assert.deepEqual(await switchedCheck, { isLogin: true, ...otherUser })
-  assert.deepEqual(await staleCheck, { isLogin: true, ...userInfo })
+  assert.deepEqual(await staleCheck, { isLogin: true, ...otherUser })
   assert.equal(api.getActiveAccountMid(), otherUser.mid)
 })
