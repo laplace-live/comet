@@ -219,6 +219,7 @@ export interface RemoveAccountResult {
 export interface ReauthAccountParams {
   mid: number
   credentials: BilibiliCredentials
+  refreshToken?: string
 }
 
 export interface ReauthAccountResult {

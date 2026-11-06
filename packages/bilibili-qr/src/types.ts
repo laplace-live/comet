@@ -70,8 +70,64 @@ export type QRCodePollResult =
       /** The user confirmed the login */
       status: 'success'
       credentials: BilibiliCredentials
-      /** What Bilibili's cookie refresh takes to renew the cookies, which this package doesn't do */
+      /** What `refreshCookies` takes to renew the cookies */
       refreshToken: string
       /** Bilibili's response as received. Its `data.url` carries the login itself: never log it */
       response: BilibiliQRCodePollResponse
     }
+
+/** Bilibili's response to `COOKIE_REFRESH_ENDPOINTS.INFO` */
+export interface BilibiliCookieInfoResponse {
+  code: number
+  message: string
+  ttl: number
+  data: {
+    refresh: boolean
+    timestamp: number
+  }
+}
+
+/** Bilibili's response to `COOKIE_REFRESH_ENDPOINTS.REFRESH` */
+export interface BilibiliCookieRefreshResponse {
+  code: number
+  message: string
+  ttl: number
+  data: {
+    status: number
+    message: string
+    refresh_token: string
+  }
+}
+
+/** Bilibili's response to `COOKIE_REFRESH_ENDPOINTS.CONFIRM` */
+export interface BilibiliConfirmRefreshResponse {
+  code: number
+  message: string
+  ttl: number
+}
+
+export interface CookieRefreshOptions extends QRLoginOptions {
+  /**
+   * Millisecond timestamp to encrypt into `correspondPath`, such as `checkCookieRefresh`'s `timestamp`;
+   * `Date.now()` by default
+   */
+  timestamp?: number
+}
+
+export interface CookieRefreshStatus {
+  /** Whether Bilibili says the cookies should be refreshed now */
+  refresh: boolean
+  /** Server timestamp in milliseconds, which `refreshCookies` signs `correspondPath` with */
+  timestamp: number
+  /** Bilibili's response as received */
+  response: BilibiliCookieInfoResponse
+}
+
+export interface RefreshedCookies {
+  /** The newly issued session cookies */
+  credentials: BilibiliCredentials
+  /** The newly issued `refresh_token` for the next refresh */
+  refreshToken: string
+  /** Bilibili's response to `COOKIE_REFRESH_ENDPOINTS.REFRESH` as received */
+  response: BilibiliCookieRefreshResponse
+}

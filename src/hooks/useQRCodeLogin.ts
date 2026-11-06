@@ -133,6 +133,7 @@ export function useQRCodeLogin({
               const reauthResult = await window.electronAPI.bilibili.reauthAccount({
                 mid: reauthMid,
                 credentials: result.credentials,
+                refreshToken: result.data?.refresh_token,
               })
               if (!isCurrent()) return
 

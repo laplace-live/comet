@@ -148,6 +148,8 @@ export const LOGIN_CONFIG = {
   REQUEST_TIMEOUT: 15_000,
   /** Delay between QR code status polls in milliseconds (3 seconds) */
   QR_POLL_INTERVAL: 3000,
+  /** Interval for background login and cookie refresh checks while running (6 hours) */
+  COOKIE_CHECK_INTERVAL: 6 * 60 * 60 * 1000,
 } as const
 
 // ============================================================================

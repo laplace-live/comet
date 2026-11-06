@@ -7,7 +7,7 @@ import { QRLoginError } from './errors.ts'
 export function send(
   url: string | URL,
   { fetch: request = fetch, headers = DEFAULT_HEADERS, signal }: QRLoginOptions,
-  init: { headers?: Record<string, string>; redirect?: RequestRedirect } = {}
+  init: { method?: string; headers?: Record<string, string>; body?: string; redirect?: RequestRedirect } = {}
 ): Promise<Response> {
   return request(url, { ...init, headers: mergeHeaders(headers, init.headers), signal })
 }

@@ -21,7 +21,7 @@ function credentialsFromCookies(cookies: Map<string, string>): BilibiliCredentia
   return { SESSDATA, bili_jct, DedeUserID, DedeUserID__ckMd5: cookies.get('DedeUserID__ckMd5') || undefined }
 }
 
-function collectCookies(headers: Headers, cookies: Map<string, string>): void {
+function collectCookies(headers: Headers, cookies: Map<string, string>, message = MISSING_CREDENTIALS): void {
   // Read individual headers: splitting on commas corrupts Expires and cookie values.
   for (const header of headers.getSetCookie()) {
     const pair = header.split(';', 1)[0] ?? ''
@@ -32,7 +32,7 @@ function collectCookies(headers: Headers, cookies: Map<string, string>): void {
     try {
       cookies.set(name, decodeURIComponent(pair.slice(separator + 1)))
     } catch (cause) {
-      throw new QRLoginError('credentials', MISSING_CREDENTIALS, { cause })
+      throw new QRLoginError('credentials', message, { cause })
     }
   }
 }
@@ -86,6 +86,15 @@ export async function resolveQRCodeCredentials(
   }
 
   throw new QRLoginError('credentials', MISSING_CREDENTIALS)
+}
+
+/** Collect a complete set of session cookies from a response's `Set-Cookie` headers */
+export function resolveCookieCredentials(headers: Headers, message: string): BilibiliCredentials {
+  const cookies = new Map<string, string>()
+  collectCookies(headers, cookies, message)
+  const credentials = credentialsFromCookies(cookies)
+  if (!credentials) throw new QRLoginError('credentials', message)
+  return credentials
 }
 
 /** The `Cookie` header that signs a request in with `credentials` */

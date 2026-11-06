@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { LOGIN_CONFIG } from '@/lib/const'
+
 import { usePrivateMessages } from '@/hooks/usePrivateMessages'
 
 import { AboutDialog } from '@/components/comet/AboutDialog'
@@ -138,6 +140,15 @@ export default function App() {
     }
     init()
   }, [checkLogin])
+
+  // Periodically check login and renew cookies while connected
+  useEffect(() => {
+    if (!isConnected || initialLoading) return
+    const timer = setInterval(() => {
+      void checkLogin()
+    }, LOGIN_CONFIG.COOKIE_CHECK_INTERVAL)
+    return () => clearInterval(timer)
+  }, [isConnected, initialLoading, checkLogin])
 
   // Fetch sessions when connected
   useEffect(() => {

@@ -65,14 +65,24 @@ headers, or by exchanging the one-use ticket the URL carries at Bilibili's passp
 **`cookieStringFromCredentials(credentials)`** builds the `Cookie` header for the credentials, encoding `SESSDATA`
 back the way Bilibili set it.
 
-Both requesting functions take the same options:
+**`checkCookieRefresh(credentials, options?)`** checks whether Bilibili wants `credentials` refreshed now, resolving to
+`{ refresh, timestamp, response }`.
+
+**`refreshCookies(credentials, refreshToken, options?)`** renews `credentials` with the `refreshToken` from `pollQRCode`
+(or a previous refresh), resolving to `{ credentials, refreshToken, response }`. Pass `timestamp` from
+`checkCookieRefresh` in `options` (or omit it to use `Date.now()`): it encrypts `refresh_${timestamp}` into
+`correspondPath` (`getCorrespondPath(timestamp)`), reads `refresh_csrf` from Bilibili's correspond page, exchanges the
+old cookies and `refreshToken` for new ones, and confirms the rotation so Bilibili invalidates the old token.
+
+All requesting functions take the same options:
 
 - `headers`: the headers every request sends, in place of `DEFAULT_HEADERS` (Chrome on Windows). Spread
   `DEFAULT_HEADERS` in to add to them rather than replace them.
-- `signal`: aborts the call, a confirmed login's ticket exchange included.
+- `signal`: aborts the call, a confirmed login's ticket exchange or a cookie refresh's steps included.
 - `fetch`: the `fetch` to send requests with, the global one by default.
 
-`QR_CODE_STATUS` names Bilibili's state codes and `QR_LOGIN_ENDPOINTS` its two endpoints, for mocking them in tests.
+`QR_CODE_STATUS` names Bilibili's state codes and `QR_LOGIN_ENDPOINTS` / `COOKIE_REFRESH_ENDPOINTS` its endpoints, for
+mocking them in tests.
 
 ### Errors
 
@@ -82,17 +92,16 @@ A failure on Bilibili's side rejects with a `QRLoginError`, whose `reason` says 
 - `api`: Bilibili refused the request, with its `code` and its explanation, as received, in `apiMessage`. That is
   also the `message`, unless Bilibili sent none: `apiMessage` is then empty, and `message` names the code.
 - `response`: a response this package doesn't understand
-- `credentials`: the login was confirmed, but its cookies couldn't be collected
+- `credentials`: the login was confirmed or its cookies refreshed, but the cookies couldn't be collected
 
 Network failures and aborts reject with whatever `fetch` threw: the signal's reason for an abort, such as the
 `TimeoutError` of `AbortSignal.timeout`.
 
 ## The credentials are the account
 
-`SESSDATA` signs in as the user, and `bili_jct` is the CSRF token Bilibili's write APIs take as `csrf`: store them as
-you would a password. A successful poll's `response.data.url` carries the login too, so never log it.
-
-The package doesn't renew cookies. `refreshToken` is what Bilibili's cookie refresh takes, should you implement it.
+`SESSDATA` signs in as the user, `bili_jct` is the CSRF token Bilibili's write APIs take as `csrf`, and `refreshToken`
+renews both: store them as you would a password. A successful poll's `response.data.url` carries the login too, so
+never log it.
 
 ## License
 
