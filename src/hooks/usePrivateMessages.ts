@@ -926,22 +926,28 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       let lastError: unknown = null
 
       for (let attempt = 0; attempt < 2; attempt++) {
+        if (activeTransitionIdRef.current !== transitionId) return
         try {
           const checked = await window.electronAPI.bilibili.checkLogin()
+          if (activeTransitionIdRef.current !== transitionId) return
           authCheckSeqRef.current++
           setUserInfo(checked)
           loginResult = checked
 
           const accountsResult = await window.electronAPI.bilibili.getAccounts()
+          if (activeTransitionIdRef.current !== transitionId) return
           authCheckSeqRef.current++
           setAccounts(accountsResult.accounts)
           setActiveAccountMid(accountsResult.activeAccountMid)
           lastError = null
           break
         } catch (err) {
+          if (activeTransitionIdRef.current !== transitionId) return
           lastError = err
         }
       }
+
+      if (activeTransitionIdRef.current !== transitionId) return
 
       if (lastError || !loginResult) {
         connectedMidRef.current = null
@@ -958,7 +964,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         try {
           await loadSessions()
         } catch (err) {
-          if (sessionsRef.current.length === 0) {
+          if (activeTransitionIdRef.current === transitionId && sessionsRef.current.length === 0) {
             initialLoadFailedRef.current = true
           }
           console.error('[usePrivateMessages] Failed to fetch sessions for the active account:', err)
@@ -982,6 +988,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     try {
       // Disconnect WebSocket first to stop receiving notifications for this user
       await window.electronAPI.bilibili.wsDisconnect()
+      if (activeTransitionIdRef.current !== transitionId) return
       setWsConnected(false)
 
       await window.electronAPI.bilibili.logout()
@@ -991,6 +998,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (userInfo?.mid) {
         useDrafts.getState().clearAccountDrafts(userInfo.mid)
       }
+      if (activeTransitionIdRef.current !== transitionId) return
 
       // Clear current session state
       connectedMidRef.current = null
@@ -1989,11 +1997,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       try {
         // Disconnect current WebSocket first
         await window.electronAPI.bilibili.wsDisconnect()
+        if (activeTransitionIdRef.current !== transitionId) return
         setWsConnected(false)
 
         // Switch the active account
         const result = await window.electronAPI.bilibili.setActiveAccount({ mid })
         authCheckSeqRef.current++
+        if (activeTransitionIdRef.current !== transitionId) return
         if (!result.success) {
           console.error('[usePrivateMessages] Failed to switch account')
           await restorePreviousWebSocket()
@@ -2035,6 +2045,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         // If removing the active account, disconnect WS first
         if (wasActiveAccount) {
           await window.electronAPI.bilibili.wsDisconnect()
+          if (transitionId !== null && activeTransitionIdRef.current !== transitionId) return
           setWsConnected(false)
         }
 
@@ -2043,6 +2054,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         if (result.success) {
           accountRemoved = true
           useDrafts.getState().clearAccountDrafts(mid)
+          if (transitionId !== null && activeTransitionIdRef.current !== transitionId) return
           setAccounts(result.remainingAccounts)
           setActiveAccountMid(result.activeAccountMid)
 
