@@ -175,18 +175,24 @@ export async function refreshCookies(
   }
   const nextCredentials = resolveCookieCredentials(refreshResponse.headers, MISSING_REFRESH_CREDENTIALS)
 
-  const confirmResponse = await send(COOKIE_REFRESH_ENDPOINTS.CONFIRM, requestOptions, {
-    method: 'POST',
-    headers: {
-      Cookie: cookieStringFromCredentials(nextCredentials),
-      'Content-Type': FORM_CONTENT_TYPE,
-    },
-    body: new URLSearchParams({
-      csrf: nextCredentials.bili_jct,
-      refresh_token: refreshToken,
-    }).toString(),
-  })
-  await readAccepted<BilibiliConfirmRefreshResponse>(confirmResponse)
+  try {
+    const confirmResponse = await send(COOKIE_REFRESH_ENDPOINTS.CONFIRM, requestOptions, {
+      method: 'POST',
+      headers: {
+        Cookie: cookieStringFromCredentials(nextCredentials),
+        'Content-Type': FORM_CONTENT_TYPE,
+      },
+      body: new URLSearchParams({
+        csrf: nextCredentials.bili_jct,
+        refresh_token: refreshToken,
+      }).toString(),
+    })
+    await readAccepted<BilibiliConfirmRefreshResponse>(confirmResponse)
+  } catch {
+    // Bilibili's refresh endpoint has already issued nextCredentials and
+    // nextRefreshToken; if confirming the old token fails, keep the rotated
+    // credentials so the caller does not lose the new session.
+  }
 
   return {
     credentials: nextCredentials,

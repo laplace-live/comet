@@ -488,3 +488,33 @@ test('refreshCookies rejects a refresh answer without complete Set-Cookie creden
   await assert.rejects(refreshCookies(credentials, 'old-refresh-token', { fetch }), { reason: 'credentials' })
   assert.equal(calls.length, 2)
 })
+
+test('refreshCookies keeps rotated credentials when confirm fails', async () => {
+  const nextCredentials: BilibiliCredentials = {
+    SESSDATA: 'next-session',
+    DedeUserID: 12345,
+    DedeUserID__ckMd5: 'next-checksum',
+    bili_jct: 'next-csrf',
+  }
+  const refreshBody = {
+    code: 0,
+    message: '0',
+    ttl: 1,
+    data: { status: 0, message: '', refresh_token: 'next-refresh-token' },
+  }
+  const { fetch, calls } = fakeFetch(
+    new Response('<div id="1-name">fixture-refresh-csrf</div>'),
+    Response.json(refreshBody, {
+      headers: cookieHeaders({ ...nextCredentials, DedeUserID: String(nextCredentials.DedeUserID) }),
+    }),
+    new Response('Bad gateway', { status: 502 })
+  )
+
+  const result = await refreshCookies(credentials, 'old-refresh-token', { fetch, timestamp: 1_700_000_000_000 })
+  assert.deepEqual(result, {
+    credentials: nextCredentials,
+    refreshToken: 'next-refresh-token',
+    response: refreshBody,
+  })
+  assert.equal(calls.length, 3)
+})

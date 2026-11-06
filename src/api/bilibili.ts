@@ -351,6 +351,10 @@ async function saveAccounts(accounts: StoredAccount[]): Promise<void> {
   store.set('accounts', await encryptData(accounts))
 }
 
+// Bumped whenever activeAccountMid or an account's stored credentials change, so in-flight login checks
+// cannot coalesce across account mutations or overwrite a newer selection.
+let accountStateVersion = 0
+
 // Add or update an account
 function saveAccount(
   credentials: BilibiliCredentials,
@@ -383,6 +387,7 @@ function saveAccount(
     if (!activeAccountMid || accounts.length === 1) {
       store.set('activeAccountMid', userInfo.mid)
     }
+    accountStateVersion++
   })
 }
 
@@ -399,6 +404,7 @@ function setActiveAccount(mid: number): Promise<boolean> {
     if (!account) return false
 
     store.set('activeAccountMid', mid)
+    accountStateVersion++
     return true
   })
 }
@@ -444,6 +450,7 @@ function removeAccount(mid: number): Promise<boolean> {
         store.set('activeAccountMid', null)
       }
     }
+    accountStateVersion++
 
     return true
   })
@@ -477,12 +484,13 @@ function reorderAccounts(mids: number[]): Promise<boolean> {
   })
 }
 
-// Mark an account as expired
-function markAccountExpired(mid: number): Promise<boolean> {
+// Mark an account as expired (only if its SESSDATA has not been replaced by a newer login or re-auth)
+function markAccountExpired(mid: number, expectedSessdata?: string): Promise<boolean> {
   return changeAccounts(async () => {
     const accounts = await getAccounts()
     const account = accounts.find(a => a.userInfo.mid === mid)
     if (!account) return false
+    if (expectedSessdata !== undefined && account.credentials.SESSDATA !== expectedSessdata) return false
 
     account.isExpired = true
     await saveAccounts(accounts)
@@ -509,6 +517,7 @@ function updateAccountCredentials(
     }
     account.isExpired = false // Clear expired flag on successful re-auth
     await saveAccounts(accounts)
+    accountStateVersion++
     return true
   })
 }
@@ -518,6 +527,7 @@ function clearAllAccounts(): Promise<void> {
   return changeAccounts(async () => {
     store.set('accounts', null)
     store.set('activeAccountMid', null)
+    accountStateVersion++
   })
 }
 
@@ -599,17 +609,22 @@ async function checkNavStatus(credentials: BilibiliCredentials, signal?: AbortSi
   }
 }
 
+const refreshInFlightByMid = new Map<number, Promise<void>>()
+
 /**
  * Check whether an account's cookies are due for rotation, and renew them with its `refreshToken` when Bilibili
  * asks for a refresh. Failures leave the working credentials in place.
  */
-async function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
+function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
   const {
     credentials,
     refreshToken,
     userInfo: { mid },
   } = account
-  if (!refreshToken) return
+  if (!refreshToken) return Promise.resolve()
+
+  const existing = refreshInFlightByMid.get(mid)
+  if (existing) return existing
 
   const updateIfTokenMatches = (mutate: (stored: StoredAccount) => void) =>
     changeAccounts(async () => {
@@ -620,36 +635,45 @@ async function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<vo
       await saveAccounts(accounts)
     })
 
-  try {
-    const { refresh, timestamp } = await checkCookieRefresh(credentials, {
-      headers: COMMON_HEADERS,
-      signal: AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT),
-    })
-    if (!refresh) return
-
-    const refreshed = await refreshCookies(credentials, refreshToken, {
-      headers: COMMON_HEADERS,
-      timestamp,
-      signal: AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT),
-    })
-    if (refreshed.credentials.DedeUserID !== mid) {
-      console.warn('Refreshed cookies belong to a different UID; ignoring')
-      return
-    }
-
-    await updateIfTokenMatches(stored => {
-      stored.credentials = refreshed.credentials
-      stored.refreshToken = refreshed.refreshToken
-      stored.isExpired = false
-    })
-  } catch (error) {
-    if (error instanceof QRLoginError && error.reason === 'api' && error.code === 86095) {
-      await updateIfTokenMatches(stored => {
-        delete stored.refreshToken
+  const promise = (async () => {
+    try {
+      const { refresh, timestamp } = await checkCookieRefresh(credentials, {
+        headers: COMMON_HEADERS,
+        signal: AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT),
       })
+      if (!refresh) return
+
+      const refreshed = await refreshCookies(credentials, refreshToken, {
+        headers: COMMON_HEADERS,
+        timestamp,
+        signal: AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT),
+      })
+      if (refreshed.credentials.DedeUserID !== mid) {
+        console.warn('Refreshed cookies belong to a different UID; ignoring')
+        return
+      }
+
+      await updateIfTokenMatches(stored => {
+        stored.credentials = refreshed.credentials
+        stored.refreshToken = refreshed.refreshToken
+        stored.isExpired = false
+      })
+    } catch (error) {
+      if (error instanceof QRLoginError && error.reason === 'api' && error.code === 86095) {
+        await updateIfTokenMatches(stored => {
+          delete stored.refreshToken
+        })
+      }
+      console.warn('Failed to refresh Bilibili cookies; keeping current credentials:', error)
     }
-    console.warn('Failed to refresh Bilibili cookies; keeping current credentials:', error)
-  }
+  })().finally(() => {
+    if (refreshInFlightByMid.get(mid) === promise) {
+      refreshInFlightByMid.delete(mid)
+    }
+  })
+
+  refreshInFlightByMid.set(mid, promise)
+  return promise
 }
 
 /**
@@ -823,16 +847,18 @@ export function registerBilibiliIpcHandlers() {
 
   // Check if credentials are valid
   // Validates the active account, renews its cookies when due, and switches to the next valid account if expired.
-  // Concurrent calls share one in-flight check so mount-time checks never race a one-use refresh_token.
-  let checkLoginInFlight: Promise<CheckLoginResult> | null = null
+  // Concurrent calls share one in-flight check so mount-time checks never race a one-use refresh_token, while
+  // any account mutation invalidates the in-flight check so callers always observe the updated account state.
+  let checkLoginInFlight: { version: number; promise: Promise<CheckLoginResult> } | null = null
 
   const syncLoggedInAccount = async (
     account: StoredAccount,
     profile: StoredAccountUserInfo,
+    version: number,
     switchActive = false
   ): Promise<CheckLoginResult> => {
     await refreshAccountCookiesIfNeeded(account)
-    if (switchActive) {
+    if (switchActive && accountStateVersion === version) {
       await setActiveAccount(account.userInfo.mid)
     }
 
@@ -847,7 +873,7 @@ export function registerBilibiliIpcHandlers() {
         if (!stored) return
 
         let needsSave = false
-        if (stored.isExpired) {
+        if (stored.isExpired && stored.credentials.SESSDATA === account.credentials.SESSDATA) {
           stored.isExpired = false
           needsSave = true
         }
@@ -868,7 +894,7 @@ export function registerBilibiliIpcHandlers() {
     return { isLogin: true, ...profile }
   }
 
-  const runCheckLogin = async (): Promise<CheckLoginResult> => {
+  const runCheckLogin = async (version: number): Promise<CheckLoginResult> => {
     const activeAccount = await getActiveAccount()
     if (!activeAccount) {
       return { isLogin: false }
@@ -878,7 +904,7 @@ export function registerBilibiliIpcHandlers() {
     const navResult = await checkNavStatus(activeAccount.credentials)
 
     if (navResult.status === 'logged_in') {
-      return syncLoggedInAccount(activeAccount, navResult.profile)
+      return syncLoggedInAccount(activeAccount, navResult.profile, version)
     }
 
     if (navResult.status === 'unreachable') {
@@ -889,21 +915,27 @@ export function registerBilibiliIpcHandlers() {
     }
 
     // Active account is expired - mark it as expired instead of removing
-    await markAccountExpired(activeAccountMid)
+    await markAccountExpired(activeAccountMid, activeAccount.credentials.SESSDATA)
+
+    // If the user changed accounts while this check was in flight, do not fail over on their behalf
+    if (accountStateVersion !== version) {
+      return { isLogin: false, expiredAccountMid: activeAccountMid }
+    }
 
     // Try to find another non-expired account with valid credentials
     const accounts = await getAccounts()
     for (const account of accounts) {
+      if (accountStateVersion !== version) break
       if (account.userInfo.mid === activeAccountMid) continue // Skip the one we just marked expired
       if (account.isExpired) continue // Skip already-expired accounts
 
       const accountNav = await checkNavStatus(account.credentials)
       if (accountNav.status === 'logged_in') {
-        return syncLoggedInAccount(account, accountNav.profile, true)
+        return syncLoggedInAccount(account, accountNav.profile, version, true)
       }
       if (accountNav.status === 'expired') {
         // This account is also expired - mark it
-        await markAccountExpired(account.userInfo.mid)
+        await markAccountExpired(account.userInfo.mid, account.credentials.SESSDATA)
       }
     }
 
@@ -913,12 +945,16 @@ export function registerBilibiliIpcHandlers() {
   }
 
   ipcMain.handle(IpcChannel.BILIBILI_CHECK_LOGIN, () => {
-    if (!checkLoginInFlight) {
-      checkLoginInFlight = runCheckLogin().finally(() => {
-        checkLoginInFlight = null
+    if (!checkLoginInFlight || checkLoginInFlight.version !== accountStateVersion) {
+      const version = accountStateVersion
+      const promise = runCheckLogin(version).finally(() => {
+        if (checkLoginInFlight?.promise === promise) {
+          checkLoginInFlight = null
+        }
       })
+      checkLoginInFlight = { version, promise }
     }
-    return checkLoginInFlight
+    return checkLoginInFlight.promise
   })
 
   // Get all stored accounts (for account switcher UI)

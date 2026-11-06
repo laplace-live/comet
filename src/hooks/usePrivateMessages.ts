@@ -260,6 +260,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const listsAccountRef = useRef(0)
   // Bumped by every load of 未关注人消息 and by the account changing, so only the latest load lands
   const unfollowedLoadRef = useRef(0)
+  // The mid of the account currently connected in the renderer, so background login checks can detect failovers
+  const connectedMidRef = useRef<number | null>(null)
   const unfollowed = useMemo<UnfollowedFold | null>(
     () =>
       unfollowFold
@@ -740,30 +742,15 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     [userInfo, findListedSession, isFolded]
   )
 
-  // Check login status
-  const checkLogin = useCallback(async (): Promise<boolean> => {
-    try {
-      const result = await window.electronAPI.bilibili.checkLogin()
-      setUserInfo(result)
-
-      // Refresh accounts after checkLogin since it may have removed expired accounts
-      const accountsResult = await window.electronAPI.bilibili.getAccounts()
-      setAccounts(accountsResult.accounts)
-      setActiveAccountMid(accountsResult.activeAccountMid)
-
-      if (result.isLogin) {
-        setIsConnected(true)
-        return true
-      }
-
-      setIsConnected(false)
-      return false
-    } catch (err) {
-      console.error('Failed to check login:', err)
-      setIsConnected(false)
-      return false
-    }
-  }, [])
+  const resetAccountState = useCallback(() => {
+    setSessions([])
+    setSelectedSession(null)
+    setMessages([])
+    setUserCache({})
+    setHasMoreSessions(false)
+    setNextEndTs(null)
+    forgetAccountLists()
+  }, [forgetAccountLists])
 
   // Load the signed-in account's sessions from the first page. Its 收起未关注人消息 setting, read first unless
   // given (unreadable, nothing folds), decides whether chats with people it doesn't follow list here or in
@@ -826,6 +813,54 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     [readUnfollowFold, fetchUnfollowed, applyUnfollowFold, showUnfollowed, fetchUserInfoBatch]
   )
 
+  // Check login status
+  const checkLogin = useCallback(async (): Promise<boolean> => {
+    const previousMid = connectedMidRef.current
+    try {
+      const result = await window.electronAPI.bilibili.checkLogin()
+      setUserInfo(result)
+
+      // Refresh accounts after checkLogin since it may have marked expired accounts
+      const accountsResult = await window.electronAPI.bilibili.getAccounts()
+      setAccounts(accountsResult.accounts)
+      setActiveAccountMid(accountsResult.activeAccountMid)
+
+      if (result.isLogin) {
+        const nextMid = result.mid ?? null
+        connectedMidRef.current = nextMid
+        setIsConnected(true)
+
+        // When a background check fails over from an expired active account to another valid account,
+        // clear the previous account's state, load the new account's sessions, and reconnect WebSocket
+        if (previousMid !== null && nextMid !== null && nextMid !== previousMid) {
+          await window.electronAPI.bilibili.wsDisconnect()
+          setWsConnected(false)
+          resetAccountState()
+          try {
+            await loadSessions()
+          } catch (err) {
+            console.error('Failed to fetch sessions for the next account:', err)
+          }
+          await window.electronAPI.bilibili.wsConnect()
+        }
+        return true
+      }
+
+      if (previousMid !== null) {
+        connectedMidRef.current = null
+        await window.electronAPI.bilibili.wsDisconnect()
+        setWsConnected(false)
+        resetAccountState()
+      }
+      setIsConnected(false)
+      return false
+    } catch (err) {
+      console.error('Failed to check login:', err)
+      setIsConnected(false)
+      return false
+    }
+  }, [loadSessions, resetAccountState])
+
   // Logout
   const logout = useCallback(async () => {
     try {
@@ -841,13 +876,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       }
 
       // Clear current session state
-      setSessions([])
-      setSelectedSession(null)
-      setMessages([])
-      setUserCache({})
-      setHasMoreSessions(false)
-      setNextEndTs(null)
-      forgetAccountLists()
+      connectedMidRef.current = null
+      resetAccountState()
 
       // Check login - this may remove additional expired accounts on the backend
       const loginResult = await window.electronAPI.bilibili.checkLogin()
@@ -859,6 +889,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       setActiveAccountMid(accountsResult.activeAccountMid)
 
       if (loginResult.isLogin) {
+        connectedMidRef.current = loginResult.mid ?? null
         setIsConnected(true)
         // Fetch sessions for the new account
         try {
@@ -876,7 +907,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     } catch (err) {
       console.error('Failed to logout:', err)
     }
-  }, [loadSessions, forgetAccountLists, userInfo?.mid])
+  }, [loadSessions, resetAccountState, userInfo?.mid])
 
   const fetchSessions = useCallback(async () => {
     setLoading(true)
@@ -886,7 +917,6 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (await loadSessions()) setIsConnected(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to fetch sessions')
-      setIsConnected(false)
     } finally {
       setLoading(false)
     }
@@ -1854,13 +1884,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         }
 
         // Clear current state
-        setSessions([])
-        setSelectedSession(null)
-        setMessages([])
-        setUserCache({})
-        setHasMoreSessions(false)
-        setNextEndTs(null)
-        forgetAccountLists()
+        connectedMidRef.current = null
+        resetAccountState()
 
         // Re-check login with new account - this may remove expired accounts
         const loginResult = await window.electronAPI.bilibili.checkLogin()
@@ -1873,6 +1898,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setActiveAccountMid(accountsResult.activeAccountMid)
 
         if (loginResult.isLogin) {
+          connectedMidRef.current = loginResult.mid ?? null
           setIsConnected(true)
           // Fetch sessions for the new account
           try {
@@ -1889,7 +1915,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         console.error('[usePrivateMessages] Failed to switch account:', err)
       }
     },
-    [loadSessions, forgetAccountLists]
+    [loadSessions, resetAccountState]
   )
 
   // Remove an account
@@ -1917,13 +1943,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
               await switchAccount(result.activeAccountMid)
             } else {
               // No more accounts, reset to logged out state
+              connectedMidRef.current = null
               setIsConnected(false)
               setUserInfo(null)
-              setSessions([])
-              setSelectedSession(null)
-              setMessages([])
-              setUserCache({})
-              forgetAccountLists()
+              resetAccountState()
             }
           }
         } else {
@@ -1944,7 +1967,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         }
       }
     },
-    [activeAccountMid, switchAccount, forgetAccountLists]
+    [activeAccountMid, switchAccount, resetAccountState]
   )
 
   // Start adding a new account (shows QR dialog)

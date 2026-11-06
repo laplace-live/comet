@@ -520,3 +520,43 @@ test('BILIBILI_REAUTH_ACCOUNT updates credentials and refreshToken', async t => 
   const storedAccounts = await api.getAccounts()
   assert.equal(storedAccounts[0]?.refreshToken, 'reauth-refresh-token')
 })
+
+test('BILIBILI_CHECK_LOGIN starts a fresh check when the active account changes while a check is in flight', async t => {
+  const other = { ...credentials, DedeUserID: 67890, SESSDATA: 'other-session' }
+  const otherUser = { mid: 67890, uname: 'Second user', face: 'https://example.invalid/second.png' }
+
+  mockFetch(t, [pollResponse(), navResponse()])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
+
+  mockFetch(t, [pollResponse(legacyUrl(other)), Response.json({ code: 0, data: { isLogin: true, ...otherUser } })])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'other-key' })
+
+  const firstNav = Promise.withResolvers()
+  const firstNavStarted = Promise.withResolvers()
+  t.mock.method(globalThis, 'fetch', async (input, init = {}) => {
+    const url = String(input)
+    const cookie = new Headers(init.headers).get('Cookie') || ''
+    if (url === endpoints.NAV) {
+      if (cookie.includes(`DedeUserID=${credentials.DedeUserID}`)) {
+        firstNavStarted.resolve()
+        return firstNav.promise
+      }
+      return Response.json({ code: 0, data: { isLogin: true, ...otherUser } })
+    }
+    if (url.startsWith(refreshEndpoints.INFO)) {
+      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: false, timestamp: 1_700_000_000_000 } })
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+
+  const staleCheck = invoke(channels.BILIBILI_CHECK_LOGIN)
+  await firstNavStarted.promise
+
+  await invoke(channels.BILIBILI_SET_ACTIVE_ACCOUNT, { mid: otherUser.mid })
+  const switchedCheck = invoke(channels.BILIBILI_CHECK_LOGIN)
+  firstNav.resolve(navResponse())
+
+  assert.deepEqual(await switchedCheck, { isLogin: true, ...otherUser })
+  assert.deepEqual(await staleCheck, { isLogin: true, ...userInfo })
+  assert.equal(api.getActiveAccountMid(), otherUser.mid)
+})
