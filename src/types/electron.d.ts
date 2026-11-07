@@ -176,6 +176,16 @@ export interface StoredAccountInfo {
   uname: string
   face?: string
   isExpired?: boolean
+  /** Unix timestamp in seconds when SESSDATA expires, if encoded in the cookie */
+  expiresAt?: number
+  /** Whether a refresh_token is stored so cookies can be renewed automatically */
+  hasRefreshToken?: boolean
+  /** Unix timestamp in seconds when cookie refresh status was last checked */
+  lastRefreshCheckAt?: number
+  /** Unix timestamp in seconds when the next automatic cookie refresh check is scheduled */
+  nextRefreshCheckAt?: number
+  /** Unix timestamp in seconds when cookies were last rotated */
+  lastRefreshedAt?: number
 }
 
 export interface QRPollResult {

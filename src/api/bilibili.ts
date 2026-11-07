@@ -31,6 +31,7 @@ import type {
   FetchCustomerServiceMessagesParams,
   SendCustomerServiceMessageParams,
   SetUnfollowFoldParams,
+  StoredAccountInfo,
   UploadImageParams,
   UploadImageResult,
 } from '@/types/electron'
@@ -206,6 +207,43 @@ export interface StoredAccount {
   refreshToken?: string
   userInfo: StoredAccountUserInfo
   isExpired?: boolean
+  lastRefreshedAt?: number
+}
+
+// Tracks the Unix timestamp (in seconds) of the most recent cookie refresh check per account mid
+const lastRefreshCheckAtByMid = new Map<number, number>()
+
+/**
+ * Parse the Unix expiration timestamp (in seconds) from a Bilibili `SESSDATA` cookie value
+ * (`<token>,<expires_unix_seconds>,<signature>`), or undefined when not present.
+ */
+function parseSessdataExpiresAt(sessdata: string): number | undefined {
+  const raw = sessdata.split(',')[1]?.trim()
+  if (!raw || !/^\d+$/.test(raw)) return undefined
+  const seconds = Number(raw)
+  return Number.isSafeInteger(seconds) && seconds > 0 ? seconds : undefined
+}
+
+function toStoredAccountInfo(account: StoredAccount): StoredAccountInfo {
+  const expiresAt = parseSessdataExpiresAt(account.credentials.SESSDATA)
+  const hasRefreshToken = Boolean(account.refreshToken)
+  const lastRefreshCheckAt = hasRefreshToken ? lastRefreshCheckAtByMid.get(account.userInfo.mid) : undefined
+  const nextRefreshCheckAt =
+    lastRefreshCheckAt !== undefined
+      ? lastRefreshCheckAt + Math.floor(LOGIN_CONFIG.COOKIE_CHECK_INTERVAL / 1000)
+      : undefined
+
+  return {
+    mid: account.userInfo.mid,
+    uname: account.userInfo.uname,
+    face: account.userInfo.face,
+    isExpired: account.isExpired || false,
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
+    hasRefreshToken,
+    ...(lastRefreshCheckAt !== undefined ? { lastRefreshCheckAt } : {}),
+    ...(nextRefreshCheckAt !== undefined ? { nextRefreshCheckAt } : {}),
+    ...(account.lastRefreshedAt !== undefined ? { lastRefreshedAt: account.lastRefreshedAt } : {}),
+  }
 }
 
 interface AccountsStoreSchema {
@@ -358,6 +396,7 @@ async function saveAccounts(accounts: StoredAccount[]): Promise<void> {
         credentials: account.credentials,
         userInfo: account.userInfo,
         isExpired: account.isExpired,
+        ...(account.lastRefreshedAt !== undefined ? { lastRefreshedAt: account.lastRefreshedAt } : {}),
       }))
   store.set('accounts', await encryptData(accountsToSave))
 }
@@ -384,6 +423,9 @@ function saveAccount(
     }
 
     if (existingIndex >= 0) {
+      if (accounts[existingIndex].credentials.SESSDATA !== credentials.SESSDATA) {
+        lastRefreshCheckAtByMid.delete(userInfo.mid)
+      }
       // Update existing account - preserve userInfo but update credentials and clear expired
       accounts[existingIndex] = newAccount
     } else {
@@ -451,6 +493,7 @@ function removeAccount(mid: number): Promise<boolean> {
     }
 
     await saveAccounts(filteredAccounts)
+    lastRefreshCheckAtByMid.delete(mid)
 
     // If we removed the active account, switch to another one
     const activeAccountMid = getActiveAccountMid()
@@ -526,10 +569,13 @@ function updateAccountCredentials(
 
     const sameSession = account.credentials.SESSDATA === credentials.SESSDATA
     account.credentials = credentials
+    if (!sameSession) {
+      delete account.refreshToken
+      delete account.lastRefreshedAt
+      lastRefreshCheckAtByMid.delete(mid)
+    }
     if (refreshToken) {
       account.refreshToken = refreshToken
-    } else if (!sameSession) {
-      delete account.refreshToken
     }
     account.isExpired = false // Clear expired flag on successful re-auth
     await saveAccounts(accounts)
@@ -543,6 +589,7 @@ function clearAllAccounts(): Promise<void> {
   return changeAccounts(async () => {
     store.set('accounts', null)
     store.set('activeAccountMid', null)
+    lastRefreshCheckAtByMid.clear()
     accountStateVersion++
   })
 }
@@ -673,6 +720,8 @@ function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
         fetch: fetchWithRefreshTimeout,
         headers: COMMON_HEADERS,
       })
+      const checkedAt = Math.floor((Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now()) / 1000)
+      lastRefreshCheckAtByMid.set(mid, checkedAt)
       if (!refresh) return
 
       await refreshCookies(credentials, refreshToken, {
@@ -686,12 +735,14 @@ function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
           await updateIfTokenMatches(stored => {
             stored.credentials = rotated.credentials
             stored.refreshToken = rotated.refreshToken
+            stored.lastRefreshedAt = checkedAt
             stored.isExpired = false
           })
         },
       })
     } catch (error) {
       if (error instanceof QRLoginError && error.reason === 'api' && error.code === 86095) {
+        lastRefreshCheckAtByMid.delete(mid)
         await updateIfTokenMatches(stored => {
           delete stored.refreshToken
         })
@@ -1037,14 +1088,9 @@ export function registerBilibiliIpcHandlers() {
     const accounts = await getAccounts()
     const activeAccountMid = getActiveAccountMid()
 
-    // Return accounts without credentials (only user info for display)
+    // Return accounts without credentials (only user info and session status for display)
     return {
-      accounts: accounts.map(a => ({
-        mid: a.userInfo.mid,
-        uname: a.userInfo.uname,
-        face: a.userInfo.face,
-        isExpired: a.isExpired || false,
-      })),
+      accounts: accounts.map(toStoredAccountInfo),
       activeAccountMid,
     }
   })
@@ -1065,12 +1111,7 @@ export function registerBilibiliIpcHandlers() {
 
     return {
       success,
-      remainingAccounts: accounts.map(a => ({
-        mid: a.userInfo.mid,
-        uname: a.userInfo.uname,
-        face: a.userInfo.face,
-        isExpired: a.isExpired || false,
-      })),
+      remainingAccounts: accounts.map(toStoredAccountInfo),
       activeAccountMid,
     }
   })
@@ -1084,12 +1125,7 @@ export function registerBilibiliIpcHandlers() {
 
     return {
       success,
-      accounts: accounts.map(a => ({
-        mid: a.userInfo.mid,
-        uname: a.userInfo.uname,
-        face: a.userInfo.face,
-        isExpired: a.isExpired || false,
-      })),
+      accounts: accounts.map(toStoredAccountInfo),
       activeAccountMid,
     }
   })

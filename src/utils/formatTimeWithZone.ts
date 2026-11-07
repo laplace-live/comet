@@ -51,6 +51,17 @@ export function getLocalTimeZoneLabel(referenceDate: Date = new Date()): string 
   }
 }
 
+function formatZhParts(timestampMs: number, options: Intl.DateTimeFormatOptions) {
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    ...options,
+  }).formatToParts(new Date(timestampMs))
+  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value || ''
+  return { datePart: `${get('year')}/${get('month')}/${get('day')}`, get }
+}
+
 /**
  * Format a date in a specific timezone as `YYYY/MM/DD周X HH:mm:ss`.
  *
@@ -59,11 +70,7 @@ export function getLocalTimeZoneLabel(referenceDate: Date = new Date()): string 
  * `toLocaleString` ordering.
  */
 export function formatDateInZone(timestampMs: number, timeZone?: string): string {
-  const date = new Date(timestampMs)
-  const dtf = new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
+  const { datePart, get } = formatZhParts(timestampMs, {
     weekday: 'short',
     hour: '2-digit',
     minute: '2-digit',
@@ -72,12 +79,12 @@ export function formatDateInZone(timestampMs: number, timeZone?: string): string
     timeZone,
   })
 
-  const parts = dtf.formatToParts(date)
-  const get = (type: Intl.DateTimeFormatPartTypes) => parts.find(p => p.type === type)?.value || ''
+  return `${datePart}${get('weekday')}  ${get('hour')}:${get('minute')}:${get('second')}`
+}
 
-  const datePart = `${get('year')}/${get('month')}/${get('day')}`
-  const weekday = get('weekday')
-  const timePart = `${get('hour')}:${get('minute')}:${get('second')}`
-
-  return `${datePart}${weekday}  ${timePart}`
+/**
+ * Format a date in a specific timezone as `YYYY/MM/DD`.
+ */
+export function formatDateShort(timestampMs: number, timeZone?: string): string {
+  return formatZhParts(timestampMs, { timeZone }).datePart
 }

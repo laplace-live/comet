@@ -174,10 +174,18 @@ function stalledResponse(_url, { signal }) {
   })
 }
 
-async function assertStored(expectedCredentials = credentials, expectedUser = userInfo) {
+async function assertStored(expectedCredentials = credentials, expectedUser = userInfo, extraAccountFields = {}) {
   assert.deepEqual(await invoke(channels.BILIBILI_GET_CREDENTIALS), expectedCredentials)
   assert.deepEqual(await invoke(channels.BILIBILI_GET_ACCOUNTS), {
-    accounts: [{ ...expectedUser, face: expectedUser.face, isExpired: false }],
+    accounts: [
+      {
+        ...expectedUser,
+        face: expectedUser.face,
+        isExpired: false,
+        hasRefreshToken: true,
+        ...extraAccountFields,
+      },
+    ],
     activeAccountMid: expectedUser.mid,
   })
 }
@@ -417,7 +425,7 @@ test('BILIBILI_CHECK_LOGIN renews cookies when Bilibili signals refresh and pers
   await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
 
   const refreshedCredentials = {
-    SESSDATA: 'refreshed-session',
+    SESSDATA: 'refreshed-session,1715552000,refreshed-sig',
     DedeUserID: 12345,
     DedeUserID__ckMd5: 'refreshed-checksum',
     bili_jct: 'refreshed-csrf',
@@ -448,7 +456,12 @@ test('BILIBILI_CHECK_LOGIN renews cookies when Bilibili signals refresh and pers
   const checkResult = await invoke(channels.BILIBILI_CHECK_LOGIN)
   assert.deepEqual(checkResult, { isLogin: true, ...userInfo })
   assert.equal(calls.length, 5)
-  await assertStored(refreshedCredentials, userInfo)
+  await assertStored(refreshedCredentials, userInfo, {
+    expiresAt: 1_715_552_000,
+    lastRefreshCheckAt: 1_700_000_000,
+    nextRefreshCheckAt: 1_700_021_600,
+    lastRefreshedAt: 1_700_000_000,
+  })
   const storedAccounts = await api.getAccounts()
   assert.equal(storedAccounts[0]?.refreshToken, 'rotated-refresh')
 })
@@ -497,8 +510,14 @@ test('BILIBILI_CHECK_LOGIN marks an explicitly signed-out account expired and sw
   assert.deepEqual(checkResult, { isLogin: true, ...otherUser })
   assert.deepEqual(await invoke(channels.BILIBILI_GET_ACCOUNTS), {
     accounts: [
-      { ...userInfo, isExpired: true },
-      { ...otherUser, isExpired: false },
+      { ...userInfo, isExpired: true, hasRefreshToken: true },
+      {
+        ...otherUser,
+        isExpired: false,
+        hasRefreshToken: true,
+        lastRefreshCheckAt: 1_700_000_000,
+        nextRefreshCheckAt: 1_700_021_600,
+      },
     ],
     activeAccountMid: otherUser.mid,
   })
@@ -566,4 +585,36 @@ test('BILIBILI_CHECK_LOGIN starts a fresh check when the active account changes 
   assert.deepEqual(await switchedCheck, { isLogin: true, ...otherUser })
   assert.deepEqual(await staleCheck, { isLogin: true, ...otherUser })
   assert.equal(api.getActiveAccountMid(), otherUser.mid)
+})
+
+test('BILIBILI_GET_ACCOUNTS exposes SESSDATA expiration and clears refresh schedule when refresh_token is rejected', async t => {
+  const timedCredentials = {
+    ...credentials,
+    SESSDATA: 'fixture-session,1780576320,fixture-sig',
+  }
+  mockFetch(t, [pollResponse(legacyUrl(timedCredentials)), navResponse()])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
+  await assertStored(timedCredentials, userInfo, { expiresAt: 1_780_576_320 })
+
+  // Code 86095 invalidates the stored refresh_token and clears the check schedule
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = String(input)
+    if (url === endpoints.NAV) return navResponse()
+    if (url.startsWith(refreshEndpoints.INFO)) {
+      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: true, timestamp: 1_700_000_000_000 } })
+    }
+    if (url.startsWith(`${refreshEndpoints.CORRESPOND}/`)) {
+      return new Response('<html><div id="1-name">fixture-refresh-csrf</div></html>')
+    }
+    if (url === refreshEndpoints.REFRESH) {
+      return Response.json({ code: 86095, message: 'refresh_csrf 错误或 refresh_token 与 cookie 不匹配', ttl: 1 })
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+
+  await invoke(channels.BILIBILI_CHECK_LOGIN)
+  await assertStored(timedCredentials, userInfo, {
+    expiresAt: 1_780_576_320,
+    hasRefreshToken: false,
+  })
 })

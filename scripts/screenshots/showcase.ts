@@ -334,7 +334,7 @@ function loginUrl(key: AccountKey): string {
   const url = new URL('https://passport.biligame.com/x/passport-login/web/crossDomain')
   url.searchParams.set('DedeUserID', String(mid))
   url.searchParams.set('DedeUserID__ckMd5', createHash('md5').update(String(mid)).digest('hex').slice(0, 16))
-  url.searchParams.set('SESSDATA', `showcase-${key}`)
+  url.searchParams.set('SESSDATA', `showcase-${key},${seconds(-180 * DAY)},showcase`)
   url.searchParams.set('bili_jct', 'showcase')
   return url.toString()
 }
