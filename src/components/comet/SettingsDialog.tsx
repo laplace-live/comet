@@ -19,15 +19,42 @@ import { useCallback, useEffect, useState } from 'react'
 
 import type { StoredAccountInfo } from '@/types/electron'
 
+import { LOGIN_CONFIG } from '@/lib/const'
+
 import { enforceHttps } from '@/utils/enforceHttps'
+import { formatDateShort } from '@/utils/formatTimeWithZone'
 import { modifierKey } from '@/utils/platform'
+import { timeFromNowGranular } from '@/utils/timeFromNow'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Badge } from '@/components/ui/badge'
 import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 
 import { useSettings } from '@/stores/useSettings'
+import { TimeTooltip } from './TimeTooltip'
+
+const REFRESH_CHECK_INTERVAL_HOURS = Math.round(LOGIN_CONFIG.COOKIE_CHECK_INTERVAL / (60 * 60 * 1000))
+const TIME_TOOLTIP_CLASS = 'cursor-default text-foreground underline decoration-dotted underline-offset-2'
+
+function formatSessionRemaining(expiresAtSec: number): string {
+  const diffSec = expiresAtSec - Math.floor(Date.now() / 1000)
+  if (diffSec <= 0) {
+    return '已到期'
+  }
+  if (diffSec >= 86_400) {
+    return `${Math.round(diffSec / 86_400)} 天后`
+  }
+  return timeFromNowGranular(expiresAtSec * 1000)
+}
+
+function formatNextCheckTime(nextCheckAtSec: number): string {
+  if (nextCheckAtSec <= Math.floor(Date.now() / 1000)) {
+    return '即将检查'
+  }
+  return timeFromNowGranular(nextCheckAtSec * 1000)
+}
 
 // Sortable account item for drag-and-drop reordering
 interface SortableAccountItemProps {
@@ -121,6 +148,28 @@ export function SettingsDialog({
     setLocalAccounts(accounts)
   }, [accounts])
 
+  const activeAccount = localAccounts.find(a => a.mid === activeAccountMid) ?? localAccounts[0]
+  const [, setClockTick] = useState(0)
+  const statusBadge = activeAccount?.isExpired
+    ? { variant: 'warning' as const, label: '需重新登录' }
+    : activeAccount?.hasRefreshToken
+      ? { variant: 'success' as const, label: '自动续期已开启' }
+      : { variant: 'secondary' as const, label: '未开启自动续期' }
+
+  // Keep relative expiration and refresh countdown labels live while Settings is open
+  useEffect(() => {
+    if (!settingsOpen || !activeAccount) return
+    let timerId: ReturnType<typeof setTimeout>
+    const scheduleTick = () => {
+      timerId = setTimeout(() => {
+        setClockTick(tick => tick + 1)
+        scheduleTick()
+      }, 1_000)
+    }
+    scheduleTick()
+    return () => clearTimeout(timerId)
+  }, [settingsOpen, activeAccount])
+
   // DnD sensors
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -203,9 +252,70 @@ export function SettingsDialog({
               </div>
             )}
 
+            {/* Login Session Status Section */}
+            {activeAccount && (
+              <div className='space-y-4'>
+                {localAccounts.length > 1 && <Separator />}
+                <div className='space-y-1.5'>
+                  <div className='flex items-center justify-between gap-4'>
+                    <h3 className='text-sm font-medium'>登录状态</h3>
+                    <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
+                  </div>
+                  <div className='space-y-0.5 text-xs text-muted-foreground'>
+                    <p>
+                      {activeAccount.isExpired ? (
+                        '当前会话已过期，请重新扫码登录'
+                      ) : activeAccount.expiresAt ? (
+                        <>
+                          当前会话将于{' '}
+                          <TimeTooltip timestamp={activeAccount.expiresAt} className={TIME_TOOLTIP_CLASS}>
+                            {formatDateShort(activeAccount.expiresAt * 1000)}（
+                            {formatSessionRemaining(activeAccount.expiresAt)}）
+                          </TimeTooltip>{' '}
+                          过期
+                        </>
+                      ) : (
+                        '当前登录会话有效'
+                      )}
+                    </p>
+                    {!activeAccount.isExpired && (
+                      <p>
+                        {activeAccount.hasRefreshToken ? (
+                          <>
+                            每 {REFRESH_CHECK_INTERVAL_HOURS} 小时检查一次并在需要时自动续期
+                            {activeAccount.nextRefreshCheckAt !== undefined && (
+                              <>
+                                ，下次检查：
+                                <TimeTooltip
+                                  timestamp={activeAccount.nextRefreshCheckAt}
+                                  className={TIME_TOOLTIP_CLASS}
+                                >
+                                  {formatNextCheckTime(activeAccount.nextRefreshCheckAt)}
+                                </TimeTooltip>
+                              </>
+                            )}
+                            {activeAccount.lastRefreshedAt !== undefined && (
+                              <>
+                                ，上次续期：
+                                <TimeTooltip timestamp={activeAccount.lastRefreshedAt} className={TIME_TOOLTIP_CLASS}>
+                                  {timeFromNowGranular(activeAccount.lastRefreshedAt * 1000)}
+                                </TimeTooltip>
+                              </>
+                            )}
+                          </>
+                        ) : (
+                          '当前会话缺少刷新凭据，重新登录后可启用自动续期'
+                        )}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Message Settings Section */}
             <div className='space-y-4'>
-              {localAccounts.length > 1 && <Separator />}
+              {activeAccount && <Separator />}
               <div className='flex items-center justify-between gap-4'>
                 <div className='space-y-0.5'>
                   <label htmlFor='unfollow-fold' className='text-sm font-medium'>

@@ -22,9 +22,9 @@ export function timeFromNow(time: number, { locale: loc = 'zh-CN' }: RelativeTim
  * is helpful inside detailed timestamp tooltips.
  */
 export function timeFromNowGranular(time: number, { locale: loc = 'zh-CN' }: RelativeTimeProps = {}): string {
-  const diffMs = Date.now() - time
-  const isPast = diffMs >= 0
-  const totalSec = Math.floor(Math.abs(diffMs) / 1000)
+  const diffSec = Math.floor(Date.now() / 1000) - Math.floor(time / 1000)
+  const isPast = diffSec >= 0
+  const totalSec = Math.abs(diffSec)
 
   if (loc !== 'zh-CN') {
     locale(loc)

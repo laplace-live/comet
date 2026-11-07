@@ -7,6 +7,10 @@ import { QR_CODE_STATUS } from '@/types/bilibili'
 
 import { type UseQRCodeLoginOptions, type UseQRCodeLoginResult, useQRCodeLogin } from '@/hooks/useQRCodeLogin'
 
+import { SettingsDialog } from '@/components/comet/SettingsDialog'
+
+import { useSettings } from '@/stores/useSettings'
+
 const globals = window as unknown as {
   IS_REACT_ACT_ENVIRONMENT: boolean
   __rendererTestResults: { tests: Array<{ name: string; ok: boolean; error?: string }> }
@@ -315,6 +319,127 @@ test('expired QR stops polling', async () => {
   pollImpl = async () => polled(QR_CODE_STATUS.EXPIRED)
   await advance(3000)
   assert(current.status === 'expired' && timers.size === 0, 'expiration must stop polling')
+})
+
+test('settings dialog shows current login session expiration and refresh schedule', async () => {
+  timers.clear()
+  now = 0
+  const container = document.createElement('div')
+  document.body.replaceChildren(container)
+  root = createRoot(container)
+  useSettings.getState().openSettings()
+
+  const realDateNow = Date.now
+  let fakeNowMs = 1_700_000_000_000
+  Date.now = () => fakeNowMs
+
+  const nowSec = Math.floor(fakeNowMs / 1000)
+  const expiresAt = nowSec + 180 * 86_400 + 3600
+  const nextRefreshCheckAt = nowSec + 6 * 3600
+  const lastRefreshedAt = nowSec - 1800
+
+  try {
+    await flush(() =>
+      root.render(
+        <SettingsDialog
+          accounts={[
+            {
+              mid: 123,
+              uname: 'Active User',
+              isExpired: false,
+              expiresAt,
+              hasRefreshToken: true,
+              nextRefreshCheckAt,
+              lastRefreshedAt,
+            },
+          ]}
+          activeAccountMid={123}
+        />
+      )
+    )
+
+    const text = document.body.textContent ?? ''
+    assert(text.includes('登录状态'), 'settings dialog should render login status heading')
+    assert(text.includes('自动续期已开启'), 'settings dialog should indicate auto-refresh is enabled')
+    assert(text.includes('180 天后'), 'settings dialog should show remaining days until SESSDATA expiration')
+    assert(text.includes('每 6 小时检查一次并在需要时自动续期'), 'settings dialog should explain refresh interval')
+    assert(text.includes('下次检查：6 小时后'), 'settings dialog should show next refresh check time')
+    assert(text.includes('上次续期：30 分钟前'), 'settings dialog should show last refreshed time when present')
+
+    // Advancing the clock updates the countdown while Settings remains open
+    fakeNowMs += 60_000
+    await advance(1_000)
+    const tickedText = document.body.textContent ?? ''
+    assert(
+      tickedText.includes('下次检查：5 小时 59 分钟后'),
+      'settings dialog should update next refresh check countdown as time passes'
+    )
+    assert(
+      tickedText.includes('上次续期：31 分钟前'),
+      'settings dialog should update last refreshed relative time as time passes'
+    )
+
+    await flush(() =>
+      root.render(
+        <SettingsDialog
+          accounts={[
+            {
+              mid: 123,
+              uname: 'Expired User',
+              isExpired: true,
+              expiresAt,
+              hasRefreshToken: true,
+              nextRefreshCheckAt,
+            },
+          ]}
+          activeAccountMid={123}
+        />
+      )
+    )
+
+    const expiredText = document.body.textContent ?? ''
+    assert(expiredText.includes('需重新登录'), 'settings dialog should show re-login badge when session is expired')
+    assert(
+      expiredText.includes('当前会话已过期，请重新扫码登录'),
+      'settings dialog should prompt QR re-login when session is expired'
+    )
+    assert(
+      !expiredText.includes('每 6 小时检查一次并在需要时自动续期'),
+      'settings dialog should hide active auto-refresh schedule when session is expired'
+    )
+
+    await flush(() =>
+      root.render(
+        <SettingsDialog
+          accounts={[
+            {
+              mid: 123,
+              uname: 'Legacy User',
+              isExpired: false,
+              expiresAt: Math.floor(fakeNowMs / 1000) + 18 * 3600,
+              hasRefreshToken: false,
+            },
+          ]}
+          activeAccountMid={123}
+        />
+      )
+    )
+
+    const legacyText = document.body.textContent ?? ''
+    assert(legacyText.includes('未开启自动续期'), 'settings dialog should indicate when refresh token is missing')
+    assert(
+      legacyText.includes('18 小时后'),
+      'settings dialog should use granular remaining time when less than 24 hours remain'
+    )
+    assert(
+      legacyText.includes('当前会话缺少刷新凭据，重新登录后可启用自动续期'),
+      'settings dialog should prompt re-login to enable auto-refresh'
+    )
+  } finally {
+    Date.now = realDateNow
+    useSettings.getState().closeSettings()
+    timers.clear()
+  }
 })
 
 void (async () => {

@@ -141,14 +141,14 @@ export default function App() {
     init()
   }, [checkLogin])
 
-  // Periodically check login and renew cookies while connected
+  // Periodically check login and renew cookies while connected, resetting the 6h timer after each check or account switch
   useEffect(() => {
-    if (!isConnected || initialLoading) return
+    if (!isConnected || initialLoading || !accounts.some(a => a.mid === activeAccountMid)) return
     const timer = setInterval(() => {
       void checkLogin()
     }, LOGIN_CONFIG.COOKIE_CHECK_INTERVAL)
     return () => clearInterval(timer)
-  }, [isConnected, initialLoading, checkLogin])
+  }, [isConnected, initialLoading, accounts, activeAccountMid, checkLogin])
 
   // Fetch sessions when connected
   useEffect(() => {
