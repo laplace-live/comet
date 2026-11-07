@@ -1,5 +1,19 @@
 # laplace-comet
 
+## 1.6.0
+
+### Minor Changes
+
+- f9088ab: Switch accounts and reopen chats instantly
+- f9088ab: Keep chats on this device, encrypted, so they show at once after a relaunch
+
+### Patch Changes
+
+- 8cf6606: Opening a search result scrolls the chat to the message it found
+- 9792a70: With 收起未关注人消息 on, both lists keep loading older chats as you scroll
+- f9088ab: Search finds sessions beyond the pages already loaded
+- b787a3c: Search finds chats by older messages you've opened, and looks in 未关注人消息 too
+
 ## 1.5.0
 
 ### Minor Changes
