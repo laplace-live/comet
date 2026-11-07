@@ -1,5 +1,11 @@
 # laplace-comet
 
+## 1.7.0
+
+### Minor Changes
+
+- b5bfeeb: Show every message a search finds in a chat, with the match highlighted
+
 ## 1.6.0
 
 ### Minor Changes
