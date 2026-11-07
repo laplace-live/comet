@@ -1,5 +1,16 @@
 # laplace-comet
 
+## 1.5.0
+
+### Minor Changes
+
+- 2afa6a3: Show login session expiration and cookie refresh status in settings
+
+### Patch Changes
+
+- 87daa5b: Update Electron to 45.2.3 with the latest Chromium security fixes
+- 0b35bfc: Renew login cookies automatically and keep accounts signed in offline
+
 ## 1.4.0
 
 ### Minor Changes
