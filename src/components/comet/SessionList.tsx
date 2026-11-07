@@ -3,14 +3,15 @@ import { forwardRef, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollerProps } from 'react-virtuoso'
 import { Virtuoso } from 'react-virtuoso'
 
-import type { UnfollowedFold } from '@/hooks/usePrivateMessages'
+import type { SearchOpening, UnfollowedFold } from '@/hooks/usePrivateMessages'
 import type { MessageMatch } from '@/lib/account-cache'
 import type { UserCache } from '@/lib/message-utils'
+import type { ChatFound } from '@/lib/search'
 import type { BilibiliSession } from '@/types/bilibili'
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
 
 import { chatKey } from '@/lib/account-cache'
-import { getLastMessagePreview, getSessionName } from '@/lib/message-utils'
+import { findChat } from '@/lib/search'
 
 import { isMacOS } from '@/utils/platform'
 
@@ -30,6 +31,8 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 
 import { getDraftKey } from '@/stores/useDrafts'
+import { HighlightExcerpt } from './Highlight'
+import { SearchHitItem, SearchHitsToggle } from './SearchHitItem'
 import { SessionItem } from './SessionItem'
 import { UnfollowedFoldItem } from './UnfollowedFoldItem'
 import { UserMenu } from './UserMenu'
@@ -47,30 +50,8 @@ type SessionVisibilityFilter = 'all' | 'unread' | 'read'
 export const SEARCH_PAGE_GAP = 1000
 // How long a search waits for the typing to stop before it looks through the messages held of each chat
 const HELD_SEARCH_DELAY = 250
-
-/** Whether a search finds a session by what the list shows of it: its name, UID or last message */
-function showsQuery(session: BilibiliSession, query: string, userCache: UserCache): boolean {
-  const lower = query.toLowerCase()
-  return (
-    getSessionName(session, userCache).toLowerCase().includes(lower) ||
-    String(session.talker_id).includes(query) ||
-    getLastMessagePreview(session).toLowerCase().includes(lower)
-  )
-}
-
-/**
- * The message held of a chat that a search found it by, when what the list shows of it doesn't hold the text: its
- * result shows that message in place of its last, and opens the chat at it
- */
-export function searchMatch(
-  session: BilibiliSession,
-  query: string,
-  userCache: UserCache,
-  heldMatches: Map<string, MessageMatch> | null
-): MessageMatch | undefined {
-  if (!heldMatches || showsQuery(session, query, userCache)) return undefined
-  return heldMatches.get(chatKey(session))
-}
+// How many of the messages a search found in a chat show under it before 查看全部 shows the rest
+const SHOWN_HITS = 3
 
 /**
  * The main list with 未关注人消息's chats among it by time, below the pinned sessions, for a search that looks
@@ -82,11 +63,62 @@ function withFoldedChats(sessions: BilibiliSession[], folded: BilibiliSession[])
   return [...sessions.filter(s => s.top_ts > 0), ...rest.sort((a, b) => b.session_ts - a.session_ts)]
 }
 
-/** A row of the list: a session, or 未关注人消息 with the newest of its chats */
-type SessionListRow = { type: 'session'; session: BilibiliSession } | { type: 'unfollowed'; newest: BilibiliSession }
+/**
+ * The messages a search found in a chat that show as rows under it. Found by its name, those besides its last, which
+ * its own row shows; found by its messages alone, every one, unless it's just the one, which its own row shows.
+ */
+function hitRowsOf(session: BilibiliSession, found: ChatFound): MessageMatch[] {
+  if (!found.byName) return found.hits.length > 1 ? found.hits : []
+  const last = String(session.last_msg?.msg_key)
+  return found.hits.filter(hit => hit.msgKey !== last)
+}
+
+/** What a chat's row shows in place of its last message, when a search found it by its messages alone */
+function foundPreview(found: ChatFound, query: string) {
+  if (found.byName) return undefined
+  if (found.hits.length > 1) return `${found.hits.length} 条相关消息`
+  return <HighlightExcerpt text={found.hits[0].text} query={query} />
+}
+
+/** How a search result opens its chat: found by its name, at its newest; found by its messages, at the newest of them */
+function openingOf(found: ChatFound, query: string): SearchOpening {
+  return found.byName ? { query } : { msgKey: found.hits[0].msgKey, query }
+}
+
+/**
+ * A row of the list: a session; 未关注人消息 with the newest of its chats; or, during a search, a message found in
+ * the session above, and below the first few of those, the toggle that shows the rest
+ */
+type SessionListRow =
+  | {
+      type: 'session'
+      session: BilibiliSession
+      /** What the search found of it, null outside a search */
+      found: ChatFound | null
+    }
+  | { type: 'unfollowed'; newest: BilibiliSession }
+  | { type: 'hit'; session: BilibiliSession; hit: MessageMatch }
+  | { type: 'more'; session: BilibiliSession; count: number; expanded: boolean }
+
+/** Keys a row keeps while rows come and go around it, as a chat's results expand */
+function rowKey(row: SessionListRow): string {
+  switch (row.type) {
+    case 'session':
+      return `s:${chatKey(row.session)}`
+    case 'hit':
+      return `h:${chatKey(row.session)}:${row.hit.msgKey}`
+    case 'more':
+      return `m:${chatKey(row.session)}`
+    case 'unfollowed':
+      return 'u'
+  }
+}
+
+/** The chats whose results all show (查看全部), for the search and account they were expanded in */
+type ExpandedChats = { query: string; mid: number | null; keys: ReadonlySet<string> }
 
 /** The chats a search found by the messages held of them, by chat key, for that search and the account shown */
-type HeldSearch = { query: string; mid: number | null; matches: Map<string, MessageMatch> }
+type HeldSearch = { query: string; mid: number | null; matches: Map<string, MessageMatch[]> }
 
 /** A next page a search asks for: for what text, of which list of which account, from how many chats listed */
 type SearchPage = { query: string; mid: number | null; list: 'sessions' | 'unfollowed'; from: number }
@@ -99,6 +131,8 @@ function isSamePage(a: SearchPage | null, b: SearchPage): boolean {
 interface SessionListProps {
   sessions: BilibiliSession[]
   selectedSession: BilibiliSession | null
+  /** The message the selected chat was opened at, from a search: its result reads as the current row, not the chat */
+  openedMsgKey?: string | null
   loading: boolean
   loadingMore: boolean
   hasMoreSessions: boolean
@@ -110,15 +144,15 @@ interface SessionListProps {
   activeAccountMid?: number | null
   /** 未关注人消息, while 收起未关注人消息 folds it out of the main list */
   unfollowed?: UnfollowedFold | null
-  /** `msgKey`: the message a search found the chat by, to open it at */
-  onSessionClick: (session: BilibiliSession, msgKey?: string) => void
+  /** `search`: how a search result opens the chat, at the message it found */
+  onSessionClick: (session: BilibiliSession, search?: SearchOpening) => void
   onLoadMore: () => void
   onRefresh: () => void
   onOpenUnfollowed?: () => void
   onCloseUnfollowed?: () => void
   onLoadMoreUnfollowed?: () => void
-  /** The chats a message of which holds a search's text, by chat key, each with the newest that does */
-  onSearchMessages?: (query: string) => Promise<Map<string, MessageMatch>>
+  /** The chats with messages holding a search's text, by chat key, each with every one that does, newest first */
+  onSearchMessages?: (query: string) => Promise<Map<string, MessageMatch[]>>
   onLogout?: () => void
   onSwitchAccount?: (mid: number) => void
   onAddAccount?: () => void
@@ -129,6 +163,7 @@ interface SessionListProps {
 export function SessionList({
   sessions,
   selectedSession,
+  openedMsgKey,
   loading,
   loadingMore,
   hasMoreSessions,
@@ -180,7 +215,7 @@ export function SessionList({
     if (!searching || !onSearchMessages) return
     let current = true
     const timer = setTimeout(async () => {
-      const matches = await onSearchMessages(query).catch(() => new Map<string, MessageMatch>())
+      const matches = await onSearchMessages(query).catch(() => new Map<string, MessageMatch[]>())
       if (current) setHeld({ query, mid: shownMid, matches })
     }, HELD_SEARCH_DELAY)
     return () => {
@@ -190,7 +225,7 @@ export function SessionList({
   }, [searching, query, shownMid, onSearchMessages])
   const heldMatches = searching && held?.query === query && held.mid === shownMid ? held.matches : null
 
-  // Filter sessions based on visibility filter and search text
+  // Filter sessions based on visibility filter and search text, each with what the search found of it
   const filteredSessions = useMemo(() => {
     let result = searchedSessions
 
@@ -202,12 +237,22 @@ export function SessionList({
     }
 
     // Then the search: by name, UID or last message, or by any other message held of the chat
-    if (query) {
-      result = result.filter(session => showsQuery(session, query, userCache) || !!heldMatches?.has(chatKey(session)))
-    }
-
-    return result
+    const chats = result.map(session => ({
+      session,
+      found: query ? findChat(session, query, userCache, heldMatches) : null,
+    }))
+    return query ? chats.filter(chat => chat.found !== null) : chats
   }, [searchedSessions, query, visibilityFilter, userCache, heldMatches])
+
+  // A search shows the first few of a chat's results until 查看全部 shows them all, for that search on that account
+  const [expansion, setExpansion] = useState<ExpandedChats | null>(null)
+  const expandedChats = expansion?.query === query && expansion.mid === shownMid ? expansion.keys : null
+  const toggleExpanded = (key: string) => {
+    const keys = new Set(expandedChats)
+    if (keys.has(key)) keys.delete(key)
+    else keys.add(key)
+    setExpansion({ query, mid: shownMid, keys })
+  }
 
   const isFiltering = searching || visibilityFilter !== 'all'
 
@@ -279,19 +324,44 @@ export function SessionList({
     [unfollowed?.sessions]
   )
 
+  // A search lists the messages it found in a chat under it, newest first, the first few until 查看全部.
   // 未关注人消息 takes its place in the main list by its newest chat's time, below the pinned sessions, as
   // Bilibili lists it; older than all that's loaded, it waits at the end for the pages that place it. A search
   // looks through sessions only, but the unread filters go by its unread like any session's.
   const unfollowedUnread = unfollowed?.unread ?? 0
   const rows = useMemo(() => {
-    const list: SessionListRow[] = filteredSessions.map(session => ({ type: 'session', session }))
+    const list: SessionListRow[] = []
+    for (const { session, found } of filteredSessions) {
+      const hits = found ? hitRowsOf(session, found) : []
+      const expanded = !!expandedChats?.has(chatKey(session))
+      const shownHits = expanded ? hits : hits.slice(0, SHOWN_HITS)
+      list.push({ type: 'session', session, found })
+      for (const hit of shownHits) list.push({ type: 'hit', session, hit })
+      if (hits.length > SHOWN_HITS) list.push({ type: 'more', session, count: hits.length, expanded })
+    }
     const shown =
       visibilityFilter === 'all' || (visibilityFilter === 'unread' ? unfollowedUnread > 0 : unfollowedUnread === 0)
     if (showingUnfollowed || searching || !shown || !newestUnfollowed) return list
-    const at = filteredSessions.findIndex(s => !s.top_ts && s.session_ts < newestUnfollowed.session_ts)
+    const at = filteredSessions.findIndex(({ session: s }) => !s.top_ts && s.session_ts < newestUnfollowed.session_ts)
     list.splice(at === -1 ? list.length : at, 0, { type: 'unfollowed', newest: newestUnfollowed })
     return list
-  }, [filteredSessions, showingUnfollowed, searching, visibilityFilter, unfollowedUnread, newestUnfollowed])
+  }, [
+    filteredSessions,
+    expandedChats,
+    showingUnfollowed,
+    searching,
+    visibilityFilter,
+    unfollowedUnread,
+    newestUnfollowed,
+  ])
+
+  // Messages from the account shown read as 我 among a search's results
+  const myMid = activeAccountMid ?? userInfo?.mid ?? null
+  const isSelectedChat = (session: BilibiliSession) => selectedSession?.talker_id === session.talker_id
+  // The result the open chat was opened at, while it shows: it reads as the current row in place of the chat
+  const openedHit = rows.find(
+    row => row.type === 'hit' && isSelectedChat(row.session) && row.hit.msgKey === openedMsgKey
+  )
 
   // Handle end reached for infinite scroll - only when not filtering
   const handleEndReached = () => {
@@ -391,6 +461,7 @@ export function SessionList({
           key={`${activeAccountMid ?? 0}:${showingUnfollowed ? 'unfollowed' : 'sessions'}`}
           className='flex-1'
           data={rows}
+          computeItemKey={(_, row) => rowKey(row)}
           endReached={handleEndReached}
           overscan={20}
           itemContent={(_, row) => {
@@ -404,15 +475,40 @@ export function SessionList({
                 />
               )
             }
-            const match = searchMatch(row.session, query, userCache, heldMatches)
+            if (row.type === 'hit') {
+              return (
+                <SearchHitItem
+                  session={row.session}
+                  hit={row.hit}
+                  query={query}
+                  userCache={userCache}
+                  mid={myMid}
+                  isSelected={row === openedHit}
+                  onClick={() => onSessionClick(row.session, { msgKey: row.hit.msgKey, query })}
+                />
+              )
+            }
+            if (row.type === 'more') {
+              return (
+                <SearchHitsToggle
+                  count={row.count}
+                  expanded={row.expanded}
+                  onClick={() => toggleExpanded(chatKey(row.session))}
+                />
+              )
+            }
+            const { session, found } = row
+            const selected = isSelectedChat(session)
             return (
               <SessionItem
-                session={row.session}
-                draftKey={getDraftKey(userInfo?.mid ?? 0, row.session)}
-                isSelected={selectedSession?.talker_id === row.session.talker_id}
+                session={session}
+                draftKey={getDraftKey(userInfo?.mid ?? 0, session)}
+                isSelected={selected && !openedHit}
+                isOpen={selected}
                 userCache={userCache}
-                preview={match?.text}
-                onClick={() => onSessionClick(row.session, match?.msgKey)}
+                highlight={query}
+                preview={found ? foundPreview(found, query) : undefined}
+                onClick={() => onSessionClick(session, found ? openingOf(found, query) : undefined)}
               />
             )
           }}

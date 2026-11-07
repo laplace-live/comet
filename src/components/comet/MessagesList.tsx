@@ -32,6 +32,8 @@ export interface MessagesListProps {
   virtuosoRef?: React.Ref<VirtuosoHandle>
   /** The msg_key of a message to open at in place of the newest, marked a moment: the one a search found the chat by */
   targetMsgKey?: string | null
+  /** The text of the search the chat was opened from, marked in its messages wherever they show it */
+  highlight?: string | null
 }
 
 // Memoized messages list to prevent re-renders when input changes
@@ -45,6 +47,7 @@ export const MessagesList = memo(function MessagesList({
   onCustomerServiceReply,
   virtuosoRef,
   targetMsgKey,
+  highlight,
 }: MessagesListProps) {
   // Where the list opens as it mounts (it's mounted again each time a chat opens): at the target message, centered,
   // when it holds it, else at the newest
@@ -87,6 +90,7 @@ export const MessagesList = memo(function MessagesList({
               userInfo={userInfo}
               onRecall={onRecall}
               onCustomerServiceReply={onCustomerServiceReply}
+              highlight={highlight}
             />
           </div>
         </div>

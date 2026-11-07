@@ -260,7 +260,7 @@ test('a file sealed with a key safeStorage has since replaced is sealed again as
   assert.equal(sealed[0], 2, 'it should be sealed with the current key')
 })
 
-test('saved chats can be searched by any of their messages, each giving the newest that holds the text', async t => {
+test('saved chats can be searched by any of their messages, each giving every one that holds the text', async t => {
   await signIn(t, FIRST)
   await signIn(t, SECOND)
   const message = (seqno, text, overrides = {}) => ({
@@ -273,11 +273,16 @@ test('saved chats can be searched by any of their messages, each giving the newe
     msg_key: `${seqno}000`,
     ...overrides,
   })
-  const saved = messages => ({ messages, emojiInfoMap: {}, syncedSeqno: messages.length, users: {} })
+  const users = {
+    [FIRST]: { name: '我', face: '' },
+    [FRIEND]: { name: '朋友', face: '' },
+    [SECOND]: { name: '另一个号', face: '' },
+  }
+  const saved = messages => ({ messages, emojiInfoMap: {}, syncedSeqno: messages.length, users })
   const save = (mid, key, messages) => invoke(channels.BILIBILI_CACHE_SAVE_CHAT, { mid, key, chat: saved(messages) })
   await save(FIRST, `1:${FRIEND}`, [
     message(1, '早前说的 Asdaf123'),
-    message(2, '又一句 asdaf123 更新'),
+    message(2, '我回的 asdaf123', { sender_uid: FIRST }),
     message(3, '最后'),
   ])
   await save(FIRST, '1:2', [message(1, '撤回了的 asdaf123', { msg_status: 1 }), message(2, '无关')])
@@ -285,10 +290,24 @@ test('saved chats can be searched by any of their messages, each giving the newe
 
   const search = (mid, query) => invoke(channels.BILIBILI_CACHE_SEARCH_CHATS, { mid, query })
   assert.deepEqual(await search(FIRST, 'ASDAF123'), [
-    { key: `1:${FRIEND}`, msgKey: '2000', text: '又一句 asdaf123 更新' },
+    {
+      key: `1:${FRIEND}`,
+      matches: [
+        { msgKey: '2000', text: '我回的 asdaf123', senderUid: FIRST, timestamp: 2 },
+        { msgKey: '1000', text: '早前说的 Asdaf123', senderUid: FRIEND, timestamp: 1 },
+      ],
+      // Only the names of those who sent what was found
+      users: { [FIRST]: users[FIRST], [FRIEND]: users[FRIEND] },
+    },
   ])
   assert.deepEqual(await search(FIRST, '没说过的话'), [])
-  assert.deepEqual(await search(SECOND, 'asdaf123'), [{ key: '1:3', msgKey: '1000', text: 'asdaf123' }])
+  assert.deepEqual(await search(SECOND, 'asdaf123'), [
+    {
+      key: '1:3',
+      matches: [{ msgKey: '1000', text: 'asdaf123', senderUid: FRIEND, timestamp: 1 }],
+      users: { [FRIEND]: users[FRIEND] },
+    },
+  ])
 
   keychain.available = false
   assert.deepEqual(await search(FIRST, 'asdaf123'), [], "nothing should be read while safeStorage can't decrypt")

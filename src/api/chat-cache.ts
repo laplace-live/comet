@@ -5,7 +5,7 @@ import { safeStorage } from 'electron'
 
 import type { AccountSnapshot, ChatMatch, SavedChat } from '@/lib/account-cache'
 
-import { findMessage } from '@/lib/account-cache'
+import { searchSavedChat } from '@/lib/account-cache'
 
 /**
  * The renderer's account cache, kept on disk between launches unless Settings › 在本机保留聊天记录 is off: each
@@ -47,7 +47,7 @@ export interface ChatCacheStore {
   /** A chat as last saved, null when there's none */
   loadChat(mid: number, key: string): Promise<SavedChat | null>
   saveChat(mid: number, key: string, chat: SavedChat): Promise<void>
-  /** An account's saved chats with a message holding `query`, each with the newest that does (see findMessage) */
+  /** An account's saved chats with messages holding `query`, each with every one that does (see searchSavedChat) */
   searchChats(mid: number, query: string): Promise<ChatMatch[]>
   /** Delete everything saved of an account, as it signs out or is removed */
   forgetAccount(mid: number): Promise<void>
@@ -237,7 +237,7 @@ export function createChatCacheStore({ dir, storedMids }: ChatCacheOptions): Cha
           // still decrypts holds up the loads and saves queued behind it
           if (search !== searches) return []
           const chat = await read<SavedChat>(chatFile(mid, entry))
-          const match = chat && findMessage(chat.messages, needle)
+          const match = chat && searchSavedChat(chat, needle)
           if (match) found.push({ key: entry.key, ...match })
         }
         return found
