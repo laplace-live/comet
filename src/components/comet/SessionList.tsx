@@ -88,6 +88,14 @@ type SessionListRow = { type: 'session'; session: BilibiliSession } | { type: 'u
 /** The chats a search found by the messages held of them, by chat key, for that search and the account shown */
 type HeldSearch = { query: string; mid: number | null; matches: Map<string, MessageMatch> }
 
+/** A next page a search asks for: for what text, of which list of which account, from how many chats listed */
+type SearchPage = { query: string; mid: number | null; list: 'sessions' | 'unfollowed'; from: number }
+
+/** Whether two asks are for the same page, the second asking again for one that added nothing */
+function isSamePage(a: SearchPage | null, b: SearchPage): boolean {
+  return !!a && a.query === b.query && a.mid === b.mid && a.list === b.list && a.from === b.from
+}
+
 interface SessionListProps {
   sessions: BilibiliSession[]
   selectedSession: BilibiliSession | null
@@ -206,7 +214,7 @@ export function SessionList({
   // A search looks through every chat in the list, so it loads the rest of the list page by page as it goes (the
   // main list's, then 未关注人消息's when it looks through those too), and the pages stay loaded after. It asks
   // for a page at a time, SEARCH_PAGE_GAP apart. Where a page adds nothing (it failed, say), it stops rather than
-  // ask again and again, until the search changes.
+  // ask again and again, until the search, the list it pages or the account changes.
   const nextSearchPage = !searching
     ? null
     : !showingUnfollowed && hasMoreSessions
@@ -214,15 +222,28 @@ export function SessionList({
       : unfollowed?.hasMore
         ? 'unfollowed'
         : null
+  const searchPage: SearchPage | null = nextSearchPage && {
+    query,
+    mid: shownMid,
+    list: nextSearchPage,
+    from: searchedSessions.length,
+  }
   const searchPageLoading = loadingMore || !!unfollowed?.loadingMore
-  const searchLoadRef = useRef<{ query: string; from: number; at: number } | null>(null)
+  // The page asked for last, and when
+  const searchLoadRef = useRef<(SearchPage & { at: number }) | null>(null)
   useEffect(() => {
-    if (!nextSearchPage || searchPageLoading) return
     const last = searchLoadRef.current
-    if (last?.query === query && last.from === searchedSessions.length) return
+    // Cleared, a search typed again asks again, though still SEARCH_PAGE_GAP after the last
+    if (!searching) {
+      if (last?.query) searchLoadRef.current = { ...last, query: '' }
+      return
+    }
+    if (!nextSearchPage || searchPageLoading) return
+    const page: SearchPage = { query, mid: shownMid, list: nextSearchPage, from: searchedSessions.length }
+    if (isSamePage(last, page)) return
     const ask = () => {
-      searchLoadRef.current = { query, from: searchedSessions.length, at: Date.now() }
-      if (nextSearchPage === 'unfollowed') onLoadMoreUnfollowed?.()
+      searchLoadRef.current = { ...page, at: Date.now() }
+      if (page.list === 'unfollowed') onLoadMoreUnfollowed?.()
       else onLoadMore()
     }
     const wait = last ? last.at + SEARCH_PAGE_GAP - Date.now() : 0
@@ -232,10 +253,21 @@ export function SessionList({
     }
     const timer = setTimeout(ask, wait)
     return () => clearTimeout(timer)
-  }, [query, nextSearchPage, searchPageLoading, searchedSessions.length, onLoadMore, onLoadMoreUnfollowed])
+  }, [
+    searching,
+    query,
+    shownMid,
+    nextSearchPage,
+    searchPageLoading,
+    searchedSessions.length,
+    onLoadMore,
+    onLoadMoreUnfollowed,
+  ])
   // Whether pages that may hold what the search looks for are still loading (or about to)
-  const stalled = searchLoadRef.current?.query === query && searchLoadRef.current.from === searchedSessions.length
-  const searchingMore = !!nextSearchPage && (searchPageLoading || !stalled)
+  const stalled = !!searchPage && isSamePage(searchLoadRef.current, searchPage)
+  const searchingMore = !!searchPage && (searchPageLoading || !stalled)
+  // Whether the messages held are still being searched, for chats only they'd find
+  const heldPending = searching && !!onSearchMessages && heldMatches === null
 
   // The newest chat 未关注人消息 holds, which it previews and is listed by
   const newestUnfollowed = useMemo(
@@ -345,7 +377,13 @@ export function SessionList({
         </div>
       ) : rows.length === 0 ? (
         <div className='flex-1 overflow-hidden'>
-          {searchingMore ? <SessionListSearching /> : isFiltering ? <SessionListNoResults /> : <SessionListEmpty />}
+          {searchingMore || heldPending ? (
+            <SessionListSearching />
+          ) : isFiltering ? (
+            <SessionListNoResults />
+          ) : (
+            <SessionListEmpty />
+          )}
         </div>
       ) : (
         <Virtuoso

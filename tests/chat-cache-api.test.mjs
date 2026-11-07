@@ -19,16 +19,22 @@ const mockModules = {
     export const handlers = new Map()
     export const ipcMain = { handle: (channel, handler) => handlers.set(channel, handler) }
     export const app = { getPath: name => (name === 'userData' ? ${JSON.stringify(userData)} : undefined) }
-    export const keychain = { available: true, key: 1 }
+    // hold: { skip, reached, promise } holds the decryption after the next skip of them, until promise settles
+    export const keychain = { available: true, key: 1, hold: null }
     const flip = bytes => Buffer.from(bytes.map(byte => byte ^ 0x5a))
     export const safeStorage = {
       getSelectedStorageBackend: () => 'gnome_libsecret',
       isAsyncEncryptionAvailable: async () => keychain.available,
       encryptStringAsync: async value => Buffer.concat([Buffer.from([keychain.key]), flip(Buffer.from(value))]),
-      decryptStringAsync: async value => ({
-        result: flip(value.subarray(1)).toString('utf8'),
-        shouldReEncrypt: value[0] !== keychain.key,
-      }),
+      decryptStringAsync: async value => {
+        const hold = keychain.hold
+        if (hold && hold.skip-- === 0) {
+          keychain.hold = null
+          hold.reached()
+          await hold.promise
+        }
+        return { result: flip(value.subarray(1)).toString('utf8'), shouldReEncrypt: value[0] !== keychain.key }
+      },
     }
   `,
   'electron-store': `
@@ -95,6 +101,7 @@ before(async () => {
 beforeEach(async () => {
   keychain.available = true
   keychain.key = 1
+  keychain.hold = null
   await api.clearAllAccounts()
 })
 
@@ -302,11 +309,23 @@ test('opening the chat used most recently leaves the index as it is, and opening
   assert.notEqual(await index(), before, 'opening another should move it last')
 })
 
-test('a search overtaken by a newer one stops, answering nothing, and the newer one answers', async t => {
+test('a search overtaken by a newer one stops partway, answering nothing, and the newer one answers', async t => {
   await signIn(t, FIRST)
-  await invoke(channels.BILIBILI_CACHE_SAVE_CHAT, { mid: FIRST, key: `1:${FRIEND}`, chat: chat(2) })
+  for (const talker of [1, 2, 3]) {
+    await invoke(channels.BILIBILI_CACHE_SAVE_CHAT, { mid: FIRST, key: `1:${talker}`, chat: chat(2) })
+  }
   const search = query => invoke(channels.BILIBILI_CACHE_SEARCH_CHATS, { mid: FIRST, query })
-  const [overtaken, latest] = await Promise.all([search('悄悄'), search('悄悄话 2')])
-  assert.deepEqual(overtaken, [], 'the search overtaken should stop')
-  assert.deepEqual(latest, [{ key: `1:${FRIEND}`, msgKey: '7300000000000000001', text: '悄悄话 2' }])
+
+  // The typing goes on while the first search reads its first chat, past its index
+  const reading = Promise.withResolvers()
+  const release = Promise.withResolvers()
+  keychain.hold = { skip: 1, reached: reading.resolve, promise: release.promise }
+  const overtaken = search('悄悄')
+  await reading.promise
+  const latest = search('悄悄话 2')
+  release.resolve()
+
+  assert.deepEqual(await overtaken, [], 'the search overtaken should stop, though chats it has yet to read match')
+  const found = (await latest).map(match => match.key).sort()
+  assert.deepEqual(found, ['1:1', '1:2', '1:3'], 'the newer search should look through every chat')
 })

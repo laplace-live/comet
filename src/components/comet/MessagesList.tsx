@@ -2,7 +2,7 @@ import { forwardRef, memo, useEffect, useState } from 'react'
 import type { IndexLocationWithAlign, ScrollerProps, VirtuosoHandle } from 'react-virtuoso'
 import { Virtuoso } from 'react-virtuoso'
 
-import type { EmojiInfoMap, TargetMessage } from '@/hooks/usePrivateMessages'
+import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
 import type { CustomerServiceReply } from '@/lib/customer-service'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliMessage, BilibiliSession } from '@/types/bilibili'
@@ -30,8 +30,8 @@ export interface MessagesListProps {
   onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
   onCustomerServiceReply?: (reply: CustomerServiceReply) => Promise<boolean>
   virtuosoRef?: React.Ref<VirtuosoHandle>
-  /** A message to open at in place of the newest, marked a moment: the one a search found the chat by */
-  targetMessage?: TargetMessage | null
+  /** The msg_key of a message to open at in place of the newest, marked a moment: the one a search found the chat by */
+  targetMsgKey?: string | null
 }
 
 // Memoized messages list to prevent re-renders when input changes
@@ -44,14 +44,14 @@ export const MessagesList = memo(function MessagesList({
   onRecall,
   onCustomerServiceReply,
   virtuosoRef,
-  targetMessage,
+  targetMsgKey,
 }: MessagesListProps) {
-  // Where the list opens as it mounts (it's mounted again for each chat, and each time one opens at a message): at
-  // the target message, centered, when it holds it, else at the newest
+  // Where the list opens as it mounts (it's mounted again each time a chat opens): at the target message, centered,
+  // when it holds it, else at the newest
   const [opening] = useState((): { at: IndexLocationWithAlign | number; marked: string | null } => {
-    const index = targetMessage ? messages.findIndex(m => String(m.msg_key) === targetMessage.msgKey) : -1
-    if (!targetMessage || index === -1) return { at: Math.max(messages.length - 1, 0), marked: null }
-    return { at: { index, align: 'center' }, marked: targetMessage.msgKey }
+    const index = targetMsgKey ? messages.findIndex(m => String(m.msg_key) === targetMsgKey) : -1
+    if (!targetMsgKey || index === -1) return { at: Math.max(messages.length - 1, 0), marked: null }
+    return { at: { index, align: 'center' }, marked: targetMsgKey }
   })
   const [marked, setMarked] = useState(opening.marked)
   useEffect(() => {

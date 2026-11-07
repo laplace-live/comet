@@ -169,12 +169,12 @@ const SAVE_DELAY = 2000
 const MESSAGES_PAGE_SIZE = '1000'
 
 /**
- * A message the open chat opened at instead of its newest: the one a search found it by. Each opening has an `id`
- * of its own, so opening it at the same message again goes back there.
+ * An opening of the open chat. Each has an `id` of its own, so a chat opened again shows from where it opens, not
+ * from where it was scrolled to: its newest message, or the one with `msgKey` (the one a search found it by).
  */
-export interface TargetMessage {
-  msgKey: string
+export interface ChatOpening {
   id: number
+  msgKey: string | null
 }
 
 /** 未关注人消息: the chats 收起未关注人消息 folds out of the main list, listed apart from it */
@@ -200,8 +200,8 @@ export interface UsePrivateMessagesReturn {
   // State
   sessions: BilibiliSession[]
   selectedSession: BilibiliSession | null
-  /** Where the open chat opened, when not at its newest message */
-  targetMessage: TargetMessage | null
+  /** How the open chat was opened last */
+  chatOpening: ChatOpening | null
   messages: BilibiliMessage[]
   emojiInfoMap: EmojiInfoMap
   loading: boolean
@@ -276,8 +276,8 @@ export interface UsePrivateMessagesReturn {
 export function usePrivateMessages(): UsePrivateMessagesReturn {
   const [sessions, setSessions] = useState<BilibiliSession[]>([])
   const [selectedSession, setSelectedSession] = useState<BilibiliSession | null>(null)
-  const [targetMessage, setTargetMessage] = useState<TargetMessage | null>(null)
-  const targetIdRef = useRef(0)
+  const [chatOpening, setChatOpening] = useState<ChatOpening | null>(null)
+  const openingIdRef = useRef(0)
   const [messages, setMessages] = useState<BilibiliMessage[]>([])
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -1932,24 +1932,39 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   )
 
   /**
+   * A check of whether the account shown now still is, for a reply to change what it shows. Two accounts can talk to
+   * the same contact, so after a switch one's reply mustn't land in the other's chat or lists, which the cache keeps.
+   */
+  const accountCheck = useCallback(() => {
+    const mid = shownMidRef.current
+    return () => shownMidRef.current === mid
+  }, [])
+
+  /**
    * Start loading a chat's messages, overtaking the loads before it. The check it returns says whether this load
    * still decides what shows: the user may open another session (客服消息 included) while it runs, or this contact
    * under another account, and each of those loads on its own.
    */
-  const beginChatLoad = useCallback((session: BilibiliSession) => {
-    const load = ++messagesLoadRef.current
-    return () => load === messagesLoadRef.current && isSameChat(selectedSessionRef.current, session)
-  }, [])
+  const beginChatLoad = useCallback(
+    (session: BilibiliSession) => {
+      const shown = accountCheck()
+      const load = ++messagesLoadRef.current
+      return () => load === messagesLoadRef.current && shown() && isSameChat(selectedSessionRef.current, session)
+    },
+    [accountCheck]
+  )
 
-  /** Mark a chat read on Bilibili up to `ackSeqno`, then its session in the lists */
+  /** Mark a chat read on Bilibili up to `ackSeqno`, then its session in the lists, while its account shows */
   const markRead = useCallback(
     async (session: BilibiliSession, ackSeqno: number) => {
+      const shown = accountCheck()
       try {
         await window.electronAPI.bilibili.updateAck({
           talkerId: String(session.talker_id),
           sessionType: String(session.session_type),
           ackSeqno: String(ackSeqno),
         })
+        if (!shown()) return
         updateSession(
           s => isSameChat(s, session),
           s => ({ ...s, unread_count: 0 })
@@ -1958,7 +1973,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         console.error('Failed to mark session as read:', ackErr)
       }
     },
-    [updateSession]
+    [accountCheck, updateSession]
   )
 
   const fetchMessages = useCallback(
@@ -2114,9 +2129,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const fetchMessagesQuietly = useCallback(
     async (session: BilibiliSession) => {
       const since = syncedSeqnoRef.current
+      const shown = accountCheck()
       try {
-        // Only while still viewing this session (prevents stale responses)
-        const newer = await fetchMessagesSince(session, since, () => !isSameChat(selectedSessionRef.current, session))
+        // Only while still viewing this session, under its account (prevents stale responses)
+        const newer = await fetchMessagesSince(
+          session,
+          since,
+          () => !shown() || !isSameChat(selectedSessionRef.current, session)
+        )
         if (!newer) return
         showNewMessages(session, newer)
         if (newer.messages.length === 0) return
@@ -2145,7 +2165,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         console.error('[usePrivateMessages] Silent message fetch error:', err)
       }
     },
-    [fetchMessagesSince, showNewMessages, updateSession]
+    [accountCheck, fetchMessagesSince, showNewMessages, updateSession]
   )
 
   // A chat opened before, shown as it was at once, then caught up
@@ -2189,7 +2209,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       // Ahead of the render, so replies for the session left behind can tell they're stale
       selectedSessionRef.current = session
       setSelectedSession(session)
-      setTargetMessage(msgKey ? { msgKey, id: ++targetIdRef.current } : null)
+      setChatOpening({ id: ++openingIdRef.current, msgKey: msgKey ?? null })
 
       // Kept per account; 客服消息's chats load their own way
       const mid = isCustomerServiceSession(session) ? null : shownMidRef.current
@@ -2208,12 +2228,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   )
 
   // Keep the open chat as shown, to show at once when it's opened again, from this account or on coming back to
-  // it, and on disk to show at once after a relaunch. Not while it loads (nothing of it shows yet), nor 客服消息,
+  // it, and on disk to show at once after a relaunch. Not while it loads (nothing of it shows yet), nor once its
+  // history failed to load (what came over the WebSocket meanwhile isn't the chat: with no seqno it holds every
+  // message up to, opening it again would only catch up from its newest page, never loading the rest), nor 客服消息,
   // whose chats load their own way.
   useEffect(() => {
     const mid = shownMidRef.current
     if (!selectedSession || mid === null || messagesLoading || messages.length === 0) return
-    if (isCustomerServiceSession(selectedSession)) return
+    if (syncedSeqnoRef.current === 0 || isCustomerServiceSession(selectedSession)) return
     const key = chatKey(selectedSession)
     const chat = { messages, emojiInfoMap, syncedSeqno: syncedSeqnoRef.current }
     chatCache.set(mid, key, chat)
@@ -2223,7 +2245,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const clearSelectedSession = useCallback(() => {
     selectedSessionRef.current = null
     setSelectedSession(null)
-    setTargetMessage(null)
+    setChatOpening(null)
     setMessages([])
   }, [])
 
@@ -2234,6 +2256,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (!selectedSession || !senderMid || !content.trim()) {
         return false
       }
+      const shown = accountCheck()
 
       setSendingMessage(true)
 
@@ -2290,6 +2313,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           msg_source: 7, // Web
         }
 
+        // Another account shows now, which may talk to this contact too: what it shows isn't this account's
+        if (!shown()) return true
+
         // Add the new message to the messages list, if it's still the chat open: the user may have opened
         // another while it sent, and that one's messages are kept for opening it again
         if (isSameChat(selectedSessionRef.current, selectedSession)) setMessages(prev => [...prev, newMessage])
@@ -2331,7 +2357,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setSendingMessage(false)
       }
     },
-    [selectedSession, userInfo, sendCustomerServiceMessage, updateSession]
+    [selectedSession, userInfo, accountCheck, sendCustomerServiceMessage, updateSession]
   )
 
   // Recall a message by sending a msg_type=5 message with the target msg_key
@@ -2346,6 +2372,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (isCustomerServiceSession(selectedSession)) {
         return { success: false, error: '客服消息不支持撤回' }
       }
+      const shown = accountCheck()
 
       try {
         // Send a recall message (msg_type=5) with the target msg_key as content
@@ -2369,9 +2396,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           return { success: false, error: data.message || '撤回失败' }
         }
 
-        // Another chat opened meanwhile, whose messages the seqno doesn't name (and which the cache would keep).
-        // This one shows the recall once it's opened again, catching up on the recall message.
-        if (!isSameChat(selectedSessionRef.current, selectedSession)) return { success: true }
+        // Another chat opened meanwhile, maybe this contact's under another account, whose messages the seqno
+        // doesn't name (and which the cache would keep). This one shows the recall once it's opened again, catching up
+        // on the recall message.
+        if (!shown() || !isSameChat(selectedSessionRef.current, selectedSession)) return { success: true }
 
         // Update the local message to show as recalled (msg_status = 1)
         // Use msgSeqno for comparison as it's a smaller number without precision issues
@@ -2390,7 +2418,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         return { success: false, error: '撤回失败' }
       }
     },
-    [selectedSession, userInfo]
+    [selectedSession, userInfo, accountCheck]
   )
 
   // Toggle Do Not Disturb for a session
@@ -2504,6 +2532,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       if (!selectedSession || !senderMid || !imageData) {
         return false
       }
+      const shown = accountCheck()
 
       setSendingMessage(true)
 
@@ -2595,6 +2624,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           msg_source: 7, // Web
         }
 
+        // Another account shows now, which may talk to this contact too: what it shows isn't this account's
+        if (!shown()) return true
+
         // Add the new message to the messages list, if it's still the chat open: the user may have opened
         // another while it sent, and that one's messages are kept for opening it again
         if (isSameChat(selectedSessionRef.current, selectedSession)) setMessages(prev => [...prev, newMessage])
@@ -2631,7 +2663,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         setSendingMessage(false)
       }
     },
-    [selectedSession, userInfo, sendCustomerServiceMessage, updateSession]
+    [selectedSession, userInfo, accountCheck, sendCustomerServiceMessage, updateSession]
   )
 
   // Connect to WebSocket for real-time notifications
@@ -3399,7 +3431,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     // State
     sessions: displayedSessions,
     selectedSession: displayedSelectedSession,
-    targetMessage,
+    chatOpening,
     messages,
     emojiInfoMap,
     // An account's first load shows a skeleton however it started, a switch included

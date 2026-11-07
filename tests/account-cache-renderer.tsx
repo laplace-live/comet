@@ -15,6 +15,7 @@ import type {
   CachedChatParams,
   CachedListsParams,
   CheckLoginResult,
+  ErrorResponse,
   FetchMessagesParams,
   FetchSessionsParams,
   FetchUsersParams,
@@ -29,12 +30,13 @@ import {
   findMessage,
   keepLoadedPages,
   listsToSave,
+  type MessageMatch,
   mergeMessages,
   SAVED_SESSIONS,
   type SavedChat,
 } from '@/lib/account-cache'
 
-import { type TargetMessage, type UsePrivateMessagesReturn, usePrivateMessages } from '@/hooks/usePrivateMessages'
+import { type ChatOpening, type UsePrivateMessagesReturn, usePrivateMessages } from '@/hooks/usePrivateMessages'
 
 import { MessagesPanel } from '@/components/comet/MessagesPanel'
 import { SessionItem } from '@/components/comet/SessionItem'
@@ -146,6 +148,8 @@ let failBackgroundLists: boolean
 let listGate: { mid: number; promise: Promise<unknown>; answered: boolean } | null
 // Holds back the next messages asked for, until resolved
 let messagesGate: Promise<unknown> | null
+// Messages asked for fail
+let failMessages: boolean
 // Holds back the next message sent, until resolved
 let sendGate: Promise<unknown> | null
 let sessionRequests: FetchSessionsParams[]
@@ -257,11 +261,12 @@ function installApi() {
         return early ?? answer()
       },
       // Newest first within (begin, end), pages of `size`, as fetch_session_msgs answers
-      fetchMessages: async (params: FetchMessagesParams): Promise<BilibiliMessagesResponse> => {
+      fetchMessages: async (params: FetchMessagesParams): Promise<BilibiliMessagesResponse | ErrorResponse> => {
         messageRequests.push(params)
         const gate = messagesGate
         messagesGate = null
         await gate
+        if (failMessages) return { error: 'Failed to fetch messages', code: 500 }
         const begin = params.beginSeqno ? Number(params.beginSeqno) : 0
         const end = params.endSeqno ? Number(params.endSeqno) : Infinity
         const inRange = (server[params.mid ?? signedInMid].messages[Number(params.talkerId)] ?? [])
@@ -361,6 +366,7 @@ async function setup({ failBackground = false } = {}) {
   failBackgroundLists = failBackground
   listGate = null
   messagesGate = null
+  failMessages = false
   sendGate = null
   sessionRequests = []
   messageRequests = []
@@ -563,6 +569,79 @@ test('a recall that comes over the WebSocket takes back the message it names', a
 
 const said = (text: string) => ({ content: JSON.stringify({ content: text }) })
 
+test("a chat's new messages fetched for one account don't land in its contact's chat under another", async () => {
+  await setup()
+  // Both accounts talk to FAN
+  server[OTHER].chats.push(session(FAN, 60))
+  server[OTHER].messages[FAN] = [message(FAN, 1, said('给另一个号的'))]
+  await flush(() => current.selectSession(chatOf(FAN)))
+
+  // A message comes for it, fetched quietly, and answered only once the other account shows its FAN chat
+  server[ME].messages[FAN].push(message(FAN, 4, said('给这个号的')))
+  const gate = holdMessages()
+  await flush(() => onNewMessage({ talkerId: FAN, sessionType: 1 }))
+  await flush(() => current.switchAccount(OTHER))
+  await flush(() => current.selectSession(chatOf(FAN)))
+  assert(contents() === '1', `the other account's chat should show, got ${contents()}`)
+  await flush(() => gate.resolve())
+  assert(contents() === '1', `this account's message should not land in the other's chat, got ${contents()}`)
+})
+
+test("a message sent from one account's chat doesn't land in its contact's chat under another", async () => {
+  await setup()
+  server[OTHER].chats.push(session(FAN, 60))
+  server[OTHER].messages[FAN] = [message(FAN, 1, said('给另一个号的'))]
+  await flush(() => current.selectSession(chatOf(FAN)))
+
+  // Sent, and answered only once the other account shows its FAN chat
+  const gate = deferred<void>()
+  sendGate = gate.promise
+  let sending!: Promise<boolean>
+  await flush(() => {
+    sending = current.sendMessage('从这个号发的')
+  })
+  await flush(() => current.switchAccount(OTHER))
+  await flush(() => current.selectSession(chatOf(FAN)))
+  await flush(async () => {
+    gate.resolve()
+    assert(await sending, 'the message should send')
+  })
+  assert(contents() === '1', `the message should not land in the other account's chat, got ${contents()}`)
+})
+
+test("a chat whose history failed to load isn't kept, so opening it again loads all of it", async () => {
+  await setup()
+  server[ME].messages[FAN] = Array.from({ length: 1500 }, (_, i) => message(i % 2 ? ME : FAN, i + 1))
+  const gate = holdMessages()
+  await flush(() => current.selectSession(chatOf(FAN)))
+
+  // A message comes over the WebSocket while its history loads, then the load fails
+  await flush(() =>
+    onNewMessage({
+      talkerId: FAN,
+      sessionType: 1,
+      instantMsg: {
+        senderUid: FAN,
+        receiverType: 1,
+        receiverId: ME,
+        msgType: 1,
+        content: JSON.stringify({ content: '新消息' }),
+        msgSeqno: 1501,
+        timestamp: 1501,
+        msgKey: '1501000',
+      },
+    })
+  )
+  failMessages = true
+  await flush(() => gate.resolve())
+  failMessages = false
+  assert(current.messages.length === 1, `only the message that came should show, got ${current.messages.length}`)
+
+  await flush(() => current.selectSession(chatOf(FRIEND)))
+  await flush(() => current.selectSession(chatOf(FAN)))
+  assert(current.messages.length === 1500, `its whole history should load, got ${current.messages.length}`)
+})
+
 test("a recall answered after another chat opened leaves that chat's messages as they are", async () => {
   await setup()
   server[ME].messages[FRIEND] = [message(FRIEND, 1), message(ME, 2), message(FRIEND, 3)]
@@ -612,21 +691,26 @@ test('a search finds chats by any message held of them, opened here or saved on 
   assert((await current.searchHeldChats('没说过的话')).size === 0, 'text no message holds should find nothing')
 })
 
-test('a chat opened from a search opens at the message found, each time, and opened otherwise at its newest', async () => {
+test('each opening of a chat is new, at the message a search found it by or at its newest', async () => {
   await setup()
   await flush(() => current.selectSession(chatOf(FAN), '1000'))
-  const first = current.targetMessage
+  const first = current.chatOpening
   assert(first?.msgKey === '1000', `the chat should open at the message, got ${JSON.stringify(first)}`)
   await flush(() => current.selectSession(chatOf(FAN), '1000'))
+  const again = current.chatOpening
   assert(
-    current.targetMessage?.msgKey === '1000' && current.targetMessage.id !== first?.id,
-    `opening it there again should go back there, got ${JSON.stringify(current.targetMessage)}`
+    again?.msgKey === '1000' && again.id !== first?.id,
+    `opening it there again should go back there, got ${JSON.stringify(again)}`
   )
   await flush(() => current.selectSession(chatOf(FAN)))
-  assert(current.targetMessage === null, `opened otherwise, it should open at its newest, got ${current.targetMessage}`)
+  const plain = current.chatOpening
+  assert(
+    plain?.msgKey === null && plain.id !== again?.id,
+    `opened otherwise, it should open anew at its newest, got ${JSON.stringify(plain)}`
+  )
   await flush(() => current.selectSession(chatOf(FRIEND), '1000'))
   await flush(() => current.clearSelectedSession())
-  assert(current.targetMessage === null, 'a chat closed should leave nothing to open at')
+  assert(current.chatOpening === null, 'a chat closed should leave nothing to open at')
 })
 
 test('a message recalled since finds its chat no more, though the copy on disk still holds it', async () => {
@@ -938,6 +1022,8 @@ test('merging keeps what was shown, takes the server copy of a message sent from
 
   const recalled = mergeMessages(held, [message(FAN, 10, { msg_type: 5, content: '1000' })])
   assert(recalled.find(m => m.msg_seqno === 1)?.msg_status === 1, 'a recall should mark the message it names')
+  const late = mergeMessages(recalled, [message(FAN, 1), message(FAN, 3)])
+  assert(late === recalled, 'a copy fetched before the recall, landing late, should leave the message recalled')
 
   const cancelled = mergeMessages(held, [message(0, 11, { msg_type: 5, content: '3000', sys_cancel: true })])
   assert(!cancelled.some(m => m.msg_seqno === 3), 'a message Bilibili cancelled should go')
@@ -1041,7 +1127,8 @@ test('a search loads the rest of the list a page at a time, and stops where a pa
   props = listProps({
     sessions: [session(FRIEND, 2000)],
     hasMoreSessions: true,
-    userCache: { [FRIEND]: { name: '朋友', face: '' } },
+    // One on the second page is found too
+    userCache: { [FRIEND]: { name: '朋友', face: '' }, 20001: { name: '朋友的朋友', face: '' } },
     onLoadMore: () => void loadMore(),
   })
   await flush(render)
@@ -1049,7 +1136,7 @@ test('a search loads the rest of the list a page at a time, and stops where a pa
 
   await type('  朋友  ')
   await until(() => asked.length === 3 && !props.loadingMore, SEARCH_PAGE_GAP * 4, 'every page')
-  assert(text().includes('1 / 7'), `the search, spaces aside, should find the chat among all 7, got ${text()}`)
+  assert(text().includes('2 / 7'), `the search, spaces aside, should find both chats among all 7, got ${text()}`)
   assert(
     asked[1] - asked[0] >= SEARCH_PAGE_GAP - 20 && asked[2] - asked[1] >= SEARCH_PAGE_GAP - 20,
     `pages should be asked for SEARCH_PAGE_GAP apart, got ${asked.map(t => t - asked[0])}`
@@ -1066,6 +1153,112 @@ test('a search loads the rest of the list a page at a time, and stops where a pa
   await until(() => asked.length === 1 && !props.loadingMore, SEARCH_PAGE_GAP * 3, 'the first page')
   await pause(SEARCH_PAGE_GAP + 300)
   assert(asked.length === 1, `a page that adds nothing should stop the search loading, got ${asked.length}`)
+
+  // Cleared and typed again, it asks again
+  await type('')
+  await type('另一个')
+  await until(() => asked.length === 2 && !props.loadingMore, SEARCH_PAGE_GAP * 3, 'the page asked again')
+})
+
+test("a search goes on to 未关注人消息's pages when the main list's next page adds nothing", async () => {
+  let foldedPages = 0
+  const { type, text } = mountList()
+  let props!: Parameters<typeof SessionList>[0]
+  const render = () => root.render(<SessionList {...props} />)
+  const fold = (sessions: BilibiliSession[], hasMore: boolean, loadingMore = false) => ({
+    sessions,
+    unread: 0,
+    hasMore,
+    loadingMore,
+    open: false,
+  })
+  // Folded away, the main list goes on past a first page that held all of it, so its next page is empty
+  const loadMore = async () => {
+    props = { ...props, loadingMore: true }
+    render()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    props = { ...props, loadingMore: false, hasMoreSessions: false }
+    render()
+  }
+  const loadMoreFolded = async () => {
+    foldedPages++
+    const held = props.unfollowed?.sessions ?? []
+    props = { ...props, unfollowed: fold(held, true, true) }
+    render()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    props = { ...props, unfollowed: fold([...held, session(NEWCOMER, 100, { is_follow: 0 })], false) }
+    render()
+  }
+  props = listProps({
+    sessions: [session(FRIEND, 2000)],
+    hasMoreSessions: true,
+    userCache: { [NEWCOMER]: { name: '路人', face: '' } },
+    unfollowed: fold([session(FAN, 1500, { is_follow: 0 })], true),
+    onLoadMore: () => void loadMore(),
+    onLoadMoreUnfollowed: () => void loadMoreFolded(),
+  })
+  await flush(render)
+
+  await type('路人')
+  await until(
+    () => foldedPages === 1 && !props.unfollowed?.loadingMore,
+    SEARCH_PAGE_GAP * 3,
+    "未关注人消息's next page"
+  )
+  assert(text().includes('1 / 3'), `the chat on 未关注人消息's next page should be found, got ${text()}`)
+})
+
+test('a search pages the list of an account switched to, though it lists as many chats', async () => {
+  const asked: Array<number | null | undefined> = []
+  const { type, text } = mountList()
+  let props!: Parameters<typeof SessionList>[0]
+  const render = () => root.render(<SessionList {...props} />)
+  // This account's next page fails, adding nothing; the other account's next page holds the chat
+  const loadMore = async () => {
+    const mid = props.activeAccountMid
+    asked.push(mid)
+    props = { ...props, loadingMore: true }
+    render()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const more = mid === OTHER ? [session(NEWCOMER, 100)] : []
+    props = { ...props, sessions: [...props.sessions, ...more], loadingMore: false, hasMoreSessions: mid !== OTHER }
+    render()
+  }
+  props = listProps({
+    activeAccountMid: ME,
+    sessions: [session(FRIEND, 2000), session(FAN, 1500)],
+    hasMoreSessions: true,
+    userCache: { [NEWCOMER]: { name: '路人', face: '' } },
+    onLoadMore: () => void loadMore(),
+  })
+  await flush(render)
+  await type('路人')
+  await until(() => asked.length === 1 && !props.loadingMore, SEARCH_PAGE_GAP * 2, "this account's next page")
+
+  props = { ...props, activeAccountMid: OTHER, sessions: [session(COLLEAGUE, 3000), session(OTHER_FRIEND, 2500)] }
+  await flush(render)
+  await until(() => asked.length === 2 && !props.loadingMore, SEARCH_PAGE_GAP * 3, "the other account's next page")
+  assert(asked[1] === OTHER && text().includes('1 / 3'), `the other account's chat should be found, got ${text()}`)
+})
+
+test("while the messages held are searched, the list says it's searching, not that nothing matched", async () => {
+  const held = deferred<Map<string, MessageMatch>>()
+  const { type, text } = mountList()
+  root.render(
+    <SessionList
+      {...listProps({
+        sessions: [session(FRIEND, 2000)],
+        userCache: { [FRIEND]: { name: '朋友', face: '' } },
+        onSearchMessages: () => held.promise,
+      })}
+    />
+  )
+  await flush()
+  await type('早前')
+  await pause(300)
+  assert(!text().includes('没有找到匹配的会话'), `it shouldn't say nothing matched before it knows, got ${text()}`)
+  await flush(() => held.resolve(new Map([[`1:${FRIEND}`, { msgKey: '1000', text: '早前的话' }]])))
+  await until(() => text().includes('1 / 1'), 2000, 'the chat found by a message held of it')
 })
 
 test('from the main list, a search looks through 未关注人消息 too, loading its pages after the main list', async () => {
@@ -1204,11 +1397,11 @@ test('a chat opens at the message it was opened at, centered and marked, and oth
   height.textContent = `[data-virtuoso-scroller] { height: ${drawn.viewportHeight}px !important }`
   document.body.replaceChildren(height, container)
   root = createRoot(container)
-  const panel = (targetMessage: TargetMessage | null) => (
+  const panel = (chatOpening: ChatOpening) => (
     <VirtuosoMockContext.Provider value={drawn}>
       <MessagesPanel
         selectedSession={session(FAN, 300)}
-        targetMessage={targetMessage}
+        chatOpening={chatOpening}
         messages={messages}
         emojiInfoMap={{}}
         messagesLoading={false}
@@ -1233,10 +1426,11 @@ test('a chat opens at the message it was opened at, centered and marked, and oth
   const marked = () => [...container.querySelectorAll('[data-target]')].map(e => e.textContent)
   const showsAround = (index: number) => rows().includes(index) && !rows().includes(messages.length - 1)
   // Each opening mounts the list again, which draws its rows a few frames later
-  const open = async (targetMessage: TargetMessage | null) => {
-    await flush(() => root.render(panel(targetMessage)))
+  const open = async (chatOpening: ChatOpening) => {
+    await flush(() => root.render(panel(chatOpening)))
     await until(() => rows().length > 0, 2000, 'the messages to show')
   }
+  const scroller = () => container.querySelector('[data-virtuoso-scroller]')
 
   await open({ msgKey: '100000', id: 1 })
   assert(showsAround(99), `it should open at the message, got rows ${rows()}`)
@@ -1246,15 +1440,20 @@ test('a chat opens at the message it was opened at, centered and marked, and oth
   )
   assert(marked().length === 1 && marked()[0]?.includes('消息 100'), `the message should be marked, got ${marked()}`)
 
-  await open(null)
+  await open({ msgKey: null, id: 2 })
   assert(rows().includes(messages.length - 1), `opened otherwise, it should open at its newest, got rows ${rows()}`)
   assert(marked().length === 0, `nothing should be marked, got ${marked()}`)
 
-  await open({ msgKey: '100000', id: 2 })
+  // Opened again, from wherever it was scrolled to, it opens anew
+  const shown = scroller()
+  await open({ msgKey: null, id: 3 })
+  assert(scroller() !== shown, 'opening it again should open it anew, at its newest')
+
+  await open({ msgKey: '100000', id: 4 })
   assert(showsAround(99), `opened at the message again, it should go back there, got rows ${rows()}`)
 
   // A message it doesn't hold (gone since) leaves it at its newest
-  await open({ msgKey: '999000', id: 3 })
+  await open({ msgKey: '999000', id: 5 })
   assert(rows().includes(messages.length - 1), `it should open at its newest, got rows ${rows()}`)
 })
 

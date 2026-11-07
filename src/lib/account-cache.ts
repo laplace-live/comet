@@ -162,14 +162,16 @@ export function newestSeqno(messages: BilibiliMessage[], floor = 0): number {
 /**
  * A conversation with newer messages merged in by msg_key, oldest first. A message held already takes the newer
  * copy where that differs (the server's copy of one sent from here, say), and a recall marks the message it
- * recalls, as loading the chat again would show it.
+ * recalls, as loading the chat again would show it. A recall is for good: a copy fetched before it, in a reply that
+ * landed late, doesn't take it back.
  * @returns `held` itself when nothing changed
  */
 export function mergeMessages(held: BilibiliMessage[], newer: BilibiliMessage[]): BilibiliMessage[] {
   const byKey = new Map(held.map(m => [keyOf(m), m]))
   let changed = false
-  for (const message of newer) {
-    const same = byKey.get(keyOf(message))
+  for (const fetched of newer) {
+    const same = byKey.get(keyOf(fetched))
+    const message = same?.msg_status === 1 && !fetched.msg_status ? { ...fetched, msg_status: 1 } : fetched
     if (
       same &&
       same.content === message.content &&
