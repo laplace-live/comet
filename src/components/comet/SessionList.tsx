@@ -4,6 +4,7 @@ import type { ScrollerProps } from 'react-virtuoso'
 import { Virtuoso } from 'react-virtuoso'
 
 import type { UnfollowedFold } from '@/hooks/usePrivateMessages'
+import type { MessageMatch } from '@/lib/account-cache'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliSession } from '@/types/bilibili'
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
@@ -58,15 +59,15 @@ function showsQuery(session: BilibiliSession, query: string, userCache: UserCach
 }
 
 /**
- * What a search result shows in place of its last message: the message held of the chat that the search found it by,
- * when what the list shows of it doesn't hold the text
+ * The message held of a chat that a search found it by, when what the list shows of it doesn't hold the text: its
+ * result shows that message in place of its last, and opens the chat at it
  */
-export function searchPreview(
+export function searchMatch(
   session: BilibiliSession,
   query: string,
   userCache: UserCache,
-  heldMatches: Map<string, string> | null
-): string | undefined {
+  heldMatches: Map<string, MessageMatch> | null
+): MessageMatch | undefined {
   if (!heldMatches || showsQuery(session, query, userCache)) return undefined
   return heldMatches.get(chatKey(session))
 }
@@ -84,6 +85,9 @@ function withFoldedChats(sessions: BilibiliSession[], folded: BilibiliSession[])
 /** A row of the list: a session, or 未关注人消息 with the newest of its chats */
 type SessionListRow = { type: 'session'; session: BilibiliSession } | { type: 'unfollowed'; newest: BilibiliSession }
 
+/** The chats a search found by the messages held of them, by chat key, for that search and the account shown */
+type HeldSearch = { query: string; mid: number | null; matches: Map<string, MessageMatch> }
+
 interface SessionListProps {
   sessions: BilibiliSession[]
   selectedSession: BilibiliSession | null
@@ -98,14 +102,15 @@ interface SessionListProps {
   activeAccountMid?: number | null
   /** 未关注人消息, while 收起未关注人消息 folds it out of the main list */
   unfollowed?: UnfollowedFold | null
-  onSessionClick: (session: BilibiliSession) => void
+  /** `msgKey`: the message a search found the chat by, to open it at */
+  onSessionClick: (session: BilibiliSession, msgKey?: string) => void
   onLoadMore: () => void
   onRefresh: () => void
   onOpenUnfollowed?: () => void
   onCloseUnfollowed?: () => void
   onLoadMoreUnfollowed?: () => void
   /** The chats a message of which holds a search's text, by chat key, each with the newest that does */
-  onSearchMessages?: (query: string) => Promise<Map<string, string>>
+  onSearchMessages?: (query: string) => Promise<Map<string, MessageMatch>>
   onLogout?: () => void
   onSwitchAccount?: (mid: number) => void
   onAddAccount?: () => void
@@ -161,13 +166,13 @@ export function SessionList({
 
   // The chats a message of which holds the search's text, besides the last message the list shows, as held of the
   // chats opened before (on disk too), for the search and account shown
-  const [held, setHeld] = useState<{ query: string; mid: number | null; matches: Map<string, string> } | null>(null)
+  const [held, setHeld] = useState<HeldSearch | null>(null)
   const shownMid = activeAccountMid ?? null
   useEffect(() => {
     if (!searching || !onSearchMessages) return
     let current = true
     const timer = setTimeout(async () => {
-      const matches = await onSearchMessages(query).catch(() => new Map<string, string>())
+      const matches = await onSearchMessages(query).catch(() => new Map<string, MessageMatch>())
       if (current) setHeld({ query, mid: shownMid, matches })
     }, HELD_SEARCH_DELAY)
     return () => {
@@ -354,25 +359,29 @@ export function SessionList({
           data={rows}
           endReached={handleEndReached}
           overscan={20}
-          itemContent={(_, row) =>
-            row.type === 'unfollowed' ? (
-              <UnfollowedFoldItem
-                newest={row.newest}
-                unread={unfollowedUnread}
-                userCache={userCache}
-                onClick={() => onOpenUnfollowed?.()}
-              />
-            ) : (
+          itemContent={(_, row) => {
+            if (row.type === 'unfollowed') {
+              return (
+                <UnfollowedFoldItem
+                  newest={row.newest}
+                  unread={unfollowedUnread}
+                  userCache={userCache}
+                  onClick={() => onOpenUnfollowed?.()}
+                />
+              )
+            }
+            const match = searchMatch(row.session, query, userCache, heldMatches)
+            return (
               <SessionItem
                 session={row.session}
                 draftKey={getDraftKey(userInfo?.mid ?? 0, row.session)}
                 isSelected={selectedSession?.talker_id === row.session.talker_id}
                 userCache={userCache}
-                preview={searchPreview(row.session, query, userCache, heldMatches)}
-                onClick={() => onSessionClick(row.session)}
+                preview={match?.text}
+                onClick={() => onSessionClick(row.session, match?.msgKey)}
               />
             )
-          }
+          }}
           components={{
             Scroller: CustomScroller,
             Footer: () =>

@@ -277,9 +277,11 @@ test('saved chats can be searched by any of their messages, each giving the newe
   await save(SECOND, '1:3', [message(1, 'asdaf123')])
 
   const search = (mid, query) => invoke(channels.BILIBILI_CACHE_SEARCH_CHATS, { mid, query })
-  assert.deepEqual(await search(FIRST, 'ASDAF123'), [{ key: `1:${FRIEND}`, text: '又一句 asdaf123 更新' }])
+  assert.deepEqual(await search(FIRST, 'ASDAF123'), [
+    { key: `1:${FRIEND}`, msgKey: '2000', text: '又一句 asdaf123 更新' },
+  ])
   assert.deepEqual(await search(FIRST, '没说过的话'), [])
-  assert.deepEqual(await search(SECOND, 'asdaf123'), [{ key: '1:3', text: 'asdaf123' }])
+  assert.deepEqual(await search(SECOND, 'asdaf123'), [{ key: '1:3', msgKey: '1000', text: 'asdaf123' }])
 
   keychain.available = false
   assert.deepEqual(await search(FIRST, 'asdaf123'), [], "nothing should be read while safeStorage can't decrypt")

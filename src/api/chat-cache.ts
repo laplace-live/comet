@@ -219,8 +219,8 @@ export function createChatCacheStore({ dir, storedMids, budget = 50_000 }: ChatC
         // Least recently used first, as the index lists them; the order a search shows them in is the lists'
         for (const entry of await readIndex(mid)) {
           const chat = await read<SavedChat>(path.join(accountDir(mid), entry.file))
-          const text = chat && findMessage(chat.messages, needle)
-          if (text) found.push({ key: entry.key, text })
+          const match = chat && findMessage(chat.messages, needle)
+          if (match) found.push({ key: entry.key, ...match })
         }
         return found
       }),

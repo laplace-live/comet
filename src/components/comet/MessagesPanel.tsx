@@ -15,7 +15,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { VirtuosoHandle } from 'react-virtuoso'
 
-import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
+import type { EmojiInfoMap, TargetMessage } from '@/hooks/usePrivateMessages'
 import type { CustomerServiceReply } from '@/lib/customer-service'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliMessage, BilibiliSession, CustomerServiceSession } from '@/types/bilibili'
@@ -52,6 +52,8 @@ import { MessagesList } from './MessagesList'
 
 interface MessagesPanelProps {
   selectedSession: BilibiliSession | null
+  /** The message the chat opened at, when not at its newest */
+  targetMessage?: TargetMessage | null
   messages: BilibiliMessage[]
   emojiInfoMap: EmojiInfoMap
   messagesLoading: boolean
@@ -74,6 +76,7 @@ interface MessagesPanelProps {
 
 export function MessagesPanel({
   selectedSession,
+  targetMessage,
   messages,
   emojiInfoMap,
   messagesLoading,
@@ -99,6 +102,7 @@ export function MessagesPanel({
       {selectedSession ? (
         <ChatView
           session={selectedSession}
+          targetMessage={targetMessage}
           messages={messages}
           emojiInfoMap={emojiInfoMap}
           messagesLoading={messagesLoading}
@@ -125,6 +129,7 @@ export function MessagesPanel({
 
 interface ChatViewProps {
   session: BilibiliSession
+  targetMessage?: TargetMessage | null
   messages: BilibiliMessage[]
   emojiInfoMap: EmojiInfoMap
   messagesLoading: boolean
@@ -145,6 +150,7 @@ interface ChatViewProps {
 
 function ChatView({
   session,
+  targetMessage,
   messages,
   emojiInfoMap,
   messagesLoading,
@@ -397,9 +403,11 @@ function ChatView({
         </div>
       ) : (
         <MessagesList
-          // Each chat opens at its newest message, shown at once from where it was left or not
-          key={chatKey(session)}
+          // Each chat opens at its newest message, shown at once from where it was left or not, or at the message
+          // a search found it by, each time it's opened at it
+          key={targetMessage ? `${chatKey(session)}@${targetMessage.id}` : chatKey(session)}
           virtuosoRef={virtuosoRef}
+          targetMessage={targetMessage}
           messages={messages}
           emojiInfoMap={emojiInfoMap}
           session={session}

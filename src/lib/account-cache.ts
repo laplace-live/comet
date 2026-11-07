@@ -89,24 +89,29 @@ export function chatToSave(chat: CachedChat, userCache: UserCache): SavedChat {
   return { ...chat, users }
 }
 
-/** A chat a search finds by a message it holds: its key (chatKey), and that message as the chat shows it */
-export interface ChatMatch {
-  key: string
+/** A message a search found a chat by: its msg_key, which the chat opens at, and what it says as the chat shows it */
+export interface MessageMatch {
+  msgKey: string
   text: string
 }
 
+/** A chat a search finds by a message it holds: its key (chatKey), and that message */
+export interface ChatMatch extends MessageMatch {
+  key: string
+}
+
 /**
- * The newest of a chat's messages that holds `query`, as the chat shows it, null when none does. Search looks
- * through the messages of the chats held here or on disk this way, as Bilibili has no search to ask, and finds a
- * chat by any of them, not just its last. A recalled message shows as recalled, so what it said doesn't count.
+ * The newest of a chat's messages that holds `query`, null when none does. Search looks through the messages of the
+ * chats held here or on disk this way, as Bilibili has no search to ask, and finds a chat by any of them, not just
+ * its last. A recalled message shows as recalled, so what it said doesn't count.
  * @param query - lowercase
  */
-export function findMessage(messages: BilibiliMessage[], query: string): string | null {
+export function findMessage(messages: BilibiliMessage[], query: string): MessageMatch | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     if (message.msg_status || message.msg_type === MSG_TYPE.REVOKE) continue
     const text = parseMessageContent(message)
-    if (text.toLowerCase().includes(query)) return text
+    if (text.toLowerCase().includes(query)) return { msgKey: String(message.msg_key), text }
   }
   return null
 }

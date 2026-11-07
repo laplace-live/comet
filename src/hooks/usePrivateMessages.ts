@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import type { AccountSnapshot, CachedChat, EmojiInfoMap, SavedChat } from '@/lib/account-cache'
+import type { AccountSnapshot, CachedChat, EmojiInfoMap, MessageMatch, SavedChat } from '@/lib/account-cache'
 import type { UserCache } from '@/lib/message-utils'
 import type {
   BilibiliEmojiInfo,
@@ -161,6 +161,15 @@ const SAVE_DELAY = 2000
 // Messages per page, large to need few requests
 const MESSAGES_PAGE_SIZE = '1000'
 
+/**
+ * A message the open chat opened at instead of its newest: the one a search found it by. Each opening has an `id`
+ * of its own, so opening it at the same message again goes back there.
+ */
+export interface TargetMessage {
+  msgKey: string
+  id: number
+}
+
 /** 未关注人消息: the chats 收起未关注人消息 folds out of the main list, listed apart from it */
 export interface UnfollowedFold {
   /** Newest first, as Bilibili pages them */
@@ -184,6 +193,8 @@ export interface UsePrivateMessagesReturn {
   // State
   sessions: BilibiliSession[]
   selectedSession: BilibiliSession | null
+  /** Where the open chat opened, when not at its newest message */
+  targetMessage: TargetMessage | null
   messages: BilibiliMessage[]
   emojiInfoMap: EmojiInfoMap
   loading: boolean
@@ -222,7 +233,7 @@ export interface UsePrivateMessagesReturn {
    * The shown account's chats with a message holding `query`, by chat key, each with the newest that does, as the
    * chats opened before hold them (see searchHeldChats)
    */
-  searchHeldChats: (query: string) => Promise<Map<string, string>>
+  searchHeldChats: (query: string) => Promise<Map<string, MessageMatch>>
 
   // Actions
   checkLogin: () => Promise<boolean>
@@ -230,7 +241,8 @@ export interface UsePrivateMessagesReturn {
   fetchSessions: () => Promise<void>
   loadMoreSessions: () => Promise<void>
   fetchMessages: (session: BilibiliSession) => Promise<void>
-  selectSession: (session: BilibiliSession) => void
+  /** Open a chat, at its newest message or at the one with `msgKey` (a search result's) */
+  selectSession: (session: BilibiliSession, msgKey?: string) => void
   clearSelectedSession: () => void
   sendMessage: (content: string) => Promise<boolean>
   sendImageMessage: (imageData: string, mimeType: string) => Promise<boolean>
@@ -256,6 +268,8 @@ export interface UsePrivateMessagesReturn {
 export function usePrivateMessages(): UsePrivateMessagesReturn {
   const [sessions, setSessions] = useState<BilibiliSession[]>([])
   const [selectedSession, setSelectedSession] = useState<BilibiliSession | null>(null)
+  const [targetMessage, setTargetMessage] = useState<TargetMessage | null>(null)
+  const targetIdRef = useRef(0)
   const [messages, setMessages] = useState<BilibiliMessage[]>([])
   const [loading, setLoading] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
@@ -614,8 +628,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
    * finds a chat by an earlier message than its last only once it's been opened, here or before a relaunch.
    */
   const searchHeldChats = useCallback(
-    async (query: string): Promise<Map<string, string>> => {
-      const found = new Map<string, string>()
+    async (query: string): Promise<Map<string, MessageMatch>> => {
+      const found = new Map<string, MessageMatch>()
       const mid = shownMidRef.current
       const needle = query.trim().toLowerCase()
       if (mid === null || !needle) return found
@@ -623,15 +637,15 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         const saved = await quietly('search the saved chats', () =>
           window.electronAPI.bilibili.cache.searchChats({ mid, query: needle })
         )
-        for (const { key, text } of saved ?? []) found.set(key, text)
+        for (const { key, ...match } of saved ?? []) found.set(key, match)
         // Another account showed meanwhile
         if (mid !== shownMidRef.current) return new Map()
       }
       // A chat held here is as new as its copy on disk, or newer (a message recalled since, say), so it decides
       for (const [key, chat] of chatCache.chatsOf(mid)) {
-        const text = findMessage(chat.messages, needle)
-        if (text === null) found.delete(key)
-        else found.set(key, text)
+        const match = findMessage(chat.messages, needle)
+        if (match === null) found.delete(key)
+        else found.set(key, match)
       }
       return found
     },
@@ -2134,10 +2148,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   )
 
   const selectSession = useCallback(
-    (session: BilibiliSession) => {
+    (session: BilibiliSession, msgKey?: string) => {
       // Ahead of the render, so replies for the session left behind can tell they're stale
       selectedSessionRef.current = session
       setSelectedSession(session)
+      setTargetMessage(msgKey ? { msgKey, id: ++targetIdRef.current } : null)
 
       // Kept per account; 客服消息's chats load their own way
       const mid = isCustomerServiceSession(session) ? null : shownMidRef.current
@@ -2171,6 +2186,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const clearSelectedSession = useCallback(() => {
     selectedSessionRef.current = null
     setSelectedSession(null)
+    setTargetMessage(null)
     setMessages([])
   }, [])
 
@@ -3358,6 +3374,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     // State
     sessions: displayedSessions,
     selectedSession: displayedSelectedSession,
+    targetMessage,
     messages,
     emojiInfoMap,
     // An account's first load shows a skeleton however it started, a switch included

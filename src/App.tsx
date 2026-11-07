@@ -18,6 +18,7 @@ export default function App() {
   const {
     sessions,
     selectedSession,
+    targetMessage,
     messages,
     emojiInfoMap,
     loading,
@@ -215,6 +216,7 @@ export default function App() {
 
             <MessagesPanel
               selectedSession={selectedSession}
+              targetMessage={targetMessage}
               messages={messages}
               emojiInfoMap={emojiInfoMap}
               messagesLoading={messagesLoading}

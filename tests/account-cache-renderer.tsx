@@ -1,5 +1,6 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import { VirtuosoMockContext } from 'react-virtuoso'
 
 import type {
   BilibiliLinkSettingResponse,
@@ -33,10 +34,11 @@ import {
   type SavedChat,
 } from '@/lib/account-cache'
 
-import { type UsePrivateMessagesReturn, usePrivateMessages } from '@/hooks/usePrivateMessages'
+import { type TargetMessage, type UsePrivateMessagesReturn, usePrivateMessages } from '@/hooks/usePrivateMessages'
 
+import { MessagesPanel } from '@/components/comet/MessagesPanel'
 import { SessionItem } from '@/components/comet/SessionItem'
-import { SEARCH_PAGE_GAP, SessionList, searchPreview } from '@/components/comet/SessionList'
+import { SEARCH_PAGE_GAP, SessionList, searchMatch } from '@/components/comet/SessionList'
 
 import { useSettings } from '@/stores/useSettings'
 
@@ -309,8 +311,8 @@ function installApi() {
         searchChats: async ({ mid, query }: SearchCachedChatsParams) =>
           [...disk].flatMap(([id, chat]) => {
             if (!id.startsWith(`${mid}/chat/`)) return []
-            const text = findMessage((chat as SavedChat).messages, query.toLowerCase())
-            return text === null ? [] : [{ key: id.slice(`${mid}/chat/`.length), text }]
+            const match = findMessage((chat as SavedChat).messages, query.toLowerCase())
+            return match === null ? [] : [{ key: id.slice(`${mid}/chat/`.length), ...match }]
           }),
         clear: async () => disk.clear(),
       },
@@ -563,10 +565,35 @@ test('a search finds chats by any message held of them, opened here or saved on 
   disk.set(`${OTHER}/chat/1:${OTHER_FRIEND}`, saved(OTHER_FRIEND, '另一个号的 asdaf'))
 
   const found = await current.searchHeldChats('  ASDAF ')
-  assert(found.get(`1:${FAN}`) === '早前的 Asdaf 消息', `the chat opened here should be found, got ${[...found]}`)
-  assert(found.get(`1:${COLLEAGUE}`) === 'asdaf 也在这', `the chat saved on disk should be found, got ${[...found]}`)
+  const opened = found.get(`1:${FAN}`)
+  assert(
+    opened?.text === '早前的 Asdaf 消息' && opened.msgKey === '1000',
+    `the chat opened here should be found, by that message, got ${JSON.stringify(opened)}`
+  )
+  const onDisk = found.get(`1:${COLLEAGUE}`)
+  assert(
+    onDisk?.text === 'asdaf 也在这' && onDisk.msgKey === '5000',
+    `the chat saved on disk should be found, by that message, got ${JSON.stringify(onDisk)}`
+  )
   assert(found.size === 2, `only the shown account's chats should be searched, got ${[...found.keys()]}`)
   assert((await current.searchHeldChats('没说过的话')).size === 0, 'text no message holds should find nothing')
+})
+
+test('a chat opened from a search opens at the message found, each time, and opened otherwise at its newest', async () => {
+  await setup()
+  await flush(() => current.selectSession(chatOf(FAN), '1000'))
+  const first = current.targetMessage
+  assert(first?.msgKey === '1000', `the chat should open at the message, got ${JSON.stringify(first)}`)
+  await flush(() => current.selectSession(chatOf(FAN), '1000'))
+  assert(
+    current.targetMessage?.msgKey === '1000' && current.targetMessage.id !== first?.id,
+    `opening it there again should go back there, got ${JSON.stringify(current.targetMessage)}`
+  )
+  await flush(() => current.selectSession(chatOf(FAN)))
+  assert(current.targetMessage === null, `opened otherwise, it should open at its newest, got ${current.targetMessage}`)
+  await flush(() => current.selectSession(chatOf(FRIEND), '1000'))
+  await flush(() => current.clearSelectedSession())
+  assert(current.targetMessage === null, 'a chat closed should leave nothing to open at')
 })
 
 test('a message recalled since finds its chat no more, though the copy on disk still holds it', async () => {
@@ -977,8 +1004,8 @@ test('a search finds a chat by an earlier message held of it, and shows that mes
   const fan = session(FAN, 1000, { last_msg: message(FAN, 8, said('asdaf 也是最后一句')) })
   const userCache = { [FRIEND]: { name: '朋友', face: '' }, [FAN]: { name: '粉丝', face: '' } }
   const held = new Map([
-    [`1:${FRIEND}`, '早前的 asdaf 消息'],
-    [`1:${FAN}`, '早前的 asdaf'],
+    [`1:${FRIEND}`, { msgKey: '3000', text: '早前的 asdaf 消息' }],
+    [`1:${FAN}`, { msgKey: '4000', text: '早前的 asdaf' }],
   ])
   const { type, text } = mountList()
   root.render(
@@ -1000,8 +1027,8 @@ test('a search finds a chat by an earlier message held of it, and shows that mes
   assert(asked.at(-1) === 'Asdaf', `the messages held should be searched for the text typed, got ${asked}`)
 
   // The message it was found by shows in place of its last, unless what the list shows of it holds the text already
-  assert(searchPreview(friend, 'Asdaf', userCache, held) === '早前的 asdaf 消息', 'the held message should show')
-  assert(searchPreview(fan, 'Asdaf', userCache, held) === undefined, 'its own last message should show')
+  assert(searchMatch(friend, 'Asdaf', userCache, held)?.text === '早前的 asdaf 消息', 'the held message should show')
+  assert(searchMatch(fan, 'Asdaf', userCache, held) === undefined, 'its own last message should show')
   root.render(
     <SessionItem
       session={friend}
@@ -1017,6 +1044,105 @@ test('a search finds a chat by an earlier message held of it, and shows that mes
     text().includes('早前的 asdaf 消息') && !text().includes('最后一句'),
     `the row should show the message in place of its last, got ${text()}`
   )
+})
+
+// The list draws rows in a hidden window only at the sizes Virtuoso is told
+const drawn = { viewportHeight: 600, itemHeight: 60 }
+
+test('a search result found by an earlier message opens the chat at it, and one found otherwise at its newest', async () => {
+  const opened: Array<[number, string | undefined]> = []
+  const userCache = { [FRIEND]: { name: '朋友', face: '' }, [FAN]: { name: 'asdaf 粉丝', face: '' } }
+  const { type, container } = mountList()
+  root.render(
+    <VirtuosoMockContext.Provider value={drawn}>
+      <SessionList
+        {...listProps({
+          sessions: [session(FRIEND, 2000), session(FAN, 1500)],
+          userCache,
+          onSessionClick: (s, msgKey) => opened.push([s.talker_id, msgKey]),
+          onSearchMessages: async () =>
+            new Map([
+              [`1:${FRIEND}`, { msgKey: '3000', text: '早前的 asdaf 消息' }],
+              [`1:${FAN}`, { msgKey: '4000', text: '粉丝说的 asdaf' }],
+            ]),
+        })}
+      />
+    </VirtuosoMockContext.Provider>
+  )
+  await flush()
+  await type('asdaf')
+  const row = (name: string) =>
+    [...container.querySelectorAll('button')].find(b => b.textContent?.includes(name)) as HTMLButtonElement | undefined
+  await until(() => !!row('早前的 asdaf 消息'), 2000, 'the chat found by an earlier message')
+  await flush(() => row('早前的 asdaf 消息')?.click())
+  await flush(() => row('asdaf 粉丝')?.click())
+  const got = opened.map(([talkerId, msgKey]) => `${talkerId} at ${msgKey ?? 'its newest'}`).join(', ')
+  assert(
+    got === `${FRIEND} at 3000, ${FAN} at its newest`,
+    `the one found by an earlier message should open at it, the one found by its name at its newest, got ${got}`
+  )
+})
+
+test('a chat opens at the message it was opened at, centered and marked, and otherwise at its newest', async () => {
+  const messages = Array.from({ length: 300 }, (_, i) => message(i % 2 ? ME : FAN, i + 1))
+  const container = document.createElement('div')
+  // The page has no stylesheet, so the list is given the height the app's layout gives it
+  const height = document.createElement('style')
+  height.textContent = `[data-virtuoso-scroller] { height: ${drawn.viewportHeight}px !important }`
+  document.body.replaceChildren(height, container)
+  root = createRoot(container)
+  const panel = (targetMessage: TargetMessage | null) => (
+    <VirtuosoMockContext.Provider value={drawn}>
+      <MessagesPanel
+        selectedSession={session(FAN, 300)}
+        targetMessage={targetMessage}
+        messages={messages}
+        emojiInfoMap={{}}
+        messagesLoading={false}
+        sendingMessage={false}
+        isVisible
+        userCache={{}}
+        userInfo={{ isLogin: true, mid: ME, uname: 'me' }}
+        onBack={() => undefined}
+        onSendMessage={async () => true}
+        onSendImage={async () => true}
+        onRecall={async () => ({ success: true })}
+        onToggleDnd={async () => true}
+        onToggleSticky={async () => true}
+        customerServiceSessions={[]}
+        activeCustomerService={null}
+        onSelectCustomerService={() => undefined}
+        onCustomerServiceReply={async () => true}
+      />
+    </VirtuosoMockContext.Provider>
+  )
+  const rows = () => [...container.querySelectorAll('[data-index]')].map(e => Number(e.getAttribute('data-index')))
+  const marked = () => [...container.querySelectorAll('[data-target]')].map(e => e.textContent)
+  const showsAround = (index: number) => rows().includes(index) && !rows().includes(messages.length - 1)
+  // Each opening mounts the list again, which draws its rows a few frames later
+  const open = async (targetMessage: TargetMessage | null) => {
+    await flush(() => root.render(panel(targetMessage)))
+    await until(() => rows().length > 0, 2000, 'the messages to show')
+  }
+
+  await open({ msgKey: '100000', id: 1 })
+  assert(showsAround(99), `it should open at the message, got rows ${rows()}`)
+  assert(
+    rows().some(i => i < 99) && rows().some(i => i > 99),
+    `the message should show among those around it, got rows ${rows()}`
+  )
+  assert(marked().length === 1 && marked()[0]?.includes('消息 100'), `the message should be marked, got ${marked()}`)
+
+  await open(null)
+  assert(rows().includes(messages.length - 1), `opened otherwise, it should open at its newest, got rows ${rows()}`)
+  assert(marked().length === 0, `nothing should be marked, got ${marked()}`)
+
+  await open({ msgKey: '100000', id: 2 })
+  assert(showsAround(99), `opened at the message again, it should go back there, got rows ${rows()}`)
+
+  // A message it doesn't hold (gone since) leaves it at its newest
+  await open({ msgKey: '999000', id: 3 })
+  assert(rows().includes(messages.length - 1), `it should open at its newest, got rows ${rows()}`)
 })
 
 void (async () => {
