@@ -1024,6 +1024,11 @@ test('merging keeps what was shown, takes the server copy of a message sent from
   assert(recalled.find(m => m.msg_seqno === 1)?.msg_status === 1, 'a recall should mark the message it names')
   const late = mergeMessages(recalled, [message(FAN, 1), message(FAN, 3)])
   assert(late === recalled, 'a copy fetched before the recall, landing late, should leave the message recalled')
+  const before = mergeMessages([message(FAN, 1), message(FAN, 10, { msg_type: 5, content: '3000' })], [message(FAN, 3)])
+  assert(
+    before.find(m => m.msg_seqno === 3)?.msg_status === 1,
+    'a recall held already should take back the message it names when that lands after it'
+  )
 
   const cancelled = mergeMessages(held, [message(0, 11, { msg_type: 5, content: '3000', sys_cancel: true })])
   assert(!cancelled.some(m => m.msg_seqno === 3), 'a message Bilibili cancelled should go')

@@ -184,20 +184,27 @@ export function mergeMessages(held: BilibiliMessage[], newer: BilibiliMessage[])
     changed = true
   }
 
-  // A recall (msg_type 5) carries the msg_key of the message it takes back. Bilibili removes one it cancelled itself
-  // (sys_cancel) and marks the rest recalled, as the web client shows them.
-  for (const message of newer) {
-    if (message.msg_type !== MSG_TYPE.REVOKE) continue
-    const key = String(message.content).trim()
+  // A recall (msg_type 5) carries the msg_key of the message it takes back, and takes it back whichever of the two
+  // came first. Bilibili removes one it cancelled itself (sys_cancel) and marks the rest recalled, as the web client
+  // shows them.
+  const takeBack = (recall: BilibiliMessage) => {
+    const key = String(recall.content).trim()
     const recalled = byKey.get(key)
-    if (!recalled) continue
-    if (message.sys_cancel) {
+    if (!recalled) return
+    if (recall.sys_cancel) {
       byKey.delete(key)
       changed = true
     } else if (recalled.msg_status === 0) {
       byKey.set(key, { ...recalled, msg_status: 1 })
       changed = true
     }
+  }
+  for (const message of newer) {
+    if (message.msg_type === MSG_TYPE.REVOKE) takeBack(message)
+  }
+  const arrived = new Set(newer.map(keyOf))
+  for (const message of held) {
+    if (message.msg_type === MSG_TYPE.REVOKE && arrived.has(String(message.content).trim())) takeBack(message)
   }
 
   if (!changed) return held
