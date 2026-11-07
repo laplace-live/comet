@@ -45,11 +45,15 @@ const ME = 123
 // Another account of the user's, which leaves 收起未关注人消息 off
 const OTHER_ACCOUNT = 789
 const FOLLOWED = 201
+// Someone the user follows, whose chat is older than the rest
+const OLD_FRIEND = 202
 // Chats with people the user doesn't follow, newest first
 const STRANGER = 301
 const FAN = 302
 // Someone neither list has
 const NEWCOMER = 303
+// Someone the user doesn't follow either, whose chat is older than the rest
+const LONG_AGO = 304
 // The other account's only chat, with someone it doesn't follow
 const OTHER_STRANGER = 401
 
@@ -124,12 +128,18 @@ let serverChats: Record<number, BilibiliSession[]>
 let folding: Record<number, boolean>
 // How many chats a page of 未关注人消息 holds
 let unfollowedPageSize: number
+// As Bilibili does, the first page of a list it filters (未关注人消息, or the main list folding them away) picks
+// from the newest so many chats only, and says has_more 0 once those run out, though older ones follow. Null
+// picks from them all.
+let firstPageWindow: number | null
 // The next so many pages of 未关注人消息 fail
 let failUnfollowedPages: number
 // Holds back the next read of the setting, the next main list, and every save, until resolved
 let linkSettingGate: Promise<unknown> | null
 let mainListGate: Promise<unknown> | null
 let saveGate: Promise<unknown>
+// Holds back the next page of 未关注人消息 asked for past the first, as Bilibili served it then, until resolved
+let nextPageGate: Promise<unknown> | null
 let signedInMid: number
 let sessionRequests: FetchSessionsParams[]
 let saves: SetUnfollowFoldParams[]
@@ -165,16 +175,35 @@ function sessionsReply(list: BilibiliSession[], hasMore = false): BilibiliSessio
   }
 }
 
+/** A page of the chats `keep` lists, newest first, older than `endTs` when given */
+function pageOf(
+  list: BilibiliSession[],
+  keep: (s: BilibiliSession) => boolean,
+  size: number,
+  endTs: string | undefined,
+  filtered: boolean
+): BilibiliSessionsResponse {
+  const older = endTs === undefined ? list : list.filter(s => s.session_ts < Number(endTs))
+  if (endTs === undefined && filtered && firstPageWindow !== null) {
+    const page = older.slice(0, firstPageWindow).filter(keep).slice(0, size)
+    return sessionsReply(page, page.length === size)
+  }
+  const kept = older.filter(keep)
+  return sessionsReply(kept.slice(0, size), kept.length > size)
+}
+
 const unreadOf = (list: BilibiliSession[]) => list.reduce((sum, s) => sum + s.unread_count, 0)
 
 async function setup(folded: boolean) {
   serverChats = { [ME]: chats(), [OTHER_ACCOUNT]: [chat(OTHER_STRANGER, false, 70, 1)] }
   folding = { [ME]: folded, [OTHER_ACCOUNT]: false }
   unfollowedPageSize = 100
+  firstPageWindow = null
   failUnfollowedPages = 0
   linkSettingGate = null
   mainListGate = null
   saveGate = Promise.resolve()
+  nextPageGate = null
   signedInMid = ME
   sessionRequests = []
   saves = []
@@ -223,14 +252,19 @@ async function setup(folded: boolean) {
             failUnfollowedPages--
             return { error: 'Failed to fetch sessions from Bilibili', code: 500 }
           }
-          const endTs = params.endTs === undefined ? Infinity : Number(params.endTs)
-          const older = list.filter(s => isUnfollowed(s) && s.session_ts < endTs)
-          return sessionsReply(older.slice(0, unfollowedPageSize), older.length > unfollowedPageSize)
+          const page = pageOf(list, isUnfollowed, unfollowedPageSize, params.endTs, true)
+          const gate = params.endTs === undefined ? null : nextPageGate
+          if (gate) {
+            nextPageGate = null
+            await gate
+          }
+          return page
         }
         const gate = mainListGate
         mainListGate = null
         await gate
-        return sessionsReply(params.unfollowFold ? list.filter(s => !isUnfollowed(s)) : list)
+        const folds = params.unfollowFold === true
+        return pageOf(list, s => !folds || !isUnfollowed(s), Infinity, params.endTs, folds)
       },
       fetchSingleUnread: async (): Promise<BilibiliSingleUnreadResponse> => {
         const list = serverChats[signedInMid]
@@ -490,6 +524,91 @@ test('asking for the next page of 未关注人消息 twice at once loads it once
     `the next page should be asked for once, got ${unfollowedPagesSince(before)}`
   )
   assert(folded() === `${STRANGER},${FAN}`, `the next page should land once, got ${folded()}`)
+})
+
+/** Ask for the next page of 未关注人消息 and hold it back as Bilibili served it; the function returned lands it */
+async function holdNextPage() {
+  const gate = deferred<void>()
+  nextPageGate = gate.promise
+  let loading: Promise<void> = Promise.resolve()
+  await flush(() => {
+    loading = current.loadMoreUnfollowed()
+  })
+  return async () => {
+    gate.resolve()
+    await flush(() => loading)
+  }
+}
+
+test('a refresh while the next page of 未关注人消息 loads leaves that page to land', async () => {
+  await setup(true)
+  unfollowedPageSize = 1
+  await flush(() => current.fetchSessions())
+  assert(
+    folded() === `${STRANGER}` && current.unfollowed?.hasMore,
+    `the first page should hold one chat, got ${folded()}`
+  )
+  const land = await holdNextPage()
+  // An unread change, as any message brings, refreshes the first page meanwhile
+  await flush(() => onSessionUpdate({ type: 'total_unread' }))
+  await land()
+  assert(folded() === `${STRANGER},${FAN}`, `the next page should land, got ${folded()}`)
+})
+
+test('a chat that moves to the top while the next page of 未关注人消息 loads shows there only', async () => {
+  await setup(true)
+  serverChats[ME] = [...chats(), chat(LONG_AGO, false, 20)]
+  unfollowedPageSize = 2
+  await flush(() => current.fetchSessions())
+  assert(folded() === `${STRANGER},${FAN}`, `the first page should hold two chats, got ${folded()}`)
+  // Served before LONG_AGO wrote, the page still holds its chat, which a refresh moves to the top meanwhile
+  const land = await holdNextPage()
+  serverChats[ME] = [chat(LONG_AGO, false, 60, 1), ...chats()]
+  await flush(() => onSessionUpdate({ type: 'total_unread' }))
+  assert(folded() === `${LONG_AGO},${STRANGER},${FAN}`, `the refresh should move it up, got ${folded()}`)
+  await land()
+  assert(folded() === `${LONG_AGO},${STRANGER},${FAN}`, `it should show once, at the top, got ${folded()}`)
+})
+
+test('a next page of 未关注人消息 still out when the list starts over elsewhere lands nothing', async () => {
+  await setup(true)
+  unfollowedPageSize = 1
+  await flush(() => current.fetchSessions())
+  const land = await holdNextPage()
+  // A reload's first page is NEWCOMER alone now. The page out goes on from STRANGER, so it would leave STRANGER out.
+  serverChats[ME] = [chat(NEWCOMER, false, 60, 1), ...chats()]
+  await flush(() => current.fetchSessions())
+  await land()
+  assert(folded() === `${NEWCOMER}`, `the page asked for before the reload should land nothing, got ${folded()}`)
+})
+
+test("a first page of 未关注人消息 that Bilibili cuts short, saying it's the end, still goes on", async () => {
+  await setup(true)
+  // Picked from the newest two chats only, FOLLOWED among them, the first page holds STRANGER alone
+  serverChats[ME] = [...chats(), chat(LONG_AGO, false, 20)]
+  firstPageWindow = 2
+  await flush(() => current.fetchSessions())
+  assert(folded() === `${STRANGER}` && current.unfollowed?.hasMore, `it should go on past ${folded()}`)
+  await flush(() => current.loadMoreUnfollowed())
+  assert(folded() === `${STRANGER},${FAN},${LONG_AGO}`, `the rest should load from its last chat, got ${folded()}`)
+  assert(!current.unfollowed?.hasMore, 'a page asked from where another ended should say where the list ends')
+})
+
+test('the main list goes on past a first page Bilibili cuts short while 未关注人消息 is folded away', async () => {
+  await setup(true)
+  // Picked from the newest two chats only, STRANGER among them, the first page holds FOLLOWED alone
+  serverChats[ME] = [...chats(), chat(OLD_FRIEND, true, 10)]
+  firstPageWindow = 2
+  await flush(() => current.fetchSessions())
+  assert(listed() === `${FOLLOWED}` && current.hasMoreSessions, `it should go on past ${listed()}`)
+  await flush(() => current.loadMoreSessions())
+  assert(listed() === `${FOLLOWED},${OLD_FRIEND}`, `the rest should load from its last chat, got ${listed()}`)
+  assert(!current.hasMoreSessions, 'a page asked from where another ended should say where the list ends')
+})
+
+test('with nothing folded away, the main list ends where its first page says', async () => {
+  await setup(false)
+  assert(listed() === `${STRANGER},${FOLLOWED},${FAN}` && !current.hasMoreSessions, `it should end, got ${listed()}`)
 })
 
 test('a background checkLogin during switchAccount does not overwrite the switched account', async () => {

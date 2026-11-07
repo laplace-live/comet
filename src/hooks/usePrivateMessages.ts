@@ -6,6 +6,7 @@ import type {
   BilibiliEmojiInfo,
   BilibiliMessage,
   BilibiliSession,
+  BilibiliSessionsResponse,
   CustomerServiceMessage,
   CustomerServiceMessagesResponse,
   CustomerServiceSession,
@@ -62,6 +63,17 @@ function isErrorResponse<T extends object>(response: T | ErrorResponse): respons
 // Whether a session is this chat
 function isSameChat(session: BilibiliSession | null | undefined, chat: BilibiliSession): boolean {
   return session?.talker_id === chat.talker_id && session?.session_type === chat.session_type
+}
+
+/**
+ * Whether a session list goes on past its first page. Bilibili picks the first page of a list it filters
+ * (未关注人消息, or the main list with those chats folded out of it) from the account's newest hundred or so chats,
+ * and says has_more 0 once they run out, though older ones follow. So a first page like that goes on if it lists
+ * any, and the page asked from its last row tells: has_more holds for a page asked from where another ended.
+ * @param filtered - whether the list leaves chats out: 未关注人消息, or the main list while it folds them away
+ */
+function firstPageGoesOn(page: BilibiliSessionsResponse, filtered: boolean): boolean {
+  return page.data?.has_more === 1 || (filtered && (page.data?.session_list?.length ?? 0) > 0)
 }
 
 /** A read or write of the cache on disk, which failing never stops anything: it reads as nothing */
@@ -331,7 +343,8 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   const listsLoadRef = useRef(0)
   // Bumped only by the account changing, for work that a reload of the same account must not cancel
   const listsAccountRef = useRef(0)
-  // Bumped by every load of 未关注人消息 and by the account changing, so only the latest load lands
+  // Bumped by every load of 未关注人消息's first page and by the account changing, so only the latest of them
+  // lands. Its next pages go by where the list ends instead (see loadMoreUnfollowed).
   const unfollowedLoadRef = useRef(0)
   // The mid of the account currently connected in the renderer, so background login checks can detect failovers
   const connectedMidRef = useRef<number | null>(null)
@@ -793,7 +806,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       return {
         sessions: page.data?.session_list || [],
-        hasMore: page.data?.has_more === 1,
+        hasMore: firstPageGoesOn(page, true),
         unread: unreadCounted ? (unread.data?.unfollow_unread ?? 0) : null,
       }
     } catch (err) {
@@ -875,15 +888,19 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
     loadingMoreUnfollowedRef.current = true
     setLoadingMoreUnfollowed(true)
-    const load = unfollowedLoadRef.current
+    const account = listsAccountRef.current
     try {
       const data = await window.electronAPI.bilibili.fetchSessions({
         sessionType: String(SESSION_LIST_TYPE.UNFOLLOWED),
         unfollowFold: true,
         endTs: String(endTs),
       })
-      // A reload, another account or the fold turning off took over meanwhile
-      if (load !== unfollowedLoadRef.current || !unfollowFoldRef.current) return
+      // It lands while the list still ends where it was asked from. Refreshes of the first page, which come with
+      // messages and unread changes, keep the pages loaded past it, so one landing meanwhile doesn't drop it;
+      // another account, the fold turning off, or a load that starts the list over does.
+      if (account !== listsAccountRef.current || !unfollowFoldRef.current || unfollowedNextEndTsRef.current !== endTs) {
+        return
+      }
 
       if (isErrorResponse(data)) {
         throw new Error(data.error || 'Failed to fetch more sessions')
@@ -894,11 +911,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       const sessionList = data.data?.session_list || []
       const hasMore = data.data?.has_more === 1 && sessionList.length > 0
-      setUnfollowed([...unfollowedSessionsRef.current, ...sessionList])
+      // A chat that moved to the top meanwhile, with a message, is listed there already
+      const listed = new Set(unfollowedSessionsRef.current.map(chatKey))
+      const added = sessionList.filter(session => !listed.has(chatKey(session)))
+      setUnfollowed([...unfollowedSessionsRef.current, ...added])
       setHasMoreUnfollowed(hasMore)
       unfollowedNextEndTsRef.current = hasMore ? sessionList[sessionList.length - 1].session_ts : null
 
-      const uidsToFetch = sessionList
+      const uidsToFetch = added
         .filter(session => !session.account_info?.name && !userCacheRef.current[session.talker_id])
         .map(session => session.talker_id)
       if (uidsToFetch.length > 0) fetchUserInfoBatch(uidsToFetch)
@@ -1127,7 +1147,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         return {
           sessions,
-          hasMoreSessions: data.data?.has_more === 1,
+          hasMoreSessions: firstPageGoesOn(data, fold),
           nextEndTs: sessions.length > 0 ? sessions[sessions.length - 1].session_ts : null,
           unfollowFold: setting,
           unfollowed,
@@ -1216,7 +1236,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       showUnfollowed(unfollowedPage, keep)
 
       const sessionList = data.data?.session_list || []
-      const hasMore = data.data?.has_more === 1
+      const hasMore = firstPageGoesOn(data, fold)
       const kept = keep ? keepLoadedPages(sessionsRef.current, sessionList, hasMore) : null
       if (kept) {
         // They end where they did, and so does what loads next
@@ -2835,7 +2855,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       // The pages loaded past the first stay where they still follow on from it, ending where they did, so a
       // message doesn't take the list scrolled or searched through back to its first page
-      const hasMore = data.data?.has_more === 1
+      const hasMore = firstPageGoesOn(data, fold)
       const kept = keepLoadedPages(sessionsRef.current, sessionList, hasMore)
       if (kept) {
         sessionsRef.current = kept
