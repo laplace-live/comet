@@ -1,5 +1,5 @@
 import { ArrowLeft, Loader2, MessageSquare, RefreshCw, Search, Settings, X } from 'lucide-react'
-import { forwardRef, useMemo, useState } from 'react'
+import { forwardRef, useEffect, useMemo, useRef, useState } from 'react'
 import type { ScrollerProps } from 'react-virtuoso'
 import { Virtuoso } from 'react-virtuoso'
 
@@ -104,6 +104,9 @@ export function SessionList({
   const hasMoreListed = unfollowed?.open ? unfollowed.hasMore : hasMoreSessions
   const loadingMoreListed = unfollowed?.open ? unfollowed.loadingMore : loadingMore
 
+  const query = filterText.trim()
+  const searching = query.length > 0
+
   // Filter sessions based on visibility filter and search text
   const filteredSessions = useMemo(() => {
     let result = listedSessions
@@ -116,8 +119,8 @@ export function SessionList({
     }
 
     // Then, apply search text filter
-    if (filterText.trim()) {
-      const searchLower = filterText.toLowerCase()
+    if (query) {
+      const searchLower = query.toLowerCase()
       result = result.filter(session => {
         // Search by username
         const name = getSessionName(session, userCache).toLowerCase()
@@ -125,7 +128,7 @@ export function SessionList({
 
         // Search by uid
         const uid = String(session.talker_id)
-        if (uid.includes(filterText.trim())) return true
+        if (uid.includes(query)) return true
 
         // Search by last message content
         const lastMessage = getLastMessagePreview(session).toLowerCase()
@@ -136,9 +139,34 @@ export function SessionList({
     }
 
     return result
-  }, [listedSessions, filterText, visibilityFilter, userCache])
+  }, [listedSessions, query, visibilityFilter, userCache])
 
-  const isFiltering = filterText.trim().length > 0 || visibilityFilter !== 'all'
+  const isFiltering = searching || visibilityFilter !== 'all'
+
+  // A search looks through every chat in the list, so it loads the rest of the list page by page as it goes (and
+  // the pages stay loaded after). Where a page adds nothing (it failed, say), it stops rather than ask again and
+  // again, until the search changes.
+  const searchLoadRef = useRef<{ query: string; from: number } | null>(null)
+  useEffect(() => {
+    if (!searching || !hasMoreListed || loadingMoreListed) return
+    const last = searchLoadRef.current
+    if (last?.query === query && last.from === listedSessions.length) return
+    searchLoadRef.current = { query, from: listedSessions.length }
+    if (showingUnfollowed) onLoadMoreUnfollowed?.()
+    else onLoadMore()
+  }, [
+    query,
+    searching,
+    hasMoreListed,
+    loadingMoreListed,
+    listedSessions.length,
+    showingUnfollowed,
+    onLoadMore,
+    onLoadMoreUnfollowed,
+  ])
+  // Whether pages that may hold what the search looks for are still loading (or about to)
+  const stalled = searchLoadRef.current?.query === query && searchLoadRef.current.from === listedSessions.length
+  const searchingMore = searching && hasMoreListed && (loadingMoreListed || !stalled)
 
   // The newest chat 未关注人消息 holds, which it previews and is listed by
   const newestUnfollowed = useMemo(
@@ -158,11 +186,11 @@ export function SessionList({
     const list: SessionListRow[] = filteredSessions.map(session => ({ type: 'session', session }))
     const shown =
       visibilityFilter === 'all' || (visibilityFilter === 'unread' ? unfollowedUnread > 0 : unfollowedUnread === 0)
-    if (showingUnfollowed || filterText.trim() || !shown || !newestUnfollowed) return list
+    if (showingUnfollowed || searching || !shown || !newestUnfollowed) return list
     const at = filteredSessions.findIndex(s => !s.top_ts && s.session_ts < newestUnfollowed.session_ts)
     list.splice(at === -1 ? list.length : at, 0, { type: 'unfollowed', newest: newestUnfollowed })
     return list
-  }, [filteredSessions, showingUnfollowed, filterText, visibilityFilter, unfollowedUnread, newestUnfollowed])
+  }, [filteredSessions, showingUnfollowed, searching, visibilityFilter, unfollowedUnread, newestUnfollowed])
 
   // Handle end reached for infinite scroll - only when not filtering
   const handleEndReached = () => {
@@ -247,11 +275,13 @@ export function SessionList({
           <SessionListSkeleton />
         </div>
       ) : rows.length === 0 ? (
-        <div className='flex-1 overflow-hidden'>{isFiltering ? <SessionListNoResults /> : <SessionListEmpty />}</div>
+        <div className='flex-1 overflow-hidden'>
+          {searchingMore ? <SessionListSearching /> : isFiltering ? <SessionListNoResults /> : <SessionListEmpty />}
+        </div>
       ) : (
         <Virtuoso
-          // Each list opens at its top, not at the other's scroll position
-          key={showingUnfollowed ? 'unfollowed' : 'sessions'}
+          // Each list opens at its top, not at the other's scroll position, nor at another account's
+          key={`${activeAccountMid ?? 0}:${showingUnfollowed ? 'unfollowed' : 'sessions'}`}
           className='flex-1'
           data={rows}
           endReached={handleEndReached}
@@ -277,7 +307,7 @@ export function SessionList({
           components={{
             Scroller: CustomScroller,
             Footer: () =>
-              hasMoreListed && !isFiltering ? (
+              hasMoreListed && (!isFiltering || searchingMore) ? (
                 <div className='flex items-center justify-center p-4'>
                   <Loader2 className='size-5 animate-spin text-muted-foreground' aria-hidden='true' />
                 </div>
@@ -323,6 +353,15 @@ function SessionListEmpty() {
     <div className='flex flex-col items-center justify-center py-16 text-muted-foreground'>
       <MessageSquare className='mb-4 size-12 opacity-50' aria-hidden='true' />
       <p>暂无会话</p>
+    </div>
+  )
+}
+
+function SessionListSearching() {
+  return (
+    <div className='flex flex-col items-center justify-center py-16 text-muted-foreground'>
+      <Loader2 className='mb-4 size-12 animate-spin opacity-50' aria-hidden='true' />
+      <p>正在加载更多会话以搜索…</p>
     </div>
   )
 }

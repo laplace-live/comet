@@ -23,6 +23,7 @@ import type { CheckLoginResult, CustomerServiceShop } from '@/types/electron'
 
 import { SESSION_TYPE } from '@/types/bilibili'
 
+import { chatKey } from '@/lib/account-cache'
 import { MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MIME_TYPES } from '@/lib/const'
 import { getCustomerServiceShop } from '@/lib/customer-service'
 import { getSessionAvatar, getSessionName, isCustomerServiceSession } from '@/lib/message-utils'
@@ -396,6 +397,8 @@ function ChatView({
         </div>
       ) : (
         <MessagesList
+          // Each chat opens at its newest message, shown at once from where it was left or not
+          key={chatKey(session)}
           virtuosoRef={virtuosoRef}
           messages={messages}
           emojiInfoMap={emojiInfoMap}

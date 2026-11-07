@@ -1,0 +1,854 @@
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+
+import type {
+  BilibiliLinkSettingResponse,
+  BilibiliMessage,
+  BilibiliMessagesResponse,
+  BilibiliSession,
+  BilibiliSessionsResponse,
+  BilibiliSingleUnreadResponse,
+  BilibiliUserCardsResponse,
+} from '@/types/bilibili'
+import type {
+  CachedChatParams,
+  CachedListsParams,
+  CheckLoginResult,
+  FetchMessagesParams,
+  FetchSessionsParams,
+  FetchUsersParams,
+  NewMessageNotification,
+  SaveCachedChatParams,
+  SaveCachedListsParams,
+} from '@/types/electron'
+
+import { ChatCache, keepLoadedPages, listsToSave, mergeMessages, SAVED_SESSIONS } from '@/lib/account-cache'
+
+import { type UsePrivateMessagesReturn, usePrivateMessages } from '@/hooks/usePrivateMessages'
+
+import { SessionList } from '@/components/comet/SessionList'
+
+import { useSettings } from '@/stores/useSettings'
+
+const globals = window as unknown as {
+  IS_REACT_ACT_ENVIRONMENT: boolean
+  __rendererTestResults: { tests: Array<{ name: string; ok: boolean; error?: string }> }
+}
+globals.IS_REACT_ACT_ENVIRONMENT = true
+
+function assert(condition: unknown, message: string) {
+  if (!condition) throw new Error(message)
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(resolvePromise => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
+
+const ME = 123
+const OTHER = 789
+// My chats, newest first
+const FRIEND = 201
+const FAN = 202
+const COLLEAGUE = 203
+// The other account's
+const OTHER_FRIEND = 301
+// Someone who writes to me while I'm away
+const NEWCOMER = 401
+
+const NAMES: Record<number, string> = { [ME]: 'me', [OTHER]: 'other' }
+
+function session(talkerId: number, ts: number, overrides: Partial<BilibiliSession> = {}): BilibiliSession {
+  return {
+    talker_id: talkerId,
+    session_type: 1,
+    at_seqno: 0,
+    top_ts: 0,
+    group_name: '',
+    group_cover: '',
+    is_follow: 1,
+    is_dnd: 0,
+    ack_seqno: 0,
+    ack_ts: 0,
+    session_ts: ts * 1_000_000,
+    unread_count: 0,
+    last_msg: null,
+    group_type: 0,
+    can_fold: 0,
+    status: 0,
+    max_seqno: ts,
+    new_push_msg: 0,
+    setting: 0,
+    is_guardian: 0,
+    is_intercept: 0,
+    is_trust: 0,
+    system_msg_type: 0,
+    live_status: 0,
+    biz_msg_unread_count: 0,
+    user_label: null,
+    ...overrides,
+  }
+}
+
+function message(senderUid: number, seqno: number, overrides: Partial<BilibiliMessage> = {}): BilibiliMessage {
+  return {
+    sender_uid: senderUid,
+    receiver_type: 1,
+    receiver_id: ME,
+    msg_type: 1,
+    content: JSON.stringify({ content: `消息 ${seqno}` }),
+    msg_seqno: seqno,
+    timestamp: seqno,
+    at_uids: null,
+    msg_key: `${seqno}000`,
+    msg_status: 0,
+    notify_code: '',
+    msg_source: 0,
+    ...overrides,
+  }
+}
+
+interface Account {
+  /** Newest first, as Bilibili lists them */
+  chats: BilibiliSession[]
+  /** Each chat's messages, oldest first */
+  messages: Record<number, BilibiliMessage[]>
+}
+
+let current: UsePrivateMessagesReturn
+let root!: Root
+let server: Record<number, Account>
+let signedInMid: number
+let storedMids: number[]
+// The main process's cache on disk, which a relaunch keeps: `${mid}/lists` and `${mid}/chat/${key}`
+let disk: Map<string, unknown>
+// The account the next login check moves on to, as when the signed-in one signed out on Bilibili's side
+let failOverTo: number | null
+let pageSize: number
+// Lists asked for in the background (with a mid) fail
+let failBackgroundLists: boolean
+// Holds back the next list of this account's, until resolved
+let listGate: { mid: number; promise: Promise<unknown> } | null
+// Holds back the next messages asked for, until resolved
+let messagesGate: Promise<unknown> | null
+let sessionRequests: FetchSessionsParams[]
+let messageRequests: FetchMessagesParams[]
+let userRequests: FetchUsersParams[]
+let onNewMessage: (notification: NewMessageNotification) => void
+
+const reply = { code: 0, msg: '0', message: '0', ttl: 1 }
+
+function sessionsReply(list: BilibiliSession[], hasMore: boolean): BilibiliSessionsResponse {
+  return {
+    ...reply,
+    data: {
+      session_list: list,
+      has_more: hasMore ? 1 : 0,
+      anti_disturb_cleaning: false,
+      is_address_list_empty: 0,
+      show_level: false,
+    },
+  }
+}
+
+// Bilibili's own order: pinned first, then newest first
+function listed(list: BilibiliSession[]): BilibiliSession[] {
+  return [...list].sort((a, b) => b.top_ts - a.top_ts || b.session_ts - a.session_ts)
+}
+
+function Harness() {
+  current = usePrivateMessages()
+  return null
+}
+
+async function flush(callback: () => unknown = () => undefined) {
+  await act(async () => {
+    await callback()
+    await new Promise(resolve => setTimeout(resolve, 0))
+  })
+}
+
+function installApi() {
+  window.electronAPI = {
+    setBadgeCount: async () => ({ success: true }),
+    bilibili: {
+      getAccounts: async () => ({
+        accounts: storedMids.map(mid => ({ mid, uname: NAMES[mid], isExpired: false })),
+        activeAccountMid: signedInMid,
+      }),
+      checkLogin: async (): Promise<CheckLoginResult> => {
+        if (failOverTo !== null) {
+          signedInMid = failOverTo
+          failOverTo = null
+        }
+        return { isLogin: true, mid: signedInMid, uname: NAMES[signedInMid] }
+      },
+      setActiveAccount: async ({ mid }: { mid: number }) => {
+        signedInMid = mid
+        return { success: true }
+      },
+      removeAccount: async ({ mid }: { mid: number }) => {
+        storedMids = storedMids.filter(m => m !== mid)
+        forgetOnDisk(mid)
+        return {
+          success: true,
+          remainingAccounts: storedMids.map(m => ({ mid: m, uname: NAMES[m], isExpired: false })),
+          activeAccountMid: signedInMid,
+        }
+      },
+      wsConnect: async () => ({ success: true }),
+      wsDisconnect: async () => ({ success: true }),
+      fetchLinkSetting: async (): Promise<BilibiliLinkSettingResponse> => ({
+        ...reply,
+        data: { show_unfollowed_msg: 0 },
+      }),
+      fetchSingleUnread: async (): Promise<BilibiliSingleUnreadResponse> => ({
+        ...reply,
+        data: {
+          unfollow_unread: 0,
+          follow_unread: 0,
+          unfollow_push_msg: 0,
+          dustbin_push_msg: 0,
+          dustbin_unread: 0,
+          biz_msg_unfollow_unread: 0,
+          biz_msg_follow_unread: 0,
+          custom_unread: 0,
+        },
+      }),
+      // Answered for the account asked as, else the one signed in when asked, as the main process does
+      fetchSessions: async (params: FetchSessionsParams) => {
+        sessionRequests.push(params)
+        const mid = params.mid ?? signedInMid
+        if (params.mid !== undefined && failBackgroundLists) {
+          return { error: 'Failed to fetch sessions from Bilibili', code: 500 }
+        }
+        const gate = listGate?.mid === mid ? listGate : null
+        if (gate) {
+          listGate = null
+          await gate.promise
+        }
+        const all = listed(server[mid].chats)
+        const endTs = params.endTs === undefined ? Infinity : Number(params.endTs)
+        const rest = params.endTs === undefined ? all : all.filter(s => !s.top_ts && s.session_ts < endTs)
+        // Copies, as off the network: what the hook holds doesn't change with Bilibili's side
+        return sessionsReply(
+          rest.slice(0, pageSize).map(s => ({ ...s })),
+          rest.length > pageSize
+        )
+      },
+      // Newest first within (begin, end), pages of `size`, as fetch_session_msgs answers
+      fetchMessages: async (params: FetchMessagesParams): Promise<BilibiliMessagesResponse> => {
+        messageRequests.push(params)
+        const gate = messagesGate
+        messagesGate = null
+        await gate
+        const begin = params.beginSeqno ? Number(params.beginSeqno) : 0
+        const end = params.endSeqno ? Number(params.endSeqno) : Infinity
+        const inRange = (server[params.mid ?? signedInMid].messages[Number(params.talkerId)] ?? [])
+          .filter(m => m.msg_seqno > begin && m.msg_seqno < end)
+          .reverse()
+        const page = inRange.slice(0, Number(params.size ?? 20)).map(m => ({ ...m }))
+        return {
+          ...reply,
+          data: {
+            messages: page,
+            has_more: inRange.length > page.length ? 1 : 0,
+            min_seqno: page.length > 0 ? page[page.length - 1].msg_seqno : 0,
+            max_seqno: page.length > 0 ? page[0].msg_seqno : 0,
+          },
+        }
+      },
+      updateAck: async () => ({ code: 0 }),
+      fetchUsers: async (params: FetchUsersParams): Promise<BilibiliUserCardsResponse> => {
+        userRequests.push(params)
+        return {
+          ...reply,
+          data: params.uids.split(',').map(uid => ({
+            mid: Number(uid),
+            name: `用户名 ${uid}`,
+            face: '',
+            sign: '',
+            rank: 0,
+            level: 0,
+            silence: 0,
+            vip: { type: 0, status: 0, due_date: 0, nickname_color: '' },
+            official: { role: 0, title: '', desc: '', type: -1 },
+          })),
+        }
+      },
+      logout: async () => {
+        storedMids = storedMids.filter(m => m !== signedInMid)
+        forgetOnDisk(signedInMid)
+        signedInMid = storedMids[0]
+        return { success: true }
+      },
+      // Copies, as through IPC; saves only for stored accounts, as the main process does
+      cache: {
+        loadLists: async ({ mid }: CachedListsParams) => structuredClone(disk.get(`${mid}/lists`) ?? null),
+        saveLists: async ({ mid, lists }: SaveCachedListsParams) => {
+          if (storedMids.includes(mid)) disk.set(`${mid}/lists`, structuredClone(lists))
+        },
+        loadChat: async ({ mid, key }: CachedChatParams) => structuredClone(disk.get(`${mid}/chat/${key}`) ?? null),
+        saveChat: async ({ mid, key, chat }: SaveCachedChatParams) => {
+          if (storedMids.includes(mid)) disk.set(`${mid}/chat/${key}`, structuredClone(chat))
+        },
+        clear: async () => disk.clear(),
+      },
+      showNotification: async () => ({ shown: true }),
+      onNewMessage: (callback: (notification: NewMessageNotification) => void) => {
+        onNewMessage = callback
+        return () => undefined
+      },
+      onSessionUpdate: () => () => undefined,
+      onWsConnected: () => () => undefined,
+      onWsDisconnected: () => () => undefined,
+      onNavigateToSession: () => () => undefined,
+    },
+  } as unknown as typeof window.electronAPI
+}
+
+function forgetOnDisk(mid: number) {
+  for (const key of disk.keys()) if (key.startsWith(`${mid}/`)) disk.delete(key)
+}
+
+async function setup({ failBackground = false } = {}) {
+  server = {
+    [ME]: {
+      chats: [session(FRIEND, 50), session(FAN, 40), session(COLLEAGUE, 30)],
+      messages: { [FAN]: [message(FAN, 1), message(ME, 2), message(FAN, 3)] },
+    },
+    [OTHER]: { chats: [session(OTHER_FRIEND, 70)], messages: {} },
+  }
+  signedInMid = ME
+  storedMids = [ME, OTHER]
+  disk = new Map()
+  failOverTo = null
+  useSettings.setState({ keepChatsOnDevice: true })
+  pageSize = 100
+  failBackgroundLists = failBackground
+  listGate = null
+  messagesGate = null
+  sessionRequests = []
+  messageRequests = []
+  userRequests = []
+  installApi()
+  const container = document.createElement('div')
+  document.body.replaceChildren(container)
+  root = createRoot(container)
+  await flush(() => root.render(<Harness />))
+  await flush(() => window.dispatchEvent(new Event('focus')))
+  assert(current.userInfo?.mid === ME, 'the harness should log in')
+  await flush(() => current.fetchSessions())
+}
+
+/** Quit and launch again: what was in memory goes, and what's on disk stays */
+async function relaunch() {
+  await flush(() => root.unmount())
+  sessionRequests = []
+  messageRequests = []
+  userRequests = []
+  const container = document.createElement('div')
+  document.body.replaceChildren(container)
+  root = createRoot(container)
+  await flush(() => root.render(<Harness />))
+}
+
+const ids = (list: BilibiliSession[]) => list.map(s => s.talker_id).join(',')
+const shown = () => ids(current.sessions)
+const contents = () => current.messages.map(m => m.msg_seqno).join(',')
+
+function holdList(mid: number) {
+  const gate = deferred<void>()
+  listGate = { mid, promise: gate.promise }
+  return gate
+}
+
+function holdMessages() {
+  const gate = deferred<void>()
+  messagesGate = gate.promise
+  return gate
+}
+
+function chatOf(talkerId: number): BilibiliSession {
+  const found = current.sessions.find(s => s.talker_id === talkerId)
+  if (!found) throw new Error(`${talkerId} should be listed`)
+  return found
+}
+
+const tests: Array<{ name: string; run: () => Promise<void> }> = []
+function test(name: string, run: () => Promise<void>) {
+  tests.push({ name, run })
+}
+
+test("the other accounts' lists load in the background, as those accounts", async () => {
+  await setup()
+  const background = sessionRequests.filter(p => p.mid !== undefined)
+  assert(
+    background.length === 1 && background[0].mid === OTHER,
+    `the other account's list should load once, as it, got ${JSON.stringify(background)}`
+  )
+  assert(
+    userRequests.some(p => p.mid === OTHER && p.uids === String(OTHER_FRIEND)),
+    "the other account's contacts should be looked up as it"
+  )
+})
+
+test('switching to an account loaded in the background shows it at once, then refreshes it', async () => {
+  await setup()
+  server[OTHER].chats.push(session(NEWCOMER, 80))
+  const gate = holdList(OTHER)
+  let switching!: Promise<void>
+  await flush(() => {
+    switching = current.switchAccount(OTHER)
+  })
+
+  assert(shown() === `${OTHER_FRIEND}`, `its lists should show at once, got ${shown()}`)
+  assert(!current.loading, 'no skeleton should cover lists already known')
+  assert(current.userInfo?.mid === OTHER && current.userInfo.uname === 'other', 'who it is should show at once')
+  assert(current.userCache[OTHER_FRIEND]?.name === `用户名 ${OTHER_FRIEND}`, 'names should show at once')
+
+  await flush(async () => {
+    gate.resolve()
+    await switching
+  })
+  assert(shown() === `${NEWCOMER},${OTHER_FRIEND}`, `the lists should refresh behind it, got ${shown()}`)
+})
+
+test('switching back shows the account as it was left, then refreshes it', async () => {
+  await setup()
+  await flush(() => current.switchAccount(OTHER))
+  assert(shown() === `${OTHER_FRIEND}`, `the switch should land, got ${shown()}`)
+
+  server[ME].chats.push(session(NEWCOMER, 90))
+  const gate = holdList(ME)
+  let switching!: Promise<void>
+  await flush(() => {
+    switching = current.switchAccount(ME)
+  })
+  assert(shown() === `${FRIEND},${FAN},${COLLEAGUE}`, `it should show as it was left, got ${shown()}`)
+  assert(!current.loading, 'no skeleton should cover it')
+  assert(current.userCache[FRIEND]?.name === `用户名 ${FRIEND}`, 'its names should still be known')
+
+  await flush(async () => {
+    gate.resolve()
+    await switching
+  })
+  assert(shown() === `${NEWCOMER},${FRIEND},${FAN},${COLLEAGUE}`, `it should refresh behind it, got ${shown()}`)
+})
+
+test('an account with nothing kept shows a skeleton until its lists land, not an empty list', async () => {
+  await setup({ failBackground: true })
+  failBackgroundLists = false
+  const gate = holdList(OTHER)
+  let switching!: Promise<void>
+  await flush(() => {
+    switching = current.switchAccount(OTHER)
+  })
+  assert(
+    current.loading && current.sessions.length === 0,
+    `a skeleton should show while its lists load, got loading ${current.loading} and ${shown()}`
+  )
+  assert(current.userInfo?.uname === 'other', 'who it is should show at once')
+
+  await flush(async () => {
+    gate.resolve()
+    await switching
+  })
+  assert(!current.loading && shown() === `${OTHER_FRIEND}`, `its lists should land, got ${shown()}`)
+})
+
+test('opening a chat again shows it at once and asks only for what came since', async () => {
+  await setup()
+  await flush(() => current.selectSession(chatOf(FAN)))
+  assert(contents() === '1,2,3', `the chat should load, got ${contents()}`)
+  await flush(() => current.selectSession(chatOf(FRIEND)))
+
+  server[ME].messages[FAN].push(message(FAN, 4))
+  const gate = holdMessages()
+  const asked = messageRequests.length
+  await flush(() => current.selectSession(chatOf(FAN)))
+  assert(contents() === '1,2,3' && !current.messagesLoading, `it should show at once, got ${contents()}`)
+  assert(
+    messageRequests.length === asked + 1 && messageRequests[asked].beginSeqno === '3',
+    `only what came after the newest held should be asked for, got ${JSON.stringify(messageRequests.slice(asked))}`
+  )
+
+  await flush(() => gate.resolve())
+  assert(contents() === '1,2,3,4', `what came since should be added, got ${contents()}`)
+})
+
+test('a chat that got more than a page since pages back until it meets what it held', async () => {
+  await setup()
+  await flush(() => current.selectSession(chatOf(FAN)))
+  await flush(() => current.clearSelectedSession())
+  for (let seqno = 4; seqno <= 2500; seqno++) server[ME].messages[FAN].push(message(FAN, seqno))
+
+  await flush(() => current.selectSession(chatOf(FAN)))
+  assert(current.messages.length === 2500, `every message should be there, got ${current.messages.length}`)
+  assert(
+    current.messages.every((m, i) => m.msg_seqno === i + 1),
+    'the messages should run in order with nothing missing'
+  )
+})
+
+test('a chat stays kept when switching away and back, under its own account', async () => {
+  await setup()
+  await flush(() => current.selectSession(chatOf(FAN)))
+  await flush(() => current.switchAccount(OTHER))
+  assert(current.selectedSession === null && current.messages.length === 0, "the chat shouldn't stay open")
+  await flush(() => current.switchAccount(ME))
+
+  const gate = holdMessages()
+  await flush(() => current.selectSession(chatOf(FAN)))
+  assert(contents() === '1,2,3' && !current.messagesLoading, `it should show at once, got ${contents()}`)
+  await flush(() => gate.resolve())
+})
+
+test('a recall that comes over the WebSocket takes back the message it names', async () => {
+  await setup()
+  await flush(() => current.selectSession(chatOf(FAN)))
+  await flush(() =>
+    onNewMessage({
+      talkerId: FAN,
+      sessionType: 1,
+      instantMsg: {
+        senderUid: FAN,
+        receiverType: 1,
+        receiverId: ME,
+        msgType: 5,
+        content: '3000',
+        msgSeqno: 5,
+        timestamp: 5,
+        msgKey: '5000',
+      },
+    })
+  )
+  const recalled = current.messages.find(m => m.msg_seqno === 3)
+  assert(recalled?.msg_status === 1, `the message it names should show as recalled, got ${recalled?.msg_status}`)
+})
+
+test('a message keeps the pages loaded past the first, instead of going back to the first page', async () => {
+  await setup()
+  pageSize = 100
+  server[ME].chats = Array.from({ length: 150 }, (_, i) => session(1000 + i, i + 1))
+  await flush(() => current.fetchSessions())
+  await flush(() => current.loadMoreSessions())
+  assert(current.sessions.length === 150, `both pages should load, got ${current.sessions.length}`)
+
+  // A message moves an old chat to the top
+  const moved = server[ME].chats[9]
+  moved.session_ts = 500 * 1_000_000
+  await flush(() => onNewMessage({ talkerId: moved.talker_id, sessionType: 1 }))
+
+  assert(current.sessions.length === 150, `the second page should stay, got ${current.sessions.length}`)
+  assert(current.sessions[0].talker_id === moved.talker_id, 'the chat should move to the top')
+  assert(new Set(current.sessions.map(s => s.talker_id)).size === 150, 'no chat should show twice')
+})
+
+test('when more changed than the first page holds, the list goes back to the first page', async () => {
+  await setup()
+  server[ME].chats = Array.from({ length: 150 }, (_, i) => session(1000 + i, i + 1))
+  await flush(() => current.fetchSessions())
+  await flush(() => current.loadMoreSessions())
+
+  // More chats than a page got messages: what follows the first page isn't known anymore
+  for (const [i, chat] of server[ME].chats.slice(0, 120).entries()) chat.session_ts = (1000 + i) * 1_000_000
+  await flush(() => onNewMessage({ talkerId: server[ME].chats[0].talker_id, sessionType: 1 }))
+  assert(current.sessions.length === 100, `only the first page should stay, got ${current.sessions.length}`)
+  assert(current.hasMoreSessions, 'the rest should load as before')
+})
+
+test('removing an account forgets what was kept of it', async () => {
+  await setup()
+  await flush(() => current.removeAccount(OTHER))
+
+  // Signed in again, it can't load in the background this time
+  storedMids = [ME, OTHER]
+  failBackgroundLists = true
+  await flush(() => current.fetchAccounts())
+  await flush(() => current.fetchSessions())
+  await flush()
+  failBackgroundLists = false
+
+  const gate = holdList(OTHER)
+  let switching!: Promise<void>
+  await flush(() => {
+    switching = current.switchAccount(OTHER)
+  })
+  assert(current.loading && current.sessions.length === 0, 'nothing kept from before should show')
+  await flush(async () => {
+    gate.resolve()
+    await switching
+  })
+})
+
+test('signing out shows the next account at once, as kept', async () => {
+  await setup()
+  const gate = holdList(OTHER)
+  let leaving!: Promise<void>
+  await flush(() => {
+    leaving = current.logout()
+  })
+  assert(shown() === `${OTHER_FRIEND}`, `the next account should show at once, got ${shown()}`)
+  await flush(async () => {
+    gate.resolve()
+    await leaving
+  })
+  assert(current.userInfo?.mid === OTHER, 'the next account should be signed in')
+})
+
+// On disk, across a relaunch
+
+test('a relaunch shows the account as it was left, then refreshes it', async () => {
+  await setup()
+  server[ME].chats.push(session(NEWCOMER, 90))
+  const gate = holdList(ME)
+  await relaunch()
+
+  assert(shown() === `${FRIEND},${FAN},${COLLEAGUE}`, `its lists should show at once, got ${shown()}`)
+  assert(!current.initializing && !current.loading, 'neither a spinner nor a skeleton should cover them')
+  assert(current.isConnected && current.userInfo?.uname === 'me', 'who it is should show at once')
+  assert(current.userCache[FRIEND]?.name === `用户名 ${FRIEND}`, 'names should show at once')
+
+  await flush(() => gate.resolve())
+  assert(shown() === `${NEWCOMER},${FRIEND},${FAN},${COLLEAGUE}`, `the lists should refresh behind, got ${shown()}`)
+})
+
+test('a chat opened before a relaunch shows at once after it, asking only for what came since', async () => {
+  await setup()
+  await flush(() => current.selectSession(chatOf(FAN)))
+  assert(contents() === '1,2,3', `the chat should load, got ${contents()}`)
+  await relaunch()
+
+  server[ME].messages[FAN].push(message(FAN, 4))
+  const gate = holdMessages()
+  await flush(() => current.selectSession(chatOf(FAN)))
+  assert(contents() === '1,2,3' && !current.messagesLoading, `it should show at once, got ${contents()}`)
+  assert(
+    messageRequests.length === 1 && messageRequests[0].beginSeqno === '3' && messageRequests[0].mid === ME,
+    `only what came since should be asked for, as its account, got ${JSON.stringify(messageRequests)}`
+  )
+
+  await flush(() => gate.resolve())
+  assert(contents() === '1,2,3,4', `what came since should be added, got ${contents()}`)
+})
+
+test('after a relaunch, the other accounts show as saved when switched to, with nothing loaded ahead', async () => {
+  await setup()
+  await relaunch()
+  assert(
+    !sessionRequests.some(p => p.mid !== undefined),
+    `accounts saved on disk shouldn't load in the background, got ${JSON.stringify(sessionRequests)}`
+  )
+
+  server[OTHER].chats.push(session(NEWCOMER, 80))
+  const gate = holdList(OTHER)
+  let switching!: Promise<void>
+  await flush(() => {
+    switching = current.switchAccount(OTHER)
+  })
+  assert(shown() === `${OTHER_FRIEND}` && !current.loading, `its lists should show at once, got ${shown()}`)
+
+  await flush(async () => {
+    gate.resolve()
+    await switching
+  })
+  assert(shown() === `${NEWCOMER},${OTHER_FRIEND}`, `the lists should refresh behind, got ${shown()}`)
+})
+
+test('a relaunch into an account signed out elsewhere moves on to the next, leaving none of the first', async () => {
+  await setup()
+  // It signed out on Bilibili's side: the login check moves on to the other account
+  failOverTo = OTHER
+  const gate = holdList(OTHER)
+  await relaunch()
+
+  assert(current.userInfo?.mid === OTHER, `the next account should be signed in, got ${current.userInfo?.mid}`)
+  assert(current.sessions.length === 0 && current.loading, `its lists should load under a skeleton, got ${shown()}`)
+
+  await flush(() => gate.resolve())
+  assert(shown() === `${OTHER_FRIEND}`, `only its own lists should show, got ${shown()}`)
+})
+
+test('with 在本机保留聊天记录 off, what was saved is deleted and nothing more is', async () => {
+  await setup()
+  await flush(() => current.selectSession(chatOf(FAN)))
+  assert(disk.size > 0, 'what loaded should be on its way to disk')
+
+  try {
+    await flush(() => useSettings.getState().setKeepChatsOnDevice(false))
+    assert(disk.size === 0, `turning it off should delete what was saved, left ${[...disk.keys()]}`)
+
+    await relaunch()
+    assert(current.sessions.length === 0, 'nothing from before should show')
+    await flush(() => current.fetchSessions())
+    await flush(() => current.selectSession(chatOf(FAN)))
+    assert(contents() === '1,2,3', `the chat should load from Bilibili, got ${contents()}`)
+    await relaunch()
+    assert(disk.size === 0, `nothing should be saved while it's off, got ${[...disk.keys()]}`)
+  } finally {
+    // The setting outlives the page, in localStorage
+    useSettings.setState({ keepChatsOnDevice: true })
+  }
+})
+
+// The cache's own rules
+
+test('the lists saved on disk stop after their first sessions, going on from there', async () => {
+  const many = Array.from({ length: SAVED_SESSIONS + 50 }, (_, i) => session(1000 + i, 10_000 - i))
+  const saved = listsToSave({
+    sessions: many,
+    hasMoreSessions: false,
+    nextEndTs: null,
+    unfollowFold: null,
+    unfollowed: [session(FAN, 5)],
+    unfollowedUnread: 0,
+    hasMoreUnfollowed: false,
+    unfollowedNextEndTs: null,
+    userCache: { 1000: { name: 'kept', face: '' }, [1000 + SAVED_SESSIONS]: { name: 'dropped', face: '' } },
+  })
+  assert(saved.sessions.length === SAVED_SESSIONS, `only the first should be saved, got ${saved.sessions.length}`)
+  assert(
+    saved.hasMoreSessions && saved.nextEndTs === many[SAVED_SESSIONS - 1].session_ts,
+    'the list should go on from the last saved'
+  )
+  assert(saved.unfollowed.length === 1 && !saved.hasMoreUnfollowed, 'a short list should be saved as it is')
+  assert(
+    saved.userCache[1000]?.name === 'kept' && !saved.userCache[1000 + SAVED_SESSIONS],
+    'only the names of those listed should be saved'
+  )
+})
+
+test('merging keeps what was shown, takes the server copy of a message sent from here, and applies recalls', async () => {
+  const held = [message(FAN, 1), message(ME, 2), message(FAN, 3)]
+  assert(mergeMessages(held, [message(FAN, 3)]) === held, 'nothing new should keep the same list')
+
+  // Sent from here: a stand-in seqno until the server's copy comes
+  const sent = message(ME, Date.now(), { msg_key: '9000', timestamp: 4 })
+  const withSent = [...held, sent]
+  const merged = mergeMessages(withSent, [message(ME, 9, { msg_key: '9000', timestamp: 4 })])
+  assert(merged.length === 4 && merged[3].msg_seqno === 9, 'the server copy should replace the stand-in')
+
+  const recalled = mergeMessages(held, [message(FAN, 10, { msg_type: 5, content: '1000' })])
+  assert(recalled.find(m => m.msg_seqno === 1)?.msg_status === 1, 'a recall should mark the message it names')
+
+  const cancelled = mergeMessages(held, [message(0, 11, { msg_type: 5, content: '3000', sys_cancel: true })])
+  assert(!cancelled.some(m => m.msg_seqno === 3), 'a message Bilibili cancelled should go')
+})
+
+test('the pages loaded past the first stay only while they still follow on from it', async () => {
+  const list = [session(5, 50), session(4, 40), session(3, 30), session(2, 20), session(1, 10)]
+  // Chat 2 got a message: a fresh first page of three
+  const page = [session(2, 60), session(5, 50), session(4, 40)]
+  assert(ids(keepLoadedPages(list, page, true) ?? []) === '2,5,4,3,1', 'the older pages should follow the fresh one')
+  assert(keepLoadedPages(list, page, false) === null, 'a first page that is the whole list should replace it')
+
+  const allNew = [session(9, 90), session(8, 80), session(7, 70)]
+  assert(keepLoadedPages(list, allNew, true) === null, 'a page of only newer chats leaves what follows unknown')
+
+  const pinned = [session(6, 5, { top_ts: 1 }), ...list]
+  assert(keepLoadedPages(pinned, page, true) === null, 'an unpinned chat has no known place among the rest')
+})
+
+test('the cache keeps the most recently opened chats within its budget', async () => {
+  const cache = new ChatCache(5)
+  const chat = (count: number) => ({
+    messages: Array.from({ length: count }, (_, i) => message(FAN, i + 1)),
+    emojiInfoMap: {},
+    syncedSeqno: count,
+  })
+  cache.set(ME, 'a', chat(2))
+  cache.set(ME, 'b', chat(2))
+  cache.get(ME, 'a')
+  cache.set(OTHER, 'c', chat(2))
+  assert(!cache.get(ME, 'b') && cache.get(ME, 'a') && cache.get(OTHER, 'c'), 'the least recently opened should go')
+
+  cache.set(ME, 'huge', chat(10))
+  assert(cache.get(ME, 'huge') && !cache.get(ME, 'a'), 'one over the budget alone should still stay')
+
+  cache.set(OTHER, 'd', chat(1))
+  cache.forgetAccount(OTHER)
+  assert(!cache.get(OTHER, 'd'), "a forgotten account's chats should go")
+})
+
+// The session list's search
+
+test('a search loads the rest of the list as it goes, and stops where a page adds nothing', async () => {
+  let pages = 0
+  let failNext = false
+  let props!: Parameters<typeof SessionList>[0]
+  const container = document.createElement('div')
+  document.body.replaceChildren(container)
+  root = createRoot(container)
+
+  const render = () => root.render(<SessionList {...props} />)
+  const loadMore = async () => {
+    pages++
+    props = { ...props, loadingMore: true }
+    render()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const failed = failNext
+    failNext = false
+    const more = failed ? [] : Array.from({ length: 2 }, (_, i) => session(10_000 * pages + i, 1000 - 10 * pages - i))
+    props = { ...props, sessions: [...props.sessions, ...more], loadingMore: false, hasMoreSessions: pages < 3 }
+    render()
+  }
+  props = {
+    sessions: [session(FRIEND, 2000)],
+    selectedSession: null,
+    loading: false,
+    loadingMore: false,
+    hasMoreSessions: true,
+    isHidden: false,
+    isConnected: true,
+    userCache: { [FRIEND]: { name: '朋友', face: '' } },
+    onSessionClick: () => undefined,
+    onLoadMore: () => void loadMore(),
+    onRefresh: () => undefined,
+  }
+  await flush(render)
+  assert(pages === 0, 'nothing should load before a search')
+
+  const input = container.querySelector('input[type="search"]') as HTMLInputElement
+  const type = (text: string) => {
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+    setValue?.call(input, text)
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+  }
+  await flush(() => type('  朋友  '))
+  for (let i = 0; i < 5; i++) await flush()
+  assert(pages === 3, `a search should load every page, got ${pages}`)
+  assert(
+    container.textContent?.includes('1 / 7'),
+    `the search, spaces aside, should find the chat among all 7, got ${container.textContent}`
+  )
+
+  // A page that fails stops a search loading
+  await flush(() => type(''))
+  props = { ...props, sessions: [session(FRIEND, 2000)], hasMoreSessions: true }
+  pages = 0
+  await flush(render)
+  assert(pages === 0, 'nothing should load without a search')
+  failNext = true
+  await flush(() => type('另一个'))
+  for (let i = 0; i < 5; i++) await flush()
+  assert(pages === 1, `a page that adds nothing should stop the search loading, got ${pages}`)
+})
+
+void (async () => {
+  const report: typeof globals.__rendererTestResults = { tests: [] }
+  for (const { name, run } of tests) {
+    try {
+      await run()
+      report.tests.push({ name, ok: true })
+    } catch (error) {
+      report.tests.push({ name, ok: false, error: error instanceof Error ? error.stack : String(error) })
+    } finally {
+      if (root) await flush(() => root.unmount())
+    }
+  }
+  globals.__rendererTestResults = report
+})()

@@ -2,8 +2,12 @@
 // https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts
 import { contextBridge, ipcRenderer } from 'electron'
 
+import type { AccountSnapshot, SavedChat } from './lib/account-cache'
 import type { BilibiliCredentials } from './types/bilibili'
 import type {
+  AccountParams,
+  CachedChatParams,
+  CachedListsParams,
   CheckForUpdatesResult,
   CheckLoginResult,
   CopyImageParams,
@@ -25,6 +29,8 @@ import type {
   RemoveAccountResult,
   ReorderAccountsParams,
   ReorderAccountsResult,
+  SaveCachedChatParams,
+  SaveCachedListsParams,
   SendCustomerServiceMessageParams,
   SendMessageParams,
   SessionUpdateNotification,
@@ -82,8 +88,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     fetchSessions: (params: FetchSessionsParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_SESSIONS, params),
     fetchMessages: (params: FetchMessagesParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_MESSAGES, params),
     fetchUsers: (params: FetchUsersParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_USERS, params),
-    fetchSingleUnread: () => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_SINGLE_UNREAD),
-    fetchLinkSetting: () => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_LINK_SETTING),
+    fetchSingleUnread: (params?: AccountParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_SINGLE_UNREAD, params),
+    fetchLinkSetting: (params?: AccountParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_FETCH_LINK_SETTING, params),
 
     // Actions
     updateAck: (params: UpdateAckParams) => ipcRenderer.invoke(IpcChannel.BILIBILI_UPDATE_ACK, params),
@@ -106,6 +112,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke(IpcChannel.BILIBILI_CUSTOMER_SERVICE_UPDATE_ACK, params),
       uploadImage: (params: UploadImageParams): Promise<UploadImageResult> =>
         ipcRenderer.invoke(IpcChannel.BILIBILI_CUSTOMER_SERVICE_UPLOAD_IMAGE, params),
+    },
+
+    // The account cache on disk (Settings › 在本机保留聊天记录)
+    cache: {
+      loadLists: (params: CachedListsParams): Promise<AccountSnapshot | null> =>
+        ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_LOAD_LISTS, params),
+      saveLists: (params: SaveCachedListsParams): Promise<void> =>
+        ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_SAVE_LISTS, params),
+      loadChat: (params: CachedChatParams): Promise<SavedChat | null> =>
+        ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_LOAD_CHAT, params),
+      saveChat: (params: SaveCachedChatParams): Promise<void> =>
+        ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_SAVE_CHAT, params),
+      clear: (): Promise<void> => ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_CLEAR),
     },
 
     // WebSocket for real-time notifications

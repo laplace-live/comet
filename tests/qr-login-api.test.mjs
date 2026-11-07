@@ -1,8 +1,15 @@
 /* global globalThis */
 import assert from 'node:assert/strict'
-import { before, beforeEach, test } from 'node:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { after, before, beforeEach, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { build } from 'vite'
+
+// userData, where the disk cache of chats would go
+const userData = await mkdtemp(path.join(tmpdir(), 'comet-api-test-'))
+after(() => rm(userData, { recursive: true, force: true }))
 
 // Exercise the real main-process handlers without touching a user's account store
 // or OS keychain. Vite bundles the TypeScript source and its existing @ imports
@@ -11,6 +18,7 @@ const mockModules = {
   electron: `
     export const handlers = new Map()
     export const ipcMain = { handle: (channel, handler) => handlers.set(channel, handler) }
+    export const app = { getPath: () => ${JSON.stringify(userData)} }
     export const safeStorage = {
       isAsyncEncryptionAvailable: async () => true,
       encryptStringAsync: async value => Buffer.from(value),
@@ -522,6 +530,57 @@ test('BILIBILI_CHECK_LOGIN marks an explicitly signed-out account expired and sw
     ],
     activeAccountMid: otherUser.mid,
   })
+})
+
+test('reads for another stored account go out with its cookies, and never with an expired one', async t => {
+  const other = { ...credentials, DedeUserID: 67890, SESSDATA: 'other-session' }
+  const otherUser = { mid: 67890, uname: 'Second user', face: 'https://example.invalid/second.png' }
+
+  mockFetch(t, [pollResponse(), navResponse()])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
+  mockFetch(t, [pollResponse(legacyUrl(other)), Response.json({ code: 0, data: { isLogin: true, ...otherUser } })])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'other-key' })
+  assert.equal((await invoke(channels.BILIBILI_GET_ACCOUNTS)).activeAccountMid, userInfo.mid)
+
+  const asked = []
+  const answer = (input, init = {}) => {
+    asked.push({ url: String(input), cookie: new Headers(init.headers).get('Cookie') })
+    return Response.json({ code: 0, message: '0', ttl: 1, data: {} })
+  }
+  t.mock.method(globalThis, 'fetch', async (input, init) => answer(input, init))
+  const readAll = async params => {
+    asked.length = 0
+    await invoke(channels.BILIBILI_FETCH_SESSIONS, { ...params })
+    await invoke(channels.BILIBILI_FETCH_MESSAGES, { talkerId: '1', ...params })
+    await invoke(channels.BILIBILI_FETCH_USERS, { uids: '1', ...params })
+    await invoke(channels.BILIBILI_FETCH_SINGLE_UNREAD, params)
+    await invoke(channels.BILIBILI_FETCH_LINK_SETTING, params)
+    return asked.map(request => request.cookie)
+  }
+
+  const otherCookie = cookieStringFromCredentials(other)
+  assert.deepEqual(await readAll({ mid: otherUser.mid }), Array(5).fill(otherCookie), 'reads should go out as it')
+  const activeCookie = cookieStringFromCredentials(credentials)
+  assert.deepEqual(await readAll(undefined), Array(5).fill(activeCookie), 'with no mid, as the active account')
+  assert.deepEqual(await readAll({ mid: 1 }), [], 'an account not stored reads nothing')
+
+  // The active account signs out on Bilibili's side, so the next one takes over and it's marked expired
+  t.mock.method(globalThis, 'fetch', async (input, init = {}) => {
+    const url = String(input)
+    if (url === endpoints.NAV) {
+      return new Headers(init.headers).get('Cookie')?.includes(`DedeUserID=${credentials.DedeUserID}`)
+        ? Response.json({ code: -101, message: '账号未登录', data: { isLogin: false } })
+        : Response.json({ code: 0, data: { isLogin: true, ...otherUser } })
+    }
+    if (url.startsWith(refreshEndpoints.INFO)) {
+      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: false, timestamp: Date.now() } })
+    }
+    return answer(input, init)
+  })
+  assert.deepEqual(await invoke(channels.BILIBILI_CHECK_LOGIN), { isLogin: true, ...otherUser })
+  const expired = await invoke(channels.BILIBILI_FETCH_SESSIONS, { mid: userInfo.mid })
+  assert.ok(expired.error, 'a read as the expired account should be refused')
+  assert.deepEqual(await readAll({ mid: userInfo.mid }), [], "an expired account's cookies should never go out")
 })
 
 test('BILIBILI_REAUTH_ACCOUNT updates credentials and refreshToken', async t => {

@@ -5,6 +5,7 @@
  * All main process handlers and preload bridge implementations should import from here.
  */
 
+import type { AccountSnapshot, SavedChat } from '@/lib/account-cache'
 import type {
   BilibiliCredentials,
   BilibiliLinkSettingResponse,
@@ -18,6 +19,9 @@ import type {
   CustomerServiceSessionsResponse,
 } from '@/types/bilibili'
 import type {
+  AccountParams,
+  CachedChatParams,
+  CachedListsParams,
   CheckForUpdatesResult,
   CheckLoginResult,
   CopyImageParams,
@@ -40,6 +44,8 @@ import type {
   RemoveAccountResult,
   ReorderAccountsParams,
   ReorderAccountsResult,
+  SaveCachedChatParams,
+  SaveCachedListsParams,
   SendCustomerServiceMessageParams,
   SendMessageParams,
   SessionUpdateNotification,
@@ -111,6 +117,13 @@ export const IpcChannel = {
   BILIBILI_CUSTOMER_SERVICE_SEND_MESSAGE: 'bilibili:customer-service-send-message',
   BILIBILI_CUSTOMER_SERVICE_UPDATE_ACK: 'bilibili:customer-service-update-ack',
   BILIBILI_CUSTOMER_SERVICE_UPLOAD_IMAGE: 'bilibili:customer-service-upload-image',
+
+  // Bilibili accounts' cache on disk
+  BILIBILI_CACHE_LOAD_LISTS: 'bilibili:cache-load-lists',
+  BILIBILI_CACHE_SAVE_LISTS: 'bilibili:cache-save-lists',
+  BILIBILI_CACHE_LOAD_CHAT: 'bilibili:cache-load-chat',
+  BILIBILI_CACHE_SAVE_CHAT: 'bilibili:cache-save-chat',
+  BILIBILI_CACHE_CLEAR: 'bilibili:cache-clear',
 
   // Bilibili WebSocket
   BILIBILI_WS_CONNECT: 'bilibili:ws-connect',
@@ -229,11 +242,11 @@ export interface IpcInvokeContract {
     result: BilibiliUserCardsResponse | ErrorResponse
   }
   [IpcChannel.BILIBILI_FETCH_SINGLE_UNREAD]: {
-    params: undefined
+    params: AccountParams | undefined
     result: BilibiliSingleUnreadResponse | ErrorResponse
   }
   [IpcChannel.BILIBILI_FETCH_LINK_SETTING]: {
-    params: undefined
+    params: AccountParams | undefined
     result: BilibiliLinkSettingResponse | ErrorResponse
   }
 
@@ -283,6 +296,28 @@ export interface IpcInvokeContract {
   [IpcChannel.BILIBILI_CUSTOMER_SERVICE_UPLOAD_IMAGE]: {
     params: UploadImageParams
     result: UploadImageResult
+  }
+
+  // Bilibili accounts' cache on disk
+  [IpcChannel.BILIBILI_CACHE_LOAD_LISTS]: {
+    params: CachedListsParams
+    result: AccountSnapshot | null
+  }
+  [IpcChannel.BILIBILI_CACHE_SAVE_LISTS]: {
+    params: SaveCachedListsParams
+    result: undefined
+  }
+  [IpcChannel.BILIBILI_CACHE_LOAD_CHAT]: {
+    params: CachedChatParams
+    result: SavedChat | null
+  }
+  [IpcChannel.BILIBILI_CACHE_SAVE_CHAT]: {
+    params: SaveCachedChatParams
+    result: undefined
+  }
+  [IpcChannel.BILIBILI_CACHE_CLEAR]: {
+    params: undefined
+    result: undefined
   }
 
   // Bilibili WebSocket

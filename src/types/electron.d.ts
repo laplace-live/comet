@@ -1,3 +1,4 @@
+import type { AccountSnapshot, SavedChat } from '../lib/account-cache'
 import type {
   BilibiliCredentials,
   BilibiliLinkSettingResponse,
@@ -11,7 +12,13 @@ import type {
   CustomerServiceSessionsResponse,
 } from './bilibili'
 
-export interface FetchSessionsParams {
+/** Reads that can ask for a stored account other than the active one, to have its lists ready before switching */
+export interface AccountParams {
+  /** The stored account to read as, the active one when left out; an expired one reads nothing */
+  mid?: number
+}
+
+export interface FetchSessionsParams extends AccountParams {
   /** What to list, a SESSION_LIST_TYPE; the main list by default */
   sessionType?: string
   size?: string
@@ -20,7 +27,7 @@ export interface FetchSessionsParams {
   unfollowFold?: boolean
 }
 
-export interface FetchMessagesParams {
+export interface FetchMessagesParams extends AccountParams {
   talkerId: string
   sessionType?: string
   size?: string
@@ -28,7 +35,7 @@ export interface FetchMessagesParams {
   endSeqno?: string
 }
 
-export interface FetchUsersParams {
+export interface FetchUsersParams extends AccountParams {
   uids: string
 }
 
@@ -201,6 +208,25 @@ export interface QRPollResult {
   error?: string
 }
 
+/** An account whose lists the disk cache holds */
+export interface CachedListsParams {
+  mid: number
+}
+
+export interface SaveCachedListsParams extends CachedListsParams {
+  lists: AccountSnapshot
+}
+
+/** A chat the disk cache holds, by its account and its key there (chatKey) */
+export interface CachedChatParams {
+  mid: number
+  key: string
+}
+
+export interface SaveCachedChatParams extends CachedChatParams {
+  chat: SavedChat
+}
+
 export interface GetAccountsResult {
   accounts: StoredAccountInfo[]
   activeAccountMid: number | null
@@ -356,8 +382,8 @@ export interface ElectronAPI {
     fetchSessions: (params: FetchSessionsParams) => Promise<BilibiliSessionsResponse | ErrorResponse>
     fetchMessages: (params: FetchMessagesParams) => Promise<BilibiliMessagesResponse | ErrorResponse>
     fetchUsers: (params: FetchUsersParams) => Promise<BilibiliUserCardsResponse | ErrorResponse>
-    fetchSingleUnread: () => Promise<BilibiliSingleUnreadResponse | ErrorResponse>
-    fetchLinkSetting: () => Promise<BilibiliLinkSettingResponse | ErrorResponse>
+    fetchSingleUnread: (params?: AccountParams) => Promise<BilibiliSingleUnreadResponse | ErrorResponse>
+    fetchLinkSetting: (params?: AccountParams) => Promise<BilibiliLinkSettingResponse | ErrorResponse>
 
     // Actions
     updateAck: (params: UpdateAckParams) => Promise<UpdateAckResponse | ErrorResponse>
@@ -378,6 +404,15 @@ export interface ElectronAPI {
       ) => Promise<CustomerServiceSendMessageResponse | ErrorResponse>
       updateAck: (params: CustomerServiceShop) => Promise<UpdateAckResponse | ErrorResponse>
       uploadImage: (params: UploadImageParams) => Promise<UploadImageResult>
+    }
+
+    // The account cache on disk, sealed with safeStorage (Settings › 在本机保留聊天记录)
+    cache: {
+      loadLists: (params: CachedListsParams) => Promise<AccountSnapshot | null>
+      saveLists: (params: SaveCachedListsParams) => Promise<void>
+      loadChat: (params: CachedChatParams) => Promise<SavedChat | null>
+      saveChat: (params: SaveCachedChatParams) => Promise<void>
+      clear: () => Promise<void>
     }
 
     // WebSocket for real-time notifications

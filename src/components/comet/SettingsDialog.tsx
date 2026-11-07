@@ -126,7 +126,15 @@ export function SettingsDialog({
   unfollowFold = null,
   onToggleUnfollowFold,
 }: SettingsDialogProps) {
-  const { developerMode, setDeveloperMode, settingsOpen, openSettings, closeSettings } = useSettings()
+  const {
+    developerMode,
+    setDeveloperMode,
+    keepChatsOnDevice,
+    setKeepChatsOnDevice,
+    settingsOpen,
+    openSettings,
+    closeSettings,
+  } = useSettings()
 
   // 收起未关注人消息 as the user just set it, while Bilibili saves it
   const [pendingUnfollowFold, setPendingUnfollowFold] = useState<boolean | null>(null)
@@ -331,6 +339,22 @@ export function SettingsDialog({
                   disabled={unfollowFold === null || pendingUnfollowFold !== null}
                   onCheckedChange={handleUnfollowFoldChange}
                 />
+              </div>
+            </div>
+
+            {/* Storage Section */}
+            <div className='space-y-4'>
+              <Separator />
+              <div className='flex items-center justify-between gap-4'>
+                <div className='space-y-0.5'>
+                  <label htmlFor='keep-chats-on-device' className='text-sm font-medium'>
+                    在本机保留聊天记录
+                  </label>
+                  <p className='text-xs text-muted-foreground'>
+                    加密保存会话列表和打开过的聊天，下次启动时立即显示。关闭后将删除已保存的内容
+                  </p>
+                </div>
+                <Switch id='keep-chats-on-device' checked={keepChatsOnDevice} onCheckedChange={setKeepChatsOnDevice} />
               </div>
             </div>
 

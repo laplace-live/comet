@@ -63,6 +63,8 @@ The app supports multiple session and message types defined in `src/lib/const.ts
 - Supports multiple Bilibili accounts with drag-and-drop reordering (@dnd-kit)
 - Account operations: add, remove, re-authenticate, reorder, set active
 - Per-account DND (Do Not Disturb) toggle for both user and fan group sessions
+- **Cache** (`src/lib/account-cache.ts`): each account's session lists are kept as a snapshot when it's switched away from, and every other stored account's lists are readied in the background (reads take an optional `mid`; a chat's messages always load as its own account), so a switch shows them at once and refreshes behind them. Opened chats are kept per account and reopen at once, fetching only what came since (`begin_seqno`). A refresh keeps the pages loaded past the first while the fresh page still reaches them (`keepLoadedPages`), so search can load the whole list once.
+- **On disk too**, unless Settings › 在本机保留聊天记录 (`keepChatsOnDevice`) is off: `src/api/chat-cache.ts` keeps each account's lists (their first `SAVED_SESSIONS`) and opened chats in `userData/Chat Cache`, sealed with safeStorage (never in plain text) in randomly named files. At launch the active account shows from there while its login is checked, as a switch does (`resumeSavedAccount`), and other accounts saved there aren't fetched ahead. Logout and removal delete an account's (the main process refuses saves for accounts it doesn't store); turning the setting off deletes it all.
 
 ### API Pattern
 
