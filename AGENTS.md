@@ -67,6 +67,7 @@ The app supports multiple session and message types defined in `src/lib/const.ts
 ### API Pattern
 
 Renderer calls main process via IPC using a centralized contract:
+
 ```typescript
 // Renderer (via preload bridge)
 const result = await window.electronAPI.bilibili.fetchSessions(params)
@@ -78,6 +79,7 @@ ipcMain.handle(IpcChannel.BILIBILI_FETCH_SESSIONS, async (event, params) => { ..
 ```
 
 The IPC system uses:
+
 - `IpcChannel` - Constants for invoke channels (renderer → main → response)
 - `IpcEvent` - Constants for event channels (main → renderer, one-way)
 - `IpcInvokeContract` / `IpcEventContract` - Type mappings for all channels

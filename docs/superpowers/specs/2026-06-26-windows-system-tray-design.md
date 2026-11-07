@@ -10,15 +10,15 @@ Let LAPLACE Comet keep running in the background on Windows (and Linux) instead 
 
 ## 2. Locked decisions
 
-| Decision | Choice |
-|---|---|
-| Close button `[X]` / `Alt+F4` | **Hide window to tray** — app keeps running, WebSocket stays connected, notifications keep firing. No setting; hardcoded. |
-| Real quit path | Tray menu **退出** and a **Ctrl+Q** accelerator (Windows/Linux). |
-| New-message indicator | **Static red-dot badge** baked into an alternate tray icon, driven by the existing total-unread count. Clears when unread reaches 0. |
-| Platforms | **Windows + Linux** get the tray. **macOS unchanged** (no tray; keeps dock badge and current close/quit behavior). |
-| macOS dev escape hatch | **Dropped** — no macOS tray code path. |
-| `flashFrame` taskbar attention | **Deferred** — not in scope. |
-| Module location | **`src/tray.ts`** (main-process only, sibling to `main.ts`). |
+| Decision                       | Choice                                                                                                                               |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Close button `[X]` / `Alt+F4`  | **Hide window to tray** — app keeps running, WebSocket stays connected, notifications keep firing. No setting; hardcoded.            |
+| Real quit path                 | Tray menu **退出** and a **Ctrl+Q** accelerator (Windows/Linux).                                                                     |
+| New-message indicator          | **Static red-dot badge** baked into an alternate tray icon, driven by the existing total-unread count. Clears when unread reaches 0. |
+| Platforms                      | **Windows + Linux** get the tray. **macOS unchanged** (no tray; keeps dock badge and current close/quit behavior).                   |
+| macOS dev escape hatch         | **Dropped** — no macOS tray code path.                                                                                               |
+| `flashFrame` taskbar attention | **Deferred** — not in scope.                                                                                                         |
+| Module location                | **`src/tray.ts`** (main-process only, sibling to `main.ts`).                                                                         |
 
 ## 3. Non-goals
 
@@ -76,7 +76,7 @@ New main-only module **`src/tray.ts`** owns the `Tray` instance and exports:
 
 **Generation.** Extend `scripts/generate-icons.ts` to emit, for `dev` and `prod`, a 32×32 `tray.png` from the environment source icon and a `tray-unread.png` with a red circle composited into a corner (same ImageMagick `magick` pipeline already used). Main selects dev vs prod the same way `forge.config.ts` does (`NODE_ENV === 'development'`). Generated PNGs are committed so builds don't require running the script.
 
-**Loading (primary approach — data URLs).** To resolve reliably in *both* `pnpm start` and a packaged asar build without filesystem/asar path guesswork, the generator also emits a tiny generated module (e.g. `src/assets/tray-icons.generated.ts`) exporting the PNGs as base64 data URLs; `tray.ts` builds images via `nativeImage.createFromDataURL(...)`. The bytes live in the JS bundle, so there is no runtime path to resolve. 32px PNGs are ~1–2 KB each, negligible.
+**Loading (primary approach — data URLs).** To resolve reliably in _both_ `pnpm start` and a packaged asar build without filesystem/asar path guesswork, the generator also emits a tiny generated module (e.g. `src/assets/tray-icons.generated.ts`) exporting the PNGs as base64 data URLs; `tray.ts` builds images via `nativeImage.createFromDataURL(...)`. The bytes live in the JS bundle, so there is no runtime path to resolve. 32px PNGs are ~1–2 KB each, negligible.
 
 **Alternative (if preferred):** `nativeImage.createFromPath()` with a Vite-asset-resolved path (`new URL('./assets/...', import.meta.url)` → `fileURLToPath`). This must be verified against a packaged build (asar) — hence the data-URL approach is the default.
 
@@ -88,17 +88,17 @@ The restore→show→focus→(Windows `setAlwaysOnTop`) sequence is currently du
 
 ## 9. One-time "still running" hint
 
-The first time the window hides to tray, show a one-shot notice — *"LAPLACE Comet 仍在后台运行，可从系统托盘重新打开"* — via a `Notification`. Gate it with a `hasShownTrayHint` flag in a small dedicated `electron-store` instance (separate from the accounts store at `bilibili.ts:153`), so it never repeats.
+The first time the window hides to tray, show a one-shot notice — _"LAPLACE Comet 仍在后台运行，可从系统托盘重新打开"_ — via a `Notification`. Gate it with a `hasShownTrayHint` flag in a small dedicated `electron-store` instance (separate from the accounts store at `bilibili.ts:153`), so it never repeats.
 
 ## 10. Platform matrix
 
-| Behavior | Windows | Linux | macOS |
-|---|---|---|---|
-| Tray icon | ✅ | ✅ (DE-dependent) | ❌ (unchanged) |
-| `[X]` hides to tray | ✅ | ✅ | ❌ (current behavior) |
-| Tray red-dot indicator | ✅ | ✅ | n/a |
-| Existing overlay/dock badge | taskbar overlay | n/a | dock badge (unchanged) |
-| Quit | tray menu / Ctrl+Q | tray menu / Ctrl+Q | Cmd+Q (unchanged) |
+| Behavior                    | Windows            | Linux              | macOS                  |
+| --------------------------- | ------------------ | ------------------ | ---------------------- |
+| Tray icon                   | ✅                 | ✅ (DE-dependent)  | ❌ (unchanged)         |
+| `[X]` hides to tray         | ✅                 | ✅                 | ❌ (current behavior)  |
+| Tray red-dot indicator      | ✅                 | ✅                 | n/a                    |
+| Existing overlay/dock badge | taskbar overlay    | n/a                | dock badge (unchanged) |
+| Quit                        | tray menu / Ctrl+Q | tray menu / Ctrl+Q | Cmd+Q (unchanged)      |
 
 ## 11. Edge cases
 

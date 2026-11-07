@@ -32,20 +32,21 @@ Decision logic is kept in small pure functions for clarity, but is verified via 
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `scripts/generate-icons.ts` (modify) | Emit `tray.png` + `tray-unread.png` (dev/prod) and the base64 `tray-icons.generated.ts`. |
-| `src/assets/icons/{dev,prod}/tray.png`, `tray-unread.png` (new, generated) | Source tray images (committed). |
-| `src/assets/tray-icons.generated.ts` (new, generated) | `TRAY_ICONS` data-URL map consumed by the tray module. |
-| `src/tray.ts` (new) | All main-process tray logic: create/destroy, unread indicator, shared `focusMainWindow`, one-time hint. |
-| `src/main.ts` (modify) | Wire the tray into the app lifecycle; refactor duplicated focus logic; add quit path. |
-| `package.json`, `.eslintrc.json`, `biome.jsonc` (modify) | `typecheck` script + ignore the generated module. |
+| File                                                                       | Responsibility                                                                                          |
+| -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `scripts/generate-icons.ts` (modify)                                       | Emit `tray.png` + `tray-unread.png` (dev/prod) and the base64 `tray-icons.generated.ts`.                |
+| `src/assets/icons/{dev,prod}/tray.png`, `tray-unread.png` (new, generated) | Source tray images (committed).                                                                         |
+| `src/assets/tray-icons.generated.ts` (new, generated)                      | `TRAY_ICONS` data-URL map consumed by the tray module.                                                  |
+| `src/tray.ts` (new)                                                        | All main-process tray logic: create/destroy, unread indicator, shared `focusMainWindow`, one-time hint. |
+| `src/main.ts` (modify)                                                     | Wire the tray into the app lifecycle; refactor duplicated focus logic; add quit path.                   |
+| `package.json`, `.eslintrc.json`, `biome.jsonc` (modify)                   | `typecheck` script + ignore the generated module.                                                       |
 
 ---
 
 ### Task 1: Tray icon assets, generator, and embedded data-URL module
 
 **Files:**
+
 - Modify: `package.json` (scripts)
 - Modify: `.eslintrc.json` (ignorePatterns)
 - Modify: `biome.jsonc` (files.includes)
@@ -54,6 +55,7 @@ Decision logic is kept in small pure functions for clarity, but is verified via 
 - Create (generated, committed): `src/assets/tray-icons.generated.ts`
 
 **Interfaces:**
+
 - Produces: `export const TRAY_ICONS` in `src/assets/tray-icons.generated.ts` with shape `{ dev: { normal: string; unread: string }; prod: { normal: string; unread: string } }`, where every value is a `data:image/png;base64,…` string. Consumed by Task 2.
 
 **Prerequisites:** ImageMagick (`magick`) and `bun` must be installed (`brew install imagemagick bun`). The generator already errors with install instructions if `magick` is missing.
@@ -172,26 +174,26 @@ ${body}
 In `generateIconsForEnvironment`, after the three existing `generate…Icon(config.source, …)` calls, add:
 
 ```ts
-  if (environment === 'dev' || environment === 'prod') {
-    generateTrayIcons(config.source, config.outputDir, config.description)
-  }
+if (environment === 'dev' || environment === 'prod') {
+  generateTrayIcons(config.source, config.outputDir, config.description)
+}
 ```
 
 In `main()`, call `generateTrayIconModule()` after the all-environments loop **and** after the single-environment call. In the no-argument branch, immediately after the `Object.keys(iconConfigs).forEach(...)` loop:
 
 ```ts
-    Object.keys(iconConfigs).forEach(env => {
-      generateIconsForEnvironment(env)
-    })
+Object.keys(iconConfigs).forEach(env => {
+  generateIconsForEnvironment(env)
+})
 
-    generateTrayIconModule()
+generateTrayIconModule()
 ```
 
 In the single-argument branch, immediately after `generateIconsForEnvironment(environment)`:
 
 ```ts
-    generateIconsForEnvironment(environment)
-    generateTrayIconModule()
+generateIconsForEnvironment(environment)
+generateTrayIconModule()
 ```
 
 - [ ] **Step 7: Generate the assets**
@@ -226,9 +228,11 @@ git commit -m "feat: generate tray icons and embedded data-url module"
 ### Task 2: Create the `src/tray.ts` module
 
 **Files:**
+
 - Create: `src/tray.ts`
 
 **Interfaces:**
+
 - Consumes: `TRAY_ICONS` from `@/assets/tray-icons.generated` (Task 1).
 - Produces (all consumed by `src/main.ts` in Tasks 3–5):
   - `export function createTray(): void`
@@ -393,9 +397,11 @@ git commit -m "feat: add system tray module (create/indicator/focus/hint)"
 No behavior change — replaces two duplicated copies of the restore/show/focus logic with the shared helper from Task 2.
 
 **Files:**
+
 - Modify: `src/main.ts` (import; `second-instance` handler; notification `click` handler)
 
 **Interfaces:**
+
 - Consumes: `focusMainWindow` from `./tray` (Task 2).
 
 - [ ] **Step 1: Import `focusMainWindow`**
@@ -411,9 +417,9 @@ import { focusMainWindow } from './tray'
 Replace the entire body of the `app.on('second-instance', …)` callback (currently the `const windows = …` block through the `if (mainWindow) { … }` block):
 
 ```ts
-  app.on('second-instance', () => {
-    focusMainWindow()
-  })
+app.on('second-instance', () => {
+  focusMainWindow()
+})
 ```
 
 - [ ] **Step 3: Refactor the notification `click` handler**
@@ -421,23 +427,23 @@ Replace the entire body of the `app.on('second-instance', …)` callback (curren
 In the `SHOW_NOTIFICATION` handler, replace the `notification.on('click', …)` body's window lookup + focus dance with the shared helper, keeping the navigation send:
 
 ```ts
-  notification.on('click', () => {
-    console.log('[Notification] Click received, navigating to session:', params.talkerId)
+notification.on('click', () => {
+  console.log('[Notification] Click received, navigating to session:', params.talkerId)
 
-    const mainWindow = focusMainWindow()
+  const mainWindow = focusMainWindow()
 
-    if (mainWindow) {
-      mainWindow.webContents.send(IpcEvent.BILIBILI_NAVIGATE_TO_SESSION, {
-        talkerId: params.talkerId,
-        sessionType: params.sessionType,
-      })
-    } else {
-      console.error('[Notification] No main window found')
-    }
+  if (mainWindow) {
+    mainWindow.webContents.send(IpcEvent.BILIBILI_NAVIGATE_TO_SESSION, {
+      talkerId: params.talkerId,
+      sessionType: params.sessionType,
+    })
+  } else {
+    console.error('[Notification] No main window found')
+  }
 
-    // Clean up reference
-    activeNotifications.delete(notification)
-  })
+  // Clean up reference
+  activeNotifications.delete(notification)
+})
 ```
 
 - [ ] **Step 4: Typecheck**
@@ -467,9 +473,11 @@ git commit -m "refactor: share focusMainWindow between second-instance and notif
 ### Task 4: Hide-to-tray window lifecycle, quit path, and one-time hint
 
 **Files:**
+
 - Modify: `src/main.ts` (import; `isQuitting` flag; `createWindow` close handler; `ready` handler; `before-quit` handler; application menu quit item)
 
 **Interfaces:**
+
 - Consumes: `createTray`, `destroyTray`, `maybeShowTrayHint` from `./tray` (Task 2); `focusMainWindow` already imported in Task 3.
 
 - [ ] **Step 1: Extend the tray import**
@@ -496,16 +504,16 @@ let isQuitting = false
 In `createWindow()`, after the `if (process.env.NODE_ENV === 'development') { … openDevTools() }` block and before the closing `}` of the function, add:
 
 ```ts
-  // On Windows/Linux, closing the window hides it to the tray instead of
-  // quitting, so the app keeps receiving messages in the background. A real
-  // quit (tray menu / Ctrl+Q / update install) sets isQuitting first.
-  mainWindow.on('close', event => {
-    if (!isQuitting && (process.platform === 'win32' || process.platform === 'linux')) {
-      event.preventDefault()
-      mainWindow.hide()
-      maybeShowTrayHint()
-    }
-  })
+// On Windows/Linux, closing the window hides it to the tray instead of
+// quitting, so the app keeps receiving messages in the background. A real
+// quit (tray menu / Ctrl+Q / update install) sets isQuitting first.
+mainWindow.on('close', event => {
+  if (!isQuitting && (process.platform === 'win32' || process.platform === 'linux')) {
+    event.preventDefault()
+    mainWindow.hide()
+    maybeShowTrayHint()
+  }
+})
 ```
 
 - [ ] **Step 4: Create the tray on `ready`**
@@ -562,6 +570,7 @@ Expected: app launches with no errors. On macOS, closing the window behaves exac
 - [ ] **Step 10: Manual verification — Windows/Linux (cannot be done on macOS)**
 
 On a Windows (and ideally Linux) build (`pnpm start` or a packaged build):
+
 - A tray icon appears with the correct dev/prod image and tooltip `LAPLACE Comet`.
 - Clicking the window's `[X]` (and `Alt+F4`) **hides** the window to the tray; the app keeps running.
 - The **first** hide shows the notification `LAPLACE Comet 仍在后台运行，…` exactly once (not on subsequent hides).
@@ -581,9 +590,11 @@ git commit -m "feat: hide window to system tray on close (Windows/Linux)"
 ### Task 5: New-message tray indicator
 
 **Files:**
+
 - Modify: `src/main.ts` (import; `APP_SET_BADGE_COUNT` handler)
 
 **Interfaces:**
+
 - Consumes: `updateTrayUnread` from `./tray` (Task 2).
 
 - [ ] **Step 1: Extend the tray import**
@@ -626,6 +637,7 @@ Expected: app launches with no errors; `updateTrayUnread` is a no-op on macOS (n
 - [ ] **Step 6: Manual verification — Windows/Linux (cannot be done on macOS)**
 
 On a Windows/Linux build, logged in with at least one unread conversation:
+
 - With unread messages, the tray icon shows the **red dot** variant and the tooltip reads `N 条未读消息`.
 - Reading all messages (unread → 0) returns the tray icon to the **normal** variant with tooltip `LAPLACE Comet`.
 - Receiving a new message **while hidden in the tray** lights the dot (the renderer/WebSocket stay alive while hidden).
@@ -648,6 +660,7 @@ This consolidates the end-to-end behavior, including interactions not covered by
 - [ ] **Step 1: Windows end-to-end checklist**
 
 Verify on Windows (spec §11–§12):
+
 - Close/`Alt+F4` hides to tray; tray icon present with correct dev/prod image.
 - New message → red dot + tooltip count; reading all → dot clears.
 - Tray click / `打开` → restore + focus; tray `退出` → exits; `Ctrl+Q` → exits.
@@ -678,6 +691,7 @@ git commit -m "docs: mark system tray spec implemented"
 ## Self-Review
 
 **Spec coverage:**
+
 - §2 hide-to-tray on close → Task 4 ✓ · quit via tray/Ctrl+Q → Task 4 ✓ · red-dot indicator → Tasks 1,2,5 ✓ · Windows+Linux only, macOS unchanged → Task 2 (`isTraySupported`), Task 4 (close guard) ✓ · no flashFrame → not implemented ✓ · `src/tray.ts` location → Task 2 ✓
 - §4 reuse badge flow, no new IPC → Task 5 ✓
 - §5 `isQuitting`, close handler, Ctrl+Q → Task 4 ✓

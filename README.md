@@ -56,22 +56,26 @@ Get the latest development builds with cutting-edge features:
 #### Steps
 
 1. Clone the repository:
+
    ```bash
    git clone https://github.com/laplace/laplace-comet
    cd laplace-comet
    ```
 
 2. Install dependencies:
+
    ```bash
    pnpm install
    ```
 
 3. Start in development mode:
+
    ```bash
    pnpm start
    ```
 
 4. Build distributable packages:
+
    ```bash
    pnpm make
    ```
@@ -84,16 +88,16 @@ Get the latest development builds with cutting-edge features:
 
 ### Available Scripts
 
-| Command | Description |
-|---------|-------------|
-| `pnpm start` | Start the app in development mode with hot reload |
-| `pnpm package` | Package the app without creating installers |
-| `pnpm make` | Create distributable packages for current platform |
-| `pnpm lint` | Run ESLint on the codebase |
-| `pnpm typecheck` | Typecheck the app and the packages |
-| `pnpm test` | Run the packages' tests, then the app's |
-| `pnpm generate-icons` | Generate app icons for all platforms |
-| `pnpm screenshots` | Capture the website's screenshots of the app into `screenshots/` ([how it works](docs/screenshots.md)) |
+| Command               | Description                                                                                            |
+| --------------------- | ------------------------------------------------------------------------------------------------------ |
+| `pnpm start`          | Start the app in development mode with hot reload                                                      |
+| `pnpm package`        | Package the app without creating installers                                                            |
+| `pnpm make`           | Create distributable packages for current platform                                                     |
+| `pnpm lint`           | Run ESLint on the codebase                                                                             |
+| `pnpm typecheck`      | Typecheck the app and the packages                                                                     |
+| `pnpm test`           | Run the packages' tests, then the app's                                                                |
+| `pnpm generate-icons` | Generate app icons for all platforms                                                                   |
+| `pnpm screenshots`    | Capture the website's screenshots of the app into `screenshots/` ([how it works](docs/screenshots.md)) |
 
 ### Packages
 
