@@ -23,6 +23,8 @@ interface SessionItemProps {
   draftKey: string
   isSelected: boolean
   userCache: UserCache
+  /** Shown in place of the last message: the message a search found the chat by */
+  preview?: string
   onClick: () => void
 }
 
@@ -41,7 +43,7 @@ function getVipNicknameColor(userCache: UserCache, talkerId: number): string | u
   return undefined
 }
 
-export function SessionItem({ session, draftKey, isSelected, userCache, onClick }: SessionItemProps) {
+export function SessionItem({ session, draftKey, isSelected, userCache, preview, onClick }: SessionItemProps) {
   const avatar = getSessionAvatar(session, userCache)
   const cachedUser = userCache[session.talker_id]
   const vipNicknameColor = getVipNicknameColor(userCache, session.talker_id)
@@ -98,7 +100,9 @@ export function SessionItem({ session, draftKey, isSelected, userCache, onClick 
 
         <div className='flex items-center justify-between gap-2'>
           <p className='truncate text-sm text-muted-foreground'>
-            {draft ? (
+            {preview !== undefined ? (
+              preview
+            ) : draft ? (
               <>
                 <span className='text-destructive'>[草稿]</span> {draft}
               </>

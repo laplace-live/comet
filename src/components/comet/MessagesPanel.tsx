@@ -15,7 +15,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { VirtuosoHandle } from 'react-virtuoso'
 
-import type { EmojiInfoMap } from '@/hooks/usePrivateMessages'
+import type { ChatOpening, EmojiInfoMap } from '@/hooks/usePrivateMessages'
 import type { CustomerServiceReply } from '@/lib/customer-service'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliMessage, BilibiliSession, CustomerServiceSession } from '@/types/bilibili'
@@ -23,6 +23,7 @@ import type { CheckLoginResult, CustomerServiceShop } from '@/types/electron'
 
 import { SESSION_TYPE } from '@/types/bilibili'
 
+import { chatKey } from '@/lib/account-cache'
 import { MAX_IMAGE_SIZE, SUPPORTED_IMAGE_MIME_TYPES } from '@/lib/const'
 import { getCustomerServiceShop } from '@/lib/customer-service'
 import { getSessionAvatar, getSessionName, isCustomerServiceSession } from '@/lib/message-utils'
@@ -51,6 +52,8 @@ import { MessagesList } from './MessagesList'
 
 interface MessagesPanelProps {
   selectedSession: BilibiliSession | null
+  /** How the chat was opened last */
+  chatOpening?: ChatOpening | null
   messages: BilibiliMessage[]
   emojiInfoMap: EmojiInfoMap
   messagesLoading: boolean
@@ -73,6 +76,7 @@ interface MessagesPanelProps {
 
 export function MessagesPanel({
   selectedSession,
+  chatOpening,
   messages,
   emojiInfoMap,
   messagesLoading,
@@ -98,6 +102,7 @@ export function MessagesPanel({
       {selectedSession ? (
         <ChatView
           session={selectedSession}
+          chatOpening={chatOpening}
           messages={messages}
           emojiInfoMap={emojiInfoMap}
           messagesLoading={messagesLoading}
@@ -124,6 +129,7 @@ export function MessagesPanel({
 
 interface ChatViewProps {
   session: BilibiliSession
+  chatOpening?: ChatOpening | null
   messages: BilibiliMessage[]
   emojiInfoMap: EmojiInfoMap
   messagesLoading: boolean
@@ -144,6 +150,7 @@ interface ChatViewProps {
 
 function ChatView({
   session,
+  chatOpening,
   messages,
   emojiInfoMap,
   messagesLoading,
@@ -396,7 +403,11 @@ function ChatView({
         </div>
       ) : (
         <MessagesList
+          // Each time a chat opens, it opens at its newest message (shown at once from where it was left or not), or
+          // at the message a search found it by: Virtuoso places a list only as it mounts
+          key={`${chatKey(session)}@${chatOpening?.id ?? 0}`}
           virtuosoRef={virtuosoRef}
+          targetMsgKey={chatOpening?.msgKey}
           messages={messages}
           emojiInfoMap={emojiInfoMap}
           session={session}

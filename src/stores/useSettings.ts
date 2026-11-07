@@ -13,6 +13,12 @@ interface SettingsState {
   /** Accounts that muted 客服消息, which Bilibili offers no Do Not Disturb for */
   customerServiceMutedMids: number[]
   setCustomerServiceMuted: (mid: number, muted: boolean) => void
+  /**
+   * 在本机保留聊天记录: keep each account's session lists and opened chats on disk, sealed with safeStorage, so a
+   * relaunch shows them at once. Turning it off deletes them.
+   */
+  keepChatsOnDevice: boolean
+  setKeepChatsOnDevice: (enabled: boolean) => void
 
   // UI state (not persisted)
   /** Whether the settings modal is open */
@@ -42,6 +48,8 @@ export const useSettings = create<SettingsState>()(
         set(state => ({
           customerServiceMutedMids: [...state.customerServiceMutedMids.filter(m => m !== mid), ...(muted ? [mid] : [])],
         })),
+      keepChatsOnDevice: true,
+      setKeepChatsOnDevice: enabled => set({ keepChatsOnDevice: enabled }),
 
       // UI state
       settingsOpen: false,
@@ -59,6 +67,7 @@ export const useSettings = create<SettingsState>()(
       partialize: state => ({
         developerMode: state.developerMode,
         customerServiceMutedMids: state.customerServiceMutedMids,
+        keepChatsOnDevice: state.keepChatsOnDevice,
       }),
     }
   )

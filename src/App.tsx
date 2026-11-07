@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect } from 'react'
 
 import { LOGIN_CONFIG } from '@/lib/const'
 
@@ -18,6 +18,7 @@ export default function App() {
   const {
     sessions,
     selectedSession,
+    chatOpening,
     messages,
     emojiInfoMap,
     loading,
@@ -25,6 +26,7 @@ export default function App() {
     messagesLoading,
     sendingMessage,
     isConnected,
+    initializing,
     userCache,
     hasMoreSessions,
     userInfo,
@@ -55,6 +57,7 @@ export default function App() {
     openUnfollowed,
     closeUnfollowed,
     loadMoreUnfollowed,
+    searchHeldChats,
     // Multi-account actions
     switchAccount,
     removeAccount,
@@ -67,7 +70,6 @@ export default function App() {
     onReauthSuccess,
   } = usePrivateMessages()
 
-  const [initialLoading, setInitialLoading] = useState(true)
   const openSettings = useSettings(state => state.openSettings)
   const openAbout = useSettings(state => state.openAbout)
 
@@ -132,30 +134,21 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isConnected, openSettings, accounts, activeAccountMid, switchAccount])
 
-  // Check login on mount
-  useEffect(() => {
-    const init = async () => {
-      await checkLogin()
-      setInitialLoading(false)
-    }
-    init()
-  }, [checkLogin])
-
   // Periodically check login and renew cookies while connected, resetting the 6h timer after each check or account switch
   useEffect(() => {
-    if (!isConnected || initialLoading || !accounts.some(a => a.mid === activeAccountMid)) return
+    if (!isConnected || initializing || !accounts.some(a => a.mid === activeAccountMid)) return
     const timer = setInterval(() => {
       void checkLogin()
     }, LOGIN_CONFIG.COOKIE_CHECK_INTERVAL)
     return () => clearInterval(timer)
-  }, [isConnected, initialLoading, accounts, activeAccountMid, checkLogin])
+  }, [isConnected, initializing, accounts, activeAccountMid, checkLogin])
 
   // Fetch sessions when connected
   useEffect(() => {
-    if (isConnected && !initialLoading) {
+    if (isConnected && !initializing) {
       fetchSessions()
     }
-  }, [isConnected, initialLoading, fetchSessions])
+  }, [isConnected, initializing, fetchSessions])
 
   const handleLoginSuccess = useCallback(async () => {
     if (!(await checkLogin())) {
@@ -164,8 +157,8 @@ export default function App() {
     await fetchSessions()
   }, [checkLogin, fetchSessions])
 
-  // Show loading state while checking initial login
-  if (initialLoading) {
+  // Show loading state while checking initial login (an account saved from last time shows at once instead)
+  if (initializing) {
     return (
       <div className='flex h-screen flex-col bg-linear-to-br from-slate-50 via-zinc-50 to-stone-100 font-sans dark:from-zinc-950 dark:via-neutral-950 dark:to-stone-950'>
         <div className='flex flex-1 items-center justify-center'>
@@ -204,6 +197,7 @@ export default function App() {
               onOpenUnfollowed={openUnfollowed}
               onCloseUnfollowed={closeUnfollowed}
               onLoadMoreUnfollowed={loadMoreUnfollowed}
+              onSearchMessages={searchHeldChats}
               onLogout={logout}
               onSwitchAccount={switchAccount}
               onAddAccount={startAddingAccount}
@@ -222,6 +216,7 @@ export default function App() {
 
             <MessagesPanel
               selectedSession={selectedSession}
+              chatOpening={chatOpening}
               messages={messages}
               emojiInfoMap={emojiInfoMap}
               messagesLoading={messagesLoading}
