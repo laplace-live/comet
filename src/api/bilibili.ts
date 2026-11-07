@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import path from 'node:path'
 import {
   checkCookieRefresh,
   cookieStringFromCredentials,
@@ -8,7 +9,7 @@ import {
   refreshCookies,
 } from '@laplace.live/bilibili-qr'
 import { Byte, Encoder } from '@nuintun/qrcode'
-import { ipcMain, safeStorage } from 'electron'
+import { app, ipcMain, safeStorage } from 'electron'
 import Store from 'electron-store'
 
 import type {
@@ -26,9 +27,15 @@ import type {
   CustomerServiceSessionsResponse,
 } from '@/types/bilibili'
 import type {
+  AccountParams,
+  CachedChatParams,
+  CachedListsParams,
   CheckLoginResult,
   CustomerServiceShop,
   FetchCustomerServiceMessagesParams,
+  SaveCachedChatParams,
+  SaveCachedListsParams,
+  SearchCachedChatsParams,
   SendCustomerServiceMessageParams,
   SetUnfollowFoldParams,
   StoredAccountInfo,
@@ -40,6 +47,8 @@ import { SESSION_TYPE } from '@/types/bilibili'
 
 import { BILIBILI_ENDPOINTS, BILIBILI_HEADERS, COMMON_HEADERS, getImageExtension, LOGIN_CONFIG } from '@/lib/const'
 import { IpcChannel } from '@/lib/ipc'
+
+import { createChatCacheStore } from '@/api/chat-cache'
 
 /**
  * Preserve large integer fields as strings in JSON response text.
@@ -282,6 +291,12 @@ const store = new Store<AccountsStoreSchema>({
   },
 })
 
+// The renderer's account cache on disk (src/api/chat-cache.ts), kept only for the accounts stored here
+const chatCache = createChatCacheStore({
+  dir: () => path.join(app.getPath('userData'), 'Chat Cache'),
+  storedMids: async () => (await getAccounts()).map(account => account.userInfo.mid),
+})
+
 /**
  * Fetch (and cache) buvid3/buvid4 device-fingerprint cookies.
  * Bilibili's gaia risk control gates write endpoints (e.g. send_msg) on these;
@@ -480,6 +495,18 @@ async function getCredentials(): Promise<BilibiliCredentials | null> {
   return account?.credentials || null
 }
 
+/**
+ * Get credentials for the stored account with this mid, or for the active account when none is given. A read for
+ * another account, warming its lists up before a switch, never goes out with an expired account's cookies.
+ */
+async function getAccountCredentials(mid?: number): Promise<BilibiliCredentials | null> {
+  if (mid === undefined) return getCredentials()
+
+  const accounts = await getAccounts()
+  const account = accounts.find(a => a.userInfo.mid === mid)
+  return account && !account.isExpired ? account.credentials : null
+}
+
 /** Get the active account (credentials + userInfo) */
 async function getActiveAccount(): Promise<StoredAccount | null> {
   const activeAccountMid = getActiveAccountMid()
@@ -489,9 +516,9 @@ async function getActiveAccount(): Promise<StoredAccount | null> {
   return accounts.find(a => a.userInfo.mid === activeAccountMid) || null
 }
 
-/** Remove an account by mid */
-function removeAccount(mid: number): Promise<boolean> {
-  return changeAccounts(async () => {
+/** Remove an account by mid, and what the renderer kept of it on disk */
+async function removeAccount(mid: number): Promise<boolean> {
+  const removed = await changeAccounts(async () => {
     const accounts = await getAccounts()
     const filteredAccounts = accounts.filter(a => a.userInfo.mid !== mid)
 
@@ -516,6 +543,8 @@ function removeAccount(mid: number): Promise<boolean> {
 
     return true
   })
+  if (removed) await chatCache.forgetAccount(mid)
+  return removed
 }
 
 /** Reorder accounts by an array of mids */
@@ -595,15 +624,16 @@ function updateAccountCredentials(
   })
 }
 
-/** Clear all accounts (full logout) */
-function clearAllAccounts(): Promise<void> {
-  return changeAccounts(async () => {
+/** Clear all accounts (full logout), and everything the renderer kept of them on disk */
+async function clearAllAccounts(): Promise<void> {
+  await changeAccounts(async () => {
     store.set('accounts', null)
     store.set('activeAccountMid', null)
     lastRefreshCheckAtByMid.clear()
     refreshInFlightByMid.clear()
     accountStateVersion++
   })
+  await chatCache.clear()
 }
 
 // Export for use by other modules (like WebSocket)
@@ -1122,6 +1152,24 @@ export function registerBilibiliIpcHandlers() {
     return { success }
   })
 
+  // The renderer's account cache on disk (Settings › 在本机保留聊天记录)
+  ipcMain.handle(IpcChannel.BILIBILI_CACHE_LOAD_LISTS, (_event, params: CachedListsParams) =>
+    chatCache.loadLists(params.mid)
+  )
+  ipcMain.handle(IpcChannel.BILIBILI_CACHE_SAVE_LISTS, (_event, params: SaveCachedListsParams) =>
+    chatCache.saveLists(params.mid, params.lists)
+  )
+  ipcMain.handle(IpcChannel.BILIBILI_CACHE_LOAD_CHAT, (_event, params: CachedChatParams) =>
+    chatCache.loadChat(params.mid, params.key)
+  )
+  ipcMain.handle(IpcChannel.BILIBILI_CACHE_SAVE_CHAT, (_event, params: SaveCachedChatParams) =>
+    chatCache.saveChat(params.mid, params.key, params.chat)
+  )
+  ipcMain.handle(IpcChannel.BILIBILI_CACHE_SEARCH_CHATS, (_event, params: SearchCachedChatsParams) =>
+    chatCache.searchChats(params.mid, params.query)
+  )
+  ipcMain.handle(IpcChannel.BILIBILI_CACHE_CLEAR, () => chatCache.clear())
+
   // Remove an account
   ipcMain.handle(IpcChannel.BILIBILI_REMOVE_ACCOUNT, async (_event, params: { mid: number }) => {
     const { mid } = params
@@ -1202,10 +1250,11 @@ export function registerBilibiliIpcHandlers() {
         size?: string
         endTs?: string
         unfollowFold?: boolean
+        mid?: number
       }
     ) => {
-      const { sessionType = '1', size = '100', endTs, unfollowFold = false } = params
-      const credentials = await getCredentials()
+      const { sessionType = '1', size = '100', endTs, unfollowFold = false, mid } = params
+      const credentials = await getAccountCredentials(mid)
 
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
@@ -1264,10 +1313,11 @@ export function registerBilibiliIpcHandlers() {
         size?: string
         beginSeqno?: string
         endSeqno?: string
+        mid?: number
       }
     ) => {
-      const { talkerId, sessionType = '1', size = '20', beginSeqno, endSeqno } = params
-      const credentials = await getCredentials()
+      const { talkerId, sessionType = '1', size = '20', beginSeqno, endSeqno, mid } = params
+      const credentials = await getAccountCredentials(mid)
 
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
@@ -1328,10 +1378,11 @@ export function registerBilibiliIpcHandlers() {
       _event,
       params: {
         uids: string
+        mid?: number
       }
     ) => {
-      const { uids } = params
-      const credentials = await getCredentials()
+      const { uids, mid } = params
+      const credentials = await getAccountCredentials(mid)
 
       if (!credentials) {
         return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
@@ -1371,8 +1422,8 @@ export function registerBilibiliIpcHandlers() {
   )
 
   // Fetch unread counts by kind of chat, such as those 未关注人消息 holds
-  ipcMain.handle(IpcChannel.BILIBILI_FETCH_SINGLE_UNREAD, async () => {
-    const credentials = await getCredentials()
+  ipcMain.handle(IpcChannel.BILIBILI_FETCH_SINGLE_UNREAD, async (_event, params?: AccountParams) => {
+    const credentials = await getAccountCredentials(params?.mid)
     if (!credentials) {
       return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
     }
@@ -1406,8 +1457,8 @@ export function registerBilibiliIpcHandlers() {
   })
 
   // Fetch the account's 收起未关注人消息 setting, the one message setting Comet follows
-  ipcMain.handle(IpcChannel.BILIBILI_FETCH_LINK_SETTING, async () => {
-    const credentials = await getCredentials()
+  ipcMain.handle(IpcChannel.BILIBILI_FETCH_LINK_SETTING, async (_event, params?: AccountParams) => {
+    const credentials = await getAccountCredentials(params?.mid)
     if (!credentials) {
       return { error: 'Not logged in. Please scan QR code to login.', code: 401 }
     }

@@ -1,8 +1,15 @@
 /* global globalThis */
 import assert from 'node:assert/strict'
-import { before, test } from 'node:test'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { after, before, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { build } from 'vite'
+
+// userData, where the disk cache of chats would go
+const userData = await mkdtemp(path.join(tmpdir(), 'comet-api-test-'))
+after(() => rm(userData, { recursive: true, force: true }))
 
 // The customer service handlers' Wbi-signed requests against fixture replies: a rejected signature must not
 // pass for an answer, and a message must never go out twice. Bundled in memory like qr-login-api.test.mjs,
@@ -11,6 +18,7 @@ const mockModules = {
   electron: `
     export const handlers = new Map()
     export const ipcMain = { handle: (channel, handler) => handlers.set(channel, handler) }
+    export const app = { getPath: () => ${JSON.stringify(userData)} }
     export const safeStorage = {
       isAsyncEncryptionAvailable: async () => true,
       encryptStringAsync: async value => Buffer.from(value),
