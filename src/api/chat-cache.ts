@@ -126,6 +126,8 @@ export function createChatCacheStore({ dir, storedMids }: ChatCacheOptions): Cha
   // saves asked for before it
   let queue: Promise<unknown> = Promise.resolve()
   let tidied = false
+  // Bumped by every search, so one overtaken by a newer stops rather than decrypt every chat for nothing
+  let searches = 0
 
   /** Run `task` after what's queued; it never throws, settling on `fallback` instead */
   function enqueue<T>(fallback: T, task: () => Promise<T>): Promise<T> {
@@ -191,7 +193,8 @@ export function createChatCacheStore({ dir, storedMids }: ChatCacheOptions): Cha
         const entry = index.find(e => e.key === key)
         if (!entry) return null
         const chat = await read<SavedChat>(chatFile(mid, entry))
-        // Used now, it goes last; unreadable, it leaves the index
+        // Used now, it goes last (unless it's there already, sparing a write); unreadable, it leaves the index
+        if (chat && index[index.length - 1] === entry) return chat
         const rest = index.filter(e => e !== entry)
         await writeIndex(mid, chat ? [...rest, entry] : rest)
         return chat
@@ -222,19 +225,24 @@ export function createChatCacheStore({ dir, storedMids }: ChatCacheOptions): Cha
         for (const entry of dropped) await rm(chatFile(mid, entry), { force: true })
       }),
 
-    searchChats: (mid, query) =>
-      enqueueSealed<ChatMatch[]>([], async () => {
+    searchChats: (mid, query) => {
+      const search = ++searches
+      return enqueueSealed<ChatMatch[]>([], async () => {
         if (!isMid(mid) || typeof query !== 'string' || !query.trim()) return []
         const needle = query.trim().toLowerCase()
         const found: ChatMatch[] = []
         // Least recently used first, as the index lists them; the order a search shows them in is the lists'
         for (const entry of await readIndex(mid)) {
+          // A newer search asked meanwhile (the typing went on): this one's answer would go unused, and every chat it
+          // still decrypts holds up the loads and saves queued behind it
+          if (search !== searches) return []
           const chat = await read<SavedChat>(chatFile(mid, entry))
           const match = chat && findMessage(chat.messages, needle)
           if (match) found.push({ key: entry.key, ...match })
         }
         return found
-      }),
+      })
+    },
 
     forgetAccount: mid =>
       enqueue(undefined, async () => {

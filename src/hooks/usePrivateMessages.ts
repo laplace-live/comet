@@ -1273,6 +1273,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [snapshots, warmedUp, loadSavedLists, fetchAccountSnapshot, saveLists])
 
+  // Where the main list ends since it last started over from a first page, a new object each time, so a next page
+  // asked from further down before that doesn't land on it (see loadMoreSessions)
+  const sessionsStartRef = useRef({ end: Number.POSITIVE_INFINITY })
+
   /**
    * Show the main list from its first page, fetched again. With `keepPages`, the pages loaded past it stay where they
    * still follow on from it (see keepLoadedPages), ending where they did, and so does what loads next. A page with
@@ -1285,6 +1289,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       setSessions(kept)
       return
     }
+    // Ahead of the render, so a refresh landing right after compares against this list, not the one it replaced
+    sessionsRef.current = page
+    // The list starts over, ending here: a next page asked from further down than this doesn't follow on from it
+    sessionsStartRef.current = { end: lastSessionTs(page) ?? Number.POSITIVE_INFINITY }
     setSessions(page)
     setHasMoreSessions(hasMore)
     if (page.length > 0) setNextEndTs(lastSessionTs(page))
@@ -1643,12 +1651,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     if (!hasMoreSessions || nextEndTs === null || loadingMore) return
 
     setLoadingMore(true)
+    const endTs = nextEndTs
     const load = listsLoadRef.current
+    const start = sessionsStartRef.current
     const fold = unfollowFoldRef.current
 
     try {
       const data = await window.electronAPI.bilibili.fetchSessions({
-        endTs: String(nextEndTs),
+        endTs: String(endTs),
         unfollowFold: fold,
       })
 
@@ -1660,20 +1670,28 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         throw new Error(data.message || 'Failed to fetch more sessions')
       }
 
-      // A full load, another account or the fold setting changing overtook this page
-      if (load !== listsLoadRef.current || fold !== unfollowFoldRef.current) return
+      // A full load, another account or the fold setting changing overtook this page, or a refresh started the list
+      // over ending above where it starts, leaving a gap. One that kept the pages loaded, or listed the same chats
+      // again (so the list still ends where it was asked from), leaves it following on.
+      const restart = sessionsStartRef.current
+      if (
+        load !== listsLoadRef.current ||
+        fold !== unfollowFoldRef.current ||
+        (restart !== start && restart.end > endTs)
+      ) {
+        return
+      }
 
       const sessionList = data.data?.session_list || []
-      setSessions(prev => [...prev, ...sessionList])
+      // A chat that moved to the top meanwhile, with a message, is listed there already
+      setSessions(prev => {
+        const listed = new Set(prev.map(chatKey))
+        return [...prev, ...sessionList.filter(session => !listed.has(chatKey(session)))]
+      })
       setHasMoreSessions(data.data?.has_more === 1)
 
       // Store the session_ts of the last session for pagination
-      if (sessionList.length > 0) {
-        const lastSession = sessionList[sessionList.length - 1]
-        setNextEndTs(lastSession.session_ts)
-      } else {
-        setNextEndTs(null)
-      }
+      setNextEndTs(lastSessionTs(sessionList))
 
       // Find user sessions that don't have account_info and need fetching
       const uidsToFetch = sessionList
@@ -2350,6 +2368,10 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           // Return the server's error message for display
           return { success: false, error: data.message || '撤回失败' }
         }
+
+        // Another chat opened meanwhile, whose messages the seqno doesn't name (and which the cache would keep).
+        // This one shows the recall once it's opened again, catching up on the recall message.
+        if (!isSameChat(selectedSessionRef.current, selectedSession)) return { success: true }
 
         // Update the local message to show as recalled (msg_status = 1)
         // Use msgSeqno for comparison as it's a smaller number without precision issues

@@ -1,6 +1,6 @@
 /* global globalThis */
 import assert from 'node:assert/strict'
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { after, before, beforeEach, test } from 'node:test'
@@ -285,4 +285,28 @@ test('saved chats can be searched by any of their messages, each giving the newe
 
   keychain.available = false
   assert.deepEqual(await search(FIRST, 'asdaf123'), [], "nothing should be read while safeStorage can't decrypt")
+})
+
+test('opening the chat used most recently leaves the index as it is, and opening another moves it last', async t => {
+  await signIn(t, FIRST)
+  const save = key => invoke(channels.BILIBILI_CACHE_SAVE_CHAT, { mid: FIRST, key, chat: chat(2) })
+  const load = key => invoke(channels.BILIBILI_CACHE_LOAD_CHAT, { mid: FIRST, key })
+  const index = () => stat(path.join(cacheDir, String(FIRST), 'chats')).then(({ ino }) => ino)
+  await save('1:1')
+  await save('1:2')
+
+  const before = await index()
+  assert.ok(await load('1:2'))
+  assert.equal(await index(), before, 'opening the chat already last should not write the index again')
+  assert.ok(await load('1:1'))
+  assert.notEqual(await index(), before, 'opening another should move it last')
+})
+
+test('a search overtaken by a newer one stops, answering nothing, and the newer one answers', async t => {
+  await signIn(t, FIRST)
+  await invoke(channels.BILIBILI_CACHE_SAVE_CHAT, { mid: FIRST, key: `1:${FRIEND}`, chat: chat(2) })
+  const search = query => invoke(channels.BILIBILI_CACHE_SEARCH_CHATS, { mid: FIRST, query })
+  const [overtaken, latest] = await Promise.all([search('悄悄'), search('悄悄话 2')])
+  assert.deepEqual(overtaken, [], 'the search overtaken should stop')
+  assert.deepEqual(latest, [{ key: `1:${FRIEND}`, msgKey: '7300000000000000001', text: '悄悄话 2' }])
 })

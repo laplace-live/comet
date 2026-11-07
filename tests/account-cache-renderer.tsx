@@ -142,10 +142,12 @@ let failOverTo: number | null
 let pageSize: number
 // Lists asked for in the background (with a mid) fail
 let failBackgroundLists: boolean
-// Holds back the next list of this account's, until resolved
-let listGate: { mid: number; promise: Promise<unknown> } | null
+// Holds back the next list of this account's, until resolved: as Bilibili has it then, or as it had it when asked
+let listGate: { mid: number; promise: Promise<unknown>; answered: boolean } | null
 // Holds back the next messages asked for, until resolved
 let messagesGate: Promise<unknown> | null
+// Holds back the next message sent, until resolved
+let sendGate: Promise<unknown> | null
 let sessionRequests: FetchSessionsParams[]
 let messageRequests: FetchMessagesParams[]
 let userRequests: FetchUsersParams[]
@@ -237,19 +239,22 @@ function installApi() {
         if (params.mid !== undefined && failBackgroundLists) {
           return { error: 'Failed to fetch sessions from Bilibili', code: 500 }
         }
-        const gate = listGate?.mid === mid ? listGate : null
-        if (gate) {
-          listGate = null
-          await gate.promise
+        const answer = () => {
+          const all = listed(server[mid].chats)
+          const endTs = params.endTs === undefined ? Infinity : Number(params.endTs)
+          const rest = params.endTs === undefined ? all : all.filter(s => !s.top_ts && s.session_ts < endTs)
+          // Copies, as off the network: what the hook holds doesn't change with Bilibili's side
+          return sessionsReply(
+            rest.slice(0, pageSize).map(s => ({ ...s })),
+            rest.length > pageSize
+          )
         }
-        const all = listed(server[mid].chats)
-        const endTs = params.endTs === undefined ? Infinity : Number(params.endTs)
-        const rest = params.endTs === undefined ? all : all.filter(s => !s.top_ts && s.session_ts < endTs)
-        // Copies, as off the network: what the hook holds doesn't change with Bilibili's side
-        return sessionsReply(
-          rest.slice(0, pageSize).map(s => ({ ...s })),
-          rest.length > pageSize
-        )
+        const gate = listGate?.mid === mid ? listGate : null
+        if (!gate) return answer()
+        listGate = null
+        const early = gate.answered ? answer() : null
+        await gate.promise
+        return early ?? answer()
       },
       // Newest first within (begin, end), pages of `size`, as fetch_session_msgs answers
       fetchMessages: async (params: FetchMessagesParams): Promise<BilibiliMessagesResponse> => {
@@ -274,6 +279,12 @@ function installApi() {
         }
       },
       updateAck: async () => ({ code: 0 }),
+      sendMessage: async () => {
+        const gate = sendGate
+        sendGate = null
+        await gate
+        return { ...reply, data: { msg_key: 9_000_000, msg_content: '' } }
+      },
       fetchUsers: async (params: FetchUsersParams): Promise<BilibiliUserCardsResponse> => {
         userRequests.push(params)
         return {
@@ -350,6 +361,7 @@ async function setup({ failBackground = false } = {}) {
   failBackgroundLists = failBackground
   listGate = null
   messagesGate = null
+  sendGate = null
   sessionRequests = []
   messageRequests = []
   userRequests = []
@@ -379,9 +391,9 @@ const ids = (list: BilibiliSession[]) => list.map(s => s.talker_id).join(',')
 const shown = () => ids(current.sessions)
 const contents = () => current.messages.map(m => m.msg_seqno).join(',')
 
-function holdList(mid: number) {
+function holdList(mid: number, { answered = false } = {}) {
   const gate = deferred<void>()
-  listGate = { mid, promise: gate.promise }
+  listGate = { mid, promise: gate.promise, answered }
   return gate
 }
 
@@ -551,6 +563,27 @@ test('a recall that comes over the WebSocket takes back the message it names', a
 
 const said = (text: string) => ({ content: JSON.stringify({ content: text }) })
 
+test("a recall answered after another chat opened leaves that chat's messages as they are", async () => {
+  await setup()
+  server[ME].messages[FRIEND] = [message(FRIEND, 1), message(ME, 2), message(FRIEND, 3)]
+  await flush(() => current.selectSession(chatOf(FAN)))
+  const gate = deferred<void>()
+  sendGate = gate.promise
+  let recalling!: Promise<{ success: boolean }>
+  await flush(() => {
+    recalling = current.recallMessage(2, '2000')
+  })
+
+  // The same seqno is another message there, which the recall isn't for
+  await flush(() => current.selectSession(chatOf(FRIEND)))
+  await flush(async () => {
+    gate.resolve()
+    assert((await recalling).success, 'the recall should go through')
+  })
+  const same = current.messages.find(m => m.msg_seqno === 2)
+  assert(same?.msg_status === 0, `the other chat's message should not show as recalled, got ${same?.msg_status}`)
+})
+
 test('a search finds chats by any message held of them, opened here or saved on disk, as their account', async () => {
   await setup()
   server[ME].messages[FAN] = [message(FAN, 1, said('早前的 Asdaf 消息')), message(ME, 2), message(FAN, 3)]
@@ -650,6 +683,86 @@ test('when more changed than the first page holds, the list goes back to the fir
   await flush(() => onNewMessage({ talkerId: server[ME].chats[0].talker_id, sessionType: 1 }))
   assert(current.sessions.length === 100, `only the first page should stay, got ${current.sessions.length}`)
   assert(current.hasMoreSessions, 'the rest should load as before')
+})
+
+test('a next page asked before a refresh started the list over is dropped, and the rest still loads', async () => {
+  await setup()
+  server[ME].chats = Array.from({ length: 150 }, (_, i) => session(1000 + i, i + 1))
+  await flush(() => current.fetchSessions())
+  const gate = holdList(ME)
+  let loadingMore!: Promise<void>
+  await flush(() => {
+    loadingMore = current.loadMoreSessions()
+  })
+
+  // While it's out, more chats than a page got messages, and a refresh starts the list over from its first page
+  for (const [i, chat] of server[ME].chats.slice(0, 120).entries()) chat.session_ts = (1000 + i) * 1_000_000
+  await flush(() => onNewMessage({ talkerId: server[ME].chats[0].talker_id, sessionType: 1 }))
+  assert(current.sessions.length === 100, `the list should start over, got ${current.sessions.length}`)
+
+  await flush(async () => {
+    gate.resolve()
+    await loadingMore
+  })
+  assert(current.hasMoreSessions, 'the page asked from where the old list ended should not end this one')
+  await flush(() => current.loadMoreSessions())
+  assert(current.sessions.length === 150, `the rest should load, got ${current.sessions.length}`)
+  assert(new Set(current.sessions.map(s => s.talker_id)).size === 150, 'no chat should show twice')
+})
+
+test('a next page Bilibili answered before a chat on it moved to the top shows that chat once, at the top', async () => {
+  await setup()
+  server[ME].chats = Array.from({ length: 250 }, (_, i) => session(1000 + i, i + 1))
+  await flush(() => current.fetchSessions())
+  await flush(() => current.loadMoreSessions())
+  assert(current.sessions.length === 200, `two pages should be loaded, got ${current.sessions.length}`)
+  const gate = holdList(ME, { answered: true })
+  let loadingMore!: Promise<void>
+  await flush(() => {
+    loadingMore = current.loadMoreSessions()
+  })
+
+  // Once the third page is answered, a chat on it gets a message: the refresh keeps the pages loaded, with the chat
+  // at the top
+  const moved = server[ME].chats[29]
+  moved.session_ts = 1000 * 1_000_000
+  await flush(() => onNewMessage({ talkerId: moved.talker_id, sessionType: 1 }))
+  assert(current.sessions[0].talker_id === moved.talker_id, 'the chat should move to the top')
+
+  await flush(async () => {
+    gate.resolve()
+    await loadingMore
+  })
+  const shown = current.sessions.map(s => s.talker_id)
+  assert(
+    shown.filter(id => id === moved.talker_id).length === 1 && new Set(shown).size === 250,
+    `every chat should show once, got ${shown.length} rows for ${new Set(shown).size} chats`
+  )
+})
+
+test('a next page asked before a refresh that lists the same chats again still lands', async () => {
+  await setup()
+  server[ME].chats = Array.from({ length: 150 }, (_, i) => session(1000 + i, i + 1))
+  await flush(() => current.fetchSessions())
+  const gate = holdList(ME)
+  let loadingMore!: Promise<void>
+  await flush(() => {
+    loadingMore = current.loadMoreSessions()
+  })
+
+  // While it's out, a chat on the first page gets a message: the refresh's first page holds the same chats, in
+  // another order, and the list still ends where the page was asked from
+  const moved = server[ME].chats[100]
+  moved.session_ts = 500 * 1_000_000
+  await flush(() => onNewMessage({ talkerId: moved.talker_id, sessionType: 1 }))
+  assert(current.sessions[0].talker_id === moved.talker_id, 'the chat should move to the top')
+
+  await flush(async () => {
+    gate.resolve()
+    await loadingMore
+  })
+  assert(current.sessions.length === 150, `the page should land, got ${current.sessions.length}`)
+  assert(new Set(current.sessions.map(s => s.talker_id)).size === 150, 'no chat should show twice')
 })
 
 test('removing an account forgets what was kept of it', async () => {
