@@ -43,9 +43,8 @@ function formatSessionRemaining(expiresAtSec: number): string {
   if (diffSec <= 0) {
     return '已到期'
   }
-  const remainingDays = Math.round(diffSec / 86_400)
-  if (remainingDays >= 1) {
-    return `${remainingDays} 天后`
+  if (diffSec >= 86_400) {
+    return `${Math.round(diffSec / 86_400)} 天后`
   }
   return timeFromNowGranular(expiresAtSec * 1000)
 }

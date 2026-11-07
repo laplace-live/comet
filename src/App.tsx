@@ -141,27 +141,14 @@ export default function App() {
     init()
   }, [checkLogin])
 
-  const nextRefreshCheckAt = accounts.find(a => a.mid === activeAccountMid)?.nextRefreshCheckAt
-
-  // Periodically check login and renew cookies while connected, aligned to the active account's nextRefreshCheckAt
+  // Periodically check login and renew cookies while connected, resetting the 6h timer after each check or account switch
   useEffect(() => {
-    if (!isConnected || initialLoading || activeAccountMid === null) return
-    const delayMs =
-      nextRefreshCheckAt !== undefined
-        ? Math.max(1_000, nextRefreshCheckAt * 1000 - Date.now())
-        : LOGIN_CONFIG.COOKIE_CHECK_INTERVAL
-    let intervalId: ReturnType<typeof setInterval> | null = null
-    const timeoutId = setTimeout(() => {
+    if (!isConnected || initialLoading || !accounts.some(a => a.mid === activeAccountMid)) return
+    const timer = setInterval(() => {
       void checkLogin()
-      intervalId = setInterval(() => {
-        void checkLogin()
-      }, LOGIN_CONFIG.COOKIE_CHECK_INTERVAL)
-    }, delayMs)
-    return () => {
-      clearTimeout(timeoutId)
-      if (intervalId !== null) clearInterval(intervalId)
-    }
-  }, [isConnected, initialLoading, activeAccountMid, nextRefreshCheckAt, checkLogin])
+    }, LOGIN_CONFIG.COOKIE_CHECK_INTERVAL)
+    return () => clearInterval(timer)
+  }, [isConnected, initialLoading, accounts, activeAccountMid, checkLogin])
 
   // Fetch sessions when connected
   useEffect(() => {

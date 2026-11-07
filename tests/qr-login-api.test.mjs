@@ -424,6 +424,7 @@ test('BILIBILI_CHECK_LOGIN renews cookies when Bilibili signals refresh and pers
   mockFetch(t, [pollResponse(), navResponse()])
   await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
 
+  t.mock.method(Date, 'now', () => 1_700_000_000_000)
   const refreshedCredentials = {
     SESSDATA: 'refreshed-session,1715552000,refreshed-sig',
     DedeUserID: 12345,
@@ -436,7 +437,8 @@ test('BILIBILI_CHECK_LOGIN renews cookies when Bilibili signals refresh and pers
     calls.push({ url, init })
     if (url === endpoints.NAV) return navResponse()
     if (url.startsWith(refreshEndpoints.INFO)) {
-      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: true, timestamp: 1_700_000_000_000 } })
+      // Server timestamp is skewed from local Date.now(); schedule uses local clock while correspond path uses server timestamp
+      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: true, timestamp: 1_699_900_000_000 } })
     }
     if (url.startsWith(`${refreshEndpoints.CORRESPOND}/`)) {
       return new Response('<html><div id="1-name">fixture-refresh-csrf</div></html>')
@@ -490,6 +492,7 @@ test('BILIBILI_CHECK_LOGIN marks an explicitly signed-out account expired and sw
   mockFetch(t, [pollResponse(legacyUrl(other)), Response.json({ code: 0, data: { isLogin: true, ...otherUser } })])
   await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'other-key' })
 
+  t.mock.method(Date, 'now', () => 1_700_000_000_000)
   t.mock.method(globalThis, 'fetch', async (input, init = {}) => {
     const url = String(input)
     const cookie = new Headers(init.headers).get('Cookie') || ''
@@ -544,6 +547,7 @@ test('BILIBILI_REAUTH_ACCOUNT updates credentials and refreshToken', async t => 
   assert.equal(sameSessionReauth.success, true)
   assert.equal((await api.getAccounts())[0]?.refreshToken, 'reauth-refresh-token')
 
+  t.mock.method(Date, 'now', () => 1_700_000_000_000)
   t.mock.method(globalThis, 'fetch', async input => {
     const url = String(input)
     if (url === endpoints.NAV) return navResponse()
@@ -645,12 +649,15 @@ test('a stale in-flight cookie refresh check cannot clobber the refresh schedule
   const staleInfoStarted = Promise.withResolvers()
   const staleInfoReply = Promise.withResolvers()
   const freshInfoStarted = Promise.withResolvers()
+  const freshInfoReply = Promise.withResolvers()
   const reauthCredentials = {
     ...credentials,
     SESSDATA: 'reauth-session,1780576320,reauth-sig',
     bili_jct: 'reauth-csrf',
   }
 
+  let nowMs = 1_700_000_000_000
+  t.mock.method(Date, 'now', () => nowMs)
   t.mock.method(globalThis, 'fetch', async (input, init = {}) => {
     const url = String(input)
     const cookie = new Headers(init.headers).get('Cookie') || ''
@@ -661,7 +668,7 @@ test('a stale in-flight cookie refresh check cannot clobber the refresh schedule
         return staleInfoReply.promise
       }
       freshInfoStarted.resolve()
-      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: false, timestamp: 1_700_100_000_000 } })
+      return freshInfoReply.promise
     }
     throw new Error(`Unexpected fetch: ${url}`)
   })
@@ -680,6 +687,10 @@ test('a stale in-flight cookie refresh check cannot clobber the refresh schedule
   await freshInfoStarted.promise
   staleInfoReply.resolve(
     Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: false, timestamp: 1_700_000_000_000 } })
+  )
+  nowMs = 1_700_100_000_000
+  freshInfoReply.resolve(
+    Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: false, timestamp: 1_700_100_000_000 } })
   )
   await Promise.all([staleCheck, freshCheck])
 

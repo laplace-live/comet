@@ -416,7 +416,7 @@ test('settings dialog shows current login session expiration and refresh schedul
               mid: 123,
               uname: 'Legacy User',
               isExpired: false,
-              expiresAt,
+              expiresAt: Math.floor(fakeNowMs / 1000) + 18 * 3600,
               hasRefreshToken: false,
             },
           ]}
@@ -427,6 +427,10 @@ test('settings dialog shows current login session expiration and refresh schedul
 
     const legacyText = document.body.textContent ?? ''
     assert(legacyText.includes('未开启自动续期'), 'settings dialog should indicate when refresh token is missing')
+    assert(
+      legacyText.includes('18 小时后'),
+      'settings dialog should use granular remaining time when less than 24 hours remain'
+    )
     assert(
       legacyText.includes('当前会话缺少刷新凭据，重新登录后可启用自动续期'),
       'settings dialog should prompt re-login to enable auto-refresh'

@@ -732,7 +732,7 @@ function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
         fetch: fetchWithRefreshTimeout,
         headers: COMMON_HEADERS,
       })
-      const checkedAt = Math.floor((Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now()) / 1000)
+      const checkedAt = Math.floor(Date.now() / 1000)
       const inFlight = refreshInFlightByMid.get(mid)
       if (inFlight && inFlight.sessdata === credentials.SESSDATA && inFlight.refreshToken === refreshToken) {
         lastRefreshCheckAtByMid.set(mid, { sessdata: credentials.SESSDATA, refreshToken, checkedAt })
