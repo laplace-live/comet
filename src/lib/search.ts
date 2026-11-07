@@ -2,6 +2,8 @@ import type { MessageMatch } from '@/lib/account-cache'
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliSession } from '@/types/bilibili'
 
+import { MSG_TYPE } from '@/types/bilibili'
+
 import { chatKey, matchOf } from '@/lib/account-cache'
 import { getLastMessagePreview, getSessionName } from '@/lib/message-utils'
 
@@ -12,28 +14,61 @@ const EXCERPT_FITS = 10
 const EXCERPT_LEAD = 4
 
 /**
- * Where `query` occurs in `text`, ignoring case, as [start, end) pairs in order, none overlapping. None when `query`
- * is empty, or when lowercasing changes the text's length (İ's lowercase is two characters), as the places found in
- * the lowercase text wouldn't line up with it.
+ * The lowercase of `text`, with where each of its characters came from in `text`, when lowercasing changes the text's
+ * length (İ's lowercase is two characters); null when it doesn't, and the places line up as they are
+ */
+function lowercaseOrigins(text: string): { lower: string; from: number[] } | null {
+  if (text.toLowerCase().length === text.length) return null
+  let lower = ''
+  const from: number[] = []
+  let at = 0
+  for (const char of text) {
+    const lowered = char.toLowerCase()
+    for (let i = 0; i < lowered.length; i++) from.push(at)
+    lower += lowered
+    at += char.length
+  }
+  from.push(text.length)
+  return { lower, from }
+}
+
+/**
+ * Where `query` occurs in `text`, ignoring case as a search does, as [start, end) pairs in order, none overlapping;
+ * none when `query` is empty
  */
 export function matchRanges(text: string, query: string): Array<[number, number]> {
   const needle = query.toLowerCase()
-  const haystack = text.toLowerCase()
-  if (!needle || haystack.length !== text.length) return []
+  if (!needle) return []
+  const origins = lowercaseOrigins(text)
+  const haystack = origins?.lower ?? text.toLowerCase()
   const ranges: Array<[number, number]> = []
   for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + needle.length)) {
-    ranges.push([at, at + needle.length])
+    const end = at + needle.length
+    if (!origins) {
+      ranges.push([at, end])
+      continue
+    }
+    // Back to places in `text`: a match ending partway through a character's lowercase takes in all of it
+    const { from } = origins
+    let after = end
+    while (from[after] === from[end - 1]) after++
+    ranges.push([from[at], from[after]])
   }
   return ranges
 }
 
+/** `text` on one line: each run of whitespace a single space, as a one-line row shows it */
+export function oneLine(text: string): string {
+  return text.replace(/\s+/g, ' ')
+}
+
 /**
- * What a one-line row shows of `text`: its whitespace collapsed into single spaces, starting a few characters before
- * the first match of `query`, behind an ellipsis, when the match sits too far in for the row to show it
+ * What a one-line row shows of `text`: on one line (see oneLine), starting a few characters before the first match of
+ * `query`, behind an ellipsis, when the match sits too far in for the row to show it
  */
 export function excerpt(text: string, query: string): string {
-  const line = text.replace(/\s+/g, ' ').trim()
-  const first = matchRanges(line, query)[0]
+  const line = oneLine(text).trim()
+  const first = matchRanges(line, oneLine(query))[0]
   if (!first || first[1] <= EXCERPT_FITS || first[0] <= EXCERPT_LEAD) return line
   let start = first[0] - EXCERPT_LEAD
   // Not between the halves of a character outside the BMP (an emoji, say)
@@ -50,8 +85,8 @@ export interface ChatFound {
 
 /**
  * What a search for `query` finds of a session, null when it finds nothing: its name or UID, its last message as the
- * list shows it, and the messages held of it (`held`, by chat key, newest first: see searchHeldChats). The last message
- * is among the hits unless those held hold it already.
+ * list shows it, unless recalled, and the messages held of it (`held`, by chat key, newest first: see
+ * searchHeldChats). The last message is among the hits unless those held hold it already.
  */
 export function findChat(
   session: BilibiliSession,
@@ -66,7 +101,9 @@ export function findChat(
   let hits = held?.get(chatKey(session)) ?? []
   const last = session.last_msg
   const preview = getLastMessagePreview(session)
-  if (last && preview.toLowerCase().includes(lower)) {
+  // A recalled message shows as recalled, so what it said doesn't count, as with those held (see findMessages)
+  const recalled = !!last?.msg_status || last?.msg_type === MSG_TYPE.REVOKE
+  if (last && !recalled && preview.toLowerCase().includes(lower)) {
     const lastHit = matchOf(last, preview)
     if (!hits.some(hit => hit.msgKey === lastHit.msgKey)) {
       hits = [lastHit, ...hits].sort((a, b) => b.timestamp - a.timestamp)

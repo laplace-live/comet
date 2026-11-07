@@ -40,6 +40,7 @@ import { excerpt, findChat, matchRanges } from '@/lib/search'
 
 import { type ChatOpening, type UsePrivateMessagesReturn, usePrivateMessages } from '@/hooks/usePrivateMessages'
 
+import { HighlightExcerpt } from '@/components/comet/Highlight'
 import { MessagesPanel } from '@/components/comet/MessagesPanel'
 import { SessionItem } from '@/components/comet/SessionItem'
 import { SEARCH_PAGE_GAP, SessionList } from '@/components/comet/SessionList'
@@ -1375,6 +1376,16 @@ test('a search finds a chat by an earlier message held of it, and shows that mes
     byBoth?.join(', ') === 'asdaf 也是最后一句, 早前的 asdaf',
     `its last message should be found too, newest first, got ${byBoth}`
   )
+  // A last message recalled, or the recall itself, says nothing a search finds, as with the messages held
+  const recalled = session(COLLEAGUE, 900, {
+    last_msg: message(COLLEAGUE, 7, { ...said('asdaf 撤回了'), msg_status: 1 }),
+  })
+  assert(findChat(recalled, 'asdaf', userCache, held) === null, 'a recalled last message should find nothing')
+  const recall = session(COLLEAGUE, 900, { last_msg: message(COLLEAGUE, 7, { msg_type: 5, content: '6000' }) })
+  assert(
+    findChat(recall, '撤回', userCache, held) === null,
+    'a recall should find nothing by what the list shows of it'
+  )
   root.render(
     <SessionItem
       session={friend}
@@ -1518,6 +1529,15 @@ test('a chat found by several messages says how many, and lists the newest 3 und
   await type('test11')
   await until(() => rows().length === 5 && rows()[0].includes('5 条相关消息'), 2000, 'the next search')
   assert(rows().at(-1) === '查看全部 5 条', `another search should start folded, got ${rows()}`)
+
+  // And so does the same search typed again after clearing it
+  await flush(() => toggle()?.click())
+  await until(() => rows().length === 7, 2000, 'every message found once more')
+  await type('')
+  await until(() => rows().length === 1, 2000, 'the list outside a search')
+  await type('test11')
+  await until(() => rows().length === 5, 2000, 'the same search again')
+  assert(rows().at(-1) === '查看全部 5 条', `the same search typed again should start folded, got ${rows()}`)
 })
 
 test('a chat found by one message shows it in place of its last, one found by its name lists the rest under it', async () => {
@@ -1570,8 +1590,11 @@ test('a result shows a long message on one line, from a little before the text f
     'every occurrence should be found, whatever its case'
   )
   assert(matchRanges('test111', '').length === 0, 'an empty search should mark nothing')
-  // Lowercasing İ makes it two characters, so places in the lowercase text wouldn't line up: nothing is marked
-  assert(matchRanges('İ test111', 'test111').length === 0, 'text whose lowercase differs in length should mark nothing')
+  // Lowercasing İ makes it two characters, so the text after it would be marked a character off
+  const turkish = JSON.stringify(matchRanges('İstanbul test111 İ', 'test111'))
+  assert(turkish === '[[9,16]]', `a match after an İ should be marked where it is, got ${turkish}`)
+  const dotted = JSON.stringify(matchRanges('İstanbul', 'i'))
+  assert(dotted === '[[0,1]]', `a match within İ's lowercase should mark all of İ, got ${dotted}`)
 
   assert(excerpt('短的 test111', 'test111') === '短的 test111', 'a match near the start should show from the start')
   const further = excerpt('这是一条很长很长很长的消息\n里面提到了 test111 呢', 'TEST111')
@@ -1579,6 +1602,16 @@ test('a result shows a long message on one line, from a little before the text f
   const emoji = excerpt('很长很长的开头😀abctest111', 'test111')
   assert(emoji === '…😀abctest111', `an excerpt shouldn't start between the halves of an emoji, got ${emoji}`)
   assert(excerpt('  多行\n\n  消息  ', '没有') === '多行 消息', 'with no match, the whole text should show on one line')
+
+  // A search with a run of spaces finds a message holding them, which the row shows on one line: so is the search
+  const spaced = excerpt('这是一条很长很长的消息 foo  bar 结尾', 'foo  bar')
+  assert(spaced === '…的消息 foo bar 结尾', `a search with spaces should still find its place, got ${spaced}`)
+  const container = document.createElement('div')
+  document.body.replaceChildren(container)
+  root = createRoot(container)
+  await flush(() => root.render(<HighlightExcerpt text='这是一条很长很长的消息 foo  bar 结尾' query='foo  bar' />))
+  const marked = [...container.querySelectorAll('mark')].map(mark => mark.textContent).join()
+  assert(marked === 'foo bar', `a search with spaces should be marked in the row, got ${marked}`)
 })
 
 test('the message a chat was opened at reads as the current row, not the chat', async () => {
@@ -1590,7 +1623,8 @@ test('the message a chat was opened at reads as the current row, not the chat', 
     root.render(
       drawnList(
         listProps({
-          sessions: [session(FRIEND, 2000), fan],
+          // A fan group whose id is the same number as the chat's talker: another chat, never current with it
+          sessions: [session(FRIEND, 2000), fan, session(FAN, 1000, { session_type: 2, group_name: '同号的粉丝群' })],
           selectedSession: fan,
           openedMsgKey,
           userCache: { [FRIEND]: { name: '朋友', face: '' }, [FAN]: { name: '粉丝', face: '' } },

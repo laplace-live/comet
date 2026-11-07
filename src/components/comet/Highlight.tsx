@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 
-import { excerpt, matchRanges } from '@/lib/search'
+import { excerpt, matchRanges, oneLine } from '@/lib/search'
 import { cn } from '@/lib/utils'
 
 interface HighlightProps {
@@ -37,8 +37,10 @@ export function Highlight({ text, query, className }: HighlightProps) {
 
 /**
  * What a one-line row shows of `text`, marked: from a little before the first match of `query` when it sits too far
- * in (see excerpt); without a query, all of it as it is
+ * in (see excerpt), the query on one line as the text is; without a query, all of it as it is
  */
 export function HighlightExcerpt({ text, query }: Omit<HighlightProps, 'className'>) {
-  return <Highlight text={query ? excerpt(text, query) : text} query={query} />
+  if (!query) return text
+  const needle = oneLine(query)
+  return <Highlight text={excerpt(text, needle)} query={needle} />
 }

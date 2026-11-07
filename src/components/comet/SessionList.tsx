@@ -247,6 +247,9 @@ export function SessionList({
   // A search shows the first few of a chat's results until 查看全部 shows them all, for that search on that account
   const [expansion, setExpansion] = useState<ExpandedChats | null>(null)
   const expandedChats = expansion?.query === query && expansion.mid === shownMid ? expansion.keys : null
+  // Gone once the search or the account changes, so typing the same search again, or coming back to the account,
+  // starts out folded too
+  if (expansion && !expandedChats) setExpansion(null)
   const toggleExpanded = (key: string) => {
     const keys = new Set(expandedChats)
     if (keys.has(key)) keys.delete(key)
@@ -357,7 +360,8 @@ export function SessionList({
 
   // Messages from the account shown read as 我 among a search's results
   const myMid = activeAccountMid ?? userInfo?.mid ?? null
-  const isSelectedChat = (session: BilibiliSession) => selectedSession?.talker_id === session.talker_id
+  const isSelectedChat = (session: BilibiliSession) =>
+    !!selectedSession && chatKey(selectedSession) === chatKey(session)
   // The result the open chat was opened at, while it shows: it reads as the current row in place of the chat
   const openedHit = rows.find(
     row => row.type === 'hit' && isSelectedChat(row.session) && row.hit.msgKey === openedMsgKey
