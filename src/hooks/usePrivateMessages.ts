@@ -36,8 +36,10 @@ import {
   chatToSave,
   findMessage,
   keepLoadedPages,
+  lastSessionTs,
   listsToSave,
   mergeMessages,
+  newestSeqno,
 } from '@/lib/account-cache'
 import { getImageType } from '@/lib/const'
 import {
@@ -71,6 +73,11 @@ function isErrorResponse<T extends object>(response: T | ErrorResponse): respons
 // Whether a session is this chat
 function isSameChat(session: BilibiliSession | null | undefined, chat: BilibiliSession): boolean {
   return session?.talker_id === chat.talker_id && session?.session_type === chat.session_type
+}
+
+// Who a stored account is, shown signed in while its login is checked
+function storedLogin(account: StoredAccountInfo): CheckLoginResult {
+  return { isLogin: true, mid: account.mid, uname: account.uname, face: account.face }
 }
 
 /**
@@ -253,7 +260,8 @@ export interface UsePrivateMessagesReturn {
   disconnectWebSocket: () => Promise<void>
 
   // Multi-account actions
-  fetchAccounts: () => Promise<void>
+  /** Fetch all stored accounts, resolving to them, or to null when that fails */
+  fetchAccounts: () => Promise<GetAccountsResult | null>
   switchAccount: (mid: number) => Promise<void>
   removeAccount: (mid: number) => Promise<void>
   reorderAccounts: (mids: number[]) => Promise<boolean>
@@ -499,16 +507,34 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     )
   }, [])
 
-  /** Save a chat on disk, unless 在本机保留聊天记录 is off */
-  const saveChat = useCallback((mid: number, key: string, chat: SavedChat) => {
-    if (!useSettings.getState().keepChatsOnDevice) return
+  /** Note this version of a chat as the one on disk */
+  const markSaved = useCallback((mid: number, key: string, chat: CachedChat) => {
     savedChatsRef.current.set(chat.messages, {
       id: `${mid}/${key}`,
       emojiInfoMap: chat.emojiInfoMap,
       syncedSeqno: chat.syncedSeqno,
     })
-    void quietly('save a chat', () => window.electronAPI.bilibili.cache.saveChat({ mid, key, chat }))
   }, [])
+
+  /** Whether this version of a chat is the one on disk already */
+  const isSaved = useCallback((mid: number, key: string, chat: CachedChat) => {
+    const saved = savedChatsRef.current.get(chat.messages)
+    return (
+      saved?.id === `${mid}/${key}` &&
+      saved.emojiInfoMap === chat.emojiInfoMap &&
+      saved.syncedSeqno === chat.syncedSeqno
+    )
+  }, [])
+
+  /** Save a chat on disk, unless 在本机保留聊天记录 is off */
+  const saveChat = useCallback(
+    (mid: number, key: string, chat: SavedChat) => {
+      if (!useSettings.getState().keepChatsOnDevice) return
+      markSaved(mid, key, chat)
+      void quietly('save a chat', () => window.electronAPI.bilibili.cache.saveChat({ mid, key, chat }))
+    },
+    [markSaved]
+  )
 
   // Saves waiting out SAVE_DELAY go now
   const flushListsSave = useCallback(() => {
@@ -546,11 +572,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
    */
   const scheduleChatSave = useCallback(
     (mid: number, key: string, chat: CachedChat) => {
-      const id = `${mid}/${key}`
-      const saved = savedChatsRef.current.get(chat.messages)
-      if (saved?.id === id && saved.emojiInfoMap === chat.emojiInfoMap && saved.syncedSeqno === chat.syncedSeqno) {
-        return
-      }
+      if (isSaved(mid, key, chat)) return
       const pending = chatSaveRef.current
       if (pending && (pending.mid !== mid || pending.key !== key)) flushChatSave()
       else if (pending) clearTimeout(pending.timer)
@@ -562,7 +584,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         timer: setTimeout(flushChatSave, SAVE_DELAY),
       }
     },
-    [flushChatSave]
+    [isSaved, flushChatSave]
   )
 
   // Save the shown lists on disk once they've stayed unchanged for SAVE_DELAY
@@ -833,7 +855,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   // Read 收起未关注人消息 for the signed-in account, or for another stored account by mid; null when it can't be read
   const readUnfollowFold = useCallback(async (mid?: number): Promise<boolean | null> => {
     try {
-      const data = await window.electronAPI.bilibili.fetchLinkSetting(mid === undefined ? undefined : { mid })
+      const data = await window.electronAPI.bilibili.fetchLinkSetting({ mid })
       if (!isErrorResponse(data) && data.code === 0) return data.data?.show_unfollowed_msg === 1
       console.error('[usePrivateMessages] Failed to read 收起未关注人消息:', isErrorResponse(data) ? data.error : data)
     } catch (err) {
@@ -852,7 +874,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           unfollowFold: true,
           mid,
         }),
-        window.electronAPI.bilibili.fetchSingleUnread(mid === undefined ? undefined : { mid }),
+        window.electronAPI.bilibili.fetchSingleUnread({ mid }),
       ])
       if (isErrorResponse(page) || page.code !== 0) {
         console.error('[usePrivateMessages] Failed to fetch 未关注人消息:', page)
@@ -883,7 +905,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       // Kept pages end where they did, and so does what loads next
       if (!kept) {
         setHasMoreUnfollowed(!!page?.hasMore)
-        unfollowedNextEndTsRef.current = page?.hasMore && list.length > 0 ? list[list.length - 1].session_ts : null
+        unfollowedNextEndTsRef.current = page?.hasMore ? lastSessionTs(list) : null
       }
       if (page?.unread !== null) setUnfollowedUnread(page?.unread ?? 0)
 
@@ -973,7 +995,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       const added = sessionList.filter(session => !listed.has(chatKey(session)))
       setUnfollowed([...unfollowedSessionsRef.current, ...added])
       setHasMoreUnfollowed(hasMore)
-      unfollowedNextEndTsRef.current = hasMore ? sessionList[sessionList.length - 1].session_ts : null
+      unfollowedNextEndTsRef.current = hasMore ? lastSessionTs(sessionList) : null
 
       const uidsToFetch = added
         .filter(session => !session.account_info?.name && !userCacheRef.current[session.talker_id])
@@ -1134,13 +1156,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   /**
    * Make `mid` the account the state holds, showing its lists from its snapshot if it has one while they load,
    * rather than a blank list
-   * @returns whether a snapshot showed
    */
   const showAccount = useCallback(
-    (mid: number): boolean => {
+    (mid: number) => {
       shownMidRef.current = mid
       const snapshot = snapshots.get(mid)
-      if (!snapshot) return false
+      if (!snapshot) return
 
       listsShownRef.current = true
       applyUnfollowFold(snapshot.unfollowFold)
@@ -1154,7 +1175,6 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       setNextEndTs(snapshot.nextEndTs)
       userCacheRef.current = snapshot.userCache
       setUserCache(snapshot.userCache)
-      return true
     },
     [snapshots, applyUnfollowFold, setUnfollowed]
   )
@@ -1205,13 +1225,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         return {
           sessions,
           hasMoreSessions: firstPageGoesOn(data, fold),
-          nextEndTs: sessions.length > 0 ? sessions[sessions.length - 1].session_ts : null,
+          nextEndTs: lastSessionTs(sessions),
           unfollowFold: setting,
           unfollowed,
           unfollowedUnread: unfollowedPage?.unread ?? 0,
           hasMoreUnfollowed,
-          unfollowedNextEndTs:
-            hasMoreUnfollowed && unfollowed.length > 0 ? unfollowed[unfollowed.length - 1].session_ts : null,
+          unfollowedNextEndTs: hasMoreUnfollowed ? lastSessionTs(unfollowed) : null,
           userCache,
         }
       } catch (err) {
@@ -1254,6 +1273,23 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     }
   }, [snapshots, warmedUp, loadSavedLists, fetchAccountSnapshot, saveLists])
 
+  /**
+   * Show the main list from its first page, fetched again. With `keepPages`, the pages loaded past it stay where they
+   * still follow on from it (see keepLoadedPages), ending where they did, and so does what loads next. A page with
+   * no sessions leaves where the next page starts as it was.
+   */
+  const showSessionsPage = useCallback((page: BilibiliSession[], hasMore: boolean, keepPages: boolean) => {
+    const kept = keepPages ? keepLoadedPages(sessionsRef.current, page, hasMore) : null
+    if (kept) {
+      sessionsRef.current = kept
+      setSessions(kept)
+      return
+    }
+    setSessions(page)
+    setHasMoreSessions(hasMore)
+    if (page.length > 0) setNextEndTs(lastSessionTs(page))
+  }, [])
+
   // Load the signed-in account's sessions from the first page. Its 收起未关注人消息 setting, read first unless
   // given (unreadable, nothing folds), decides whether chats with people it doesn't follow list here or in
   // 未关注人消息. Both lists show together once both have loaded, so no chat goes missing between them or shows
@@ -1293,24 +1329,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       showUnfollowed(unfollowedPage, keep)
 
       const sessionList = data.data?.session_list || []
-      const hasMore = firstPageGoesOn(data, fold)
-      const kept = keep ? keepLoadedPages(sessionsRef.current, sessionList, hasMore) : null
-      if (kept) {
-        // They end where they did, and so does what loads next
-        sessionsRef.current = kept
-        setSessions(kept)
-      } else {
-        setSessions(sessionList)
-        setHasMoreSessions(hasMore)
-
-        // Store the session_ts of the last session for pagination
-        if (sessionList.length > 0) {
-          const lastSession = sessionList[sessionList.length - 1]
-          setNextEndTs(lastSession.session_ts)
-        } else {
-          setNextEndTs(null)
-        }
-      }
+      showSessionsPage(sessionList, firstPageGoesOn(data, fold), keep)
+      // Loading the list over, an empty first page leaves no next page to load
+      if (sessionList.length === 0) setNextEndTs(null)
 
       // Find user sessions that don't have account_info and need fetching
       const uidsToFetch = sessionList
@@ -1328,7 +1349,15 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       void warmUpAccounts()
       return true
     },
-    [readUnfollowFold, fetchUnfollowed, applyUnfollowFold, showUnfollowed, fetchUserInfoBatch, warmUpAccounts]
+    [
+      readUnfollowFold,
+      fetchUnfollowed,
+      applyUnfollowFold,
+      showUnfollowed,
+      showSessionsPage,
+      fetchUserInfoBatch,
+      warmUpAccounts,
+    ]
   )
 
   // Bumped by every load of an account's lists after it changed, so only the latest clears the skeleton
@@ -1884,6 +1913,36 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     [userInfo?.mid, fetchUserInfoBatch]
   )
 
+  /**
+   * Start loading a chat's messages, overtaking the loads before it. The check it returns says whether this load
+   * still decides what shows: the user may open another session (客服消息 included) while it runs, or this contact
+   * under another account, and each of those loads on its own.
+   */
+  const beginChatLoad = useCallback((session: BilibiliSession) => {
+    const load = ++messagesLoadRef.current
+    return () => load === messagesLoadRef.current && isSameChat(selectedSessionRef.current, session)
+  }, [])
+
+  /** Mark a chat read on Bilibili up to `ackSeqno`, then its session in the lists */
+  const markRead = useCallback(
+    async (session: BilibiliSession, ackSeqno: number) => {
+      try {
+        await window.electronAPI.bilibili.updateAck({
+          talkerId: String(session.talker_id),
+          sessionType: String(session.session_type),
+          ackSeqno: String(ackSeqno),
+        })
+        updateSession(
+          s => isSameChat(s, session),
+          s => ({ ...s, unread_count: 0 })
+        )
+      } catch (ackErr) {
+        console.error('Failed to mark session as read:', ackErr)
+      }
+    },
+    [updateSession]
+  )
+
   const fetchMessages = useCallback(
     async (session: BilibiliSession) => {
       // 客服消息 holds chats from the customer service backend, not messages of its own
@@ -1896,10 +1955,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       // Clear emoji map when switching sessions
       setEmojiInfoMap({})
 
-      // The user may open another session (客服消息 included) while pages load, or this contact under
-      // another account, and each of those loads on its own
-      const load = ++messagesLoadRef.current
-      const isOpen = () => load === messagesLoadRef.current && isSameChat(selectedSessionRef.current, session)
+      const isOpen = beginChatLoad(session)
 
       try {
         const allMessages: BilibiliMessage[] = []
@@ -1945,7 +2001,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         // Reverse to get chronological order (oldest first)
         const sortedMessages = allMessages.reverse()
         // The whole history, so catching up later starts from its newest
-        syncedSeqnoRef.current = sortedMessages.reduce((max, m) => Math.max(max, m.msg_seqno), 0)
+        syncedSeqnoRef.current = newestSeqno(sortedMessages)
         setMessages(sortedMessages)
         setMessagesLoading(false)
 
@@ -1953,29 +2009,13 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         lookUpSenders(session, sortedMessages)
 
         // Mark session as read in the background (doesn't block message display)
-        if (session.max_seqno) {
-          try {
-            await window.electronAPI.bilibili.updateAck({
-              talkerId: String(session.talker_id),
-              sessionType: String(session.session_type),
-              ackSeqno: String(session.max_seqno),
-            })
-
-            // Update local session state to reflect read status
-            updateSession(
-              s => isSameChat(s, session),
-              s => ({ ...s, unread_count: 0 })
-            )
-          } catch (ackErr) {
-            console.error('Failed to mark session as read:', ackErr)
-          }
-        }
+        if (session.max_seqno) await markRead(session, session.max_seqno)
       } catch (err) {
         console.error('Failed to fetch messages:', err)
         if (isOpen()) setMessagesLoading(false)
       }
     },
-    [openCustomerService, mergeEmojiInfos, lookUpSenders, updateSession]
+    [openCustomerService, beginChatLoad, mergeEmojiInfos, lookUpSenders, markRead]
   )
 
   /**
@@ -2013,14 +2053,24 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     []
   )
 
+  /** Show messages fetched newer than the open chat's, merged in among them */
+  const showNewMessages = useCallback(
+    (session: BilibiliSession, newer: FetchedMessages) => {
+      mergeEmojiInfos(newer.emojiInfos)
+      if (newer.messages.length === 0) return
+      setMessages(prev => mergeMessages(prev, newer.messages))
+      lookUpSenders(session, newer.messages)
+    },
+    [mergeEmojiInfos, lookUpSenders]
+  )
+
   /**
    * Catch a chat shown from the cache up with what came since, without a spinner. It's marked read as opening a
    * chat does: up to the newest message when any came, or when the session list counts some unread.
    */
   const catchUpChat = useCallback(
     async (session: BilibiliSession) => {
-      const load = ++messagesLoadRef.current
-      const isOpen = () => load === messagesLoadRef.current && isSameChat(selectedSessionRef.current, session)
+      const isOpen = beginChatLoad(session)
       const since = syncedSeqnoRef.current
 
       let newer: FetchedMessages | null = null
@@ -2032,31 +2082,14 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       // What shows stays as it was, cached, until a newer load or notification
       if (!newer) return
 
-      mergeEmojiInfos(newer.emojiInfos)
-      const fetched = newer.messages
-      const newest = fetched.reduce((max, m) => Math.max(max, m.msg_seqno), since)
+      const newest = newestSeqno(newer.messages, since)
       syncedSeqnoRef.current = newest
-      if (fetched.length > 0) {
-        setMessages(prev => mergeMessages(prev, fetched))
-        lookUpSenders(session, fetched)
-      }
+      showNewMessages(session, newer)
 
       if (newest === since && !session.unread_count) return
-      try {
-        await window.electronAPI.bilibili.updateAck({
-          talkerId: String(session.talker_id),
-          sessionType: String(session.session_type),
-          ackSeqno: String(Math.max(newest, session.max_seqno || 0)),
-        })
-        updateSession(
-          s => isSameChat(s, session),
-          s => ({ ...s, unread_count: 0 })
-        )
-      } catch (ackErr) {
-        console.error('Failed to mark session as read:', ackErr)
-      }
+      await markRead(session, Math.max(newest, session.max_seqno || 0))
     },
-    [fetchMessagesSince, mergeEmojiInfos, lookUpSenders, updateSession]
+    [beginChatLoad, fetchMessagesSince, showNewMessages, markRead]
   )
 
   // Silent fetch of new messages - no loading spinner, merges with existing messages
@@ -2067,16 +2100,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         // Only while still viewing this session (prevents stale responses)
         const newer = await fetchMessagesSince(session, since, () => !isSameChat(selectedSessionRef.current, session))
         if (!newer) return
+        showNewMessages(session, newer)
+        if (newer.messages.length === 0) return
 
-        mergeEmojiInfos(newer.emojiInfos)
-        const fetched = newer.messages
-        if (fetched.length === 0) return
-
-        const newest = fetched.reduce((max, m) => Math.max(max, m.msg_seqno), since)
+        const newest = newestSeqno(newer.messages, since)
         // Only a run from what's held leaves nothing missing in between
         if (since > 0) syncedSeqnoRef.current = Math.max(syncedSeqnoRef.current, newest)
-        setMessages(prev => mergeMessages(prev, fetched))
-        lookUpSenders(session, fetched)
 
         // Only mark as read if the window is focused (user is actively viewing)
         if (windowFocusedRef.current) {
@@ -2098,7 +2127,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         console.error('[usePrivateMessages] Silent message fetch error:', err)
       }
     },
-    [fetchMessagesSince, mergeEmojiInfos, lookUpSenders, updateSession]
+    [fetchMessagesSince, showNewMessages, updateSession]
   )
 
   // A chat opened before, shown as it was at once, then caught up
@@ -2116,18 +2145,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   /** Open a chat as saved on disk, before a relaunch say, or load it whole when it isn't */
   const openSavedChat = useCallback(
     async (session: BilibiliSession, mid: number) => {
-      const load = ++messagesLoadRef.current
+      const isOpen = beginChatLoad(session)
       setMessagesLoading(true)
       const key = chatKey(session)
       const saved = await quietly('load a saved chat', () => window.electronAPI.bilibili.cache.loadChat({ mid, key }))
       // Another chat opened, or another account showed, meanwhile
-      if (
-        load !== messagesLoadRef.current ||
-        !isSameChat(selectedSessionRef.current, session) ||
-        shownMidRef.current !== mid
-      ) {
-        return
-      }
+      if (!isOpen() || shownMidRef.current !== mid) return
       if (!saved) {
         fetchMessages(session)
         return
@@ -2136,15 +2159,11 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       const { users, ...chat } = saved
       // The names of those who wrote in it, for the ones the lists don't name
       setUserCache(prev => ({ ...users, ...prev }))
-      savedChatsRef.current.set(chat.messages, {
-        id: `${mid}/${key}`,
-        emojiInfoMap: chat.emojiInfoMap,
-        syncedSeqno: chat.syncedSeqno,
-      })
+      markSaved(mid, key, chat)
       chatCache.set(mid, key, chat)
       showKeptChat(session, chat)
     },
-    [chatCache, fetchMessages, showKeptChat]
+    [chatCache, beginChatLoad, markSaved, fetchMessages, showKeptChat]
   )
 
   const selectSession = useCallback(
@@ -2259,7 +2278,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         // Update the session's last_msg and session_ts
         updateSession(
-          s => s.talker_id === selectedSession.talker_id && s.session_type === selectedSession.session_type,
+          s => isSameChat(s, selectedSession),
           s => ({
             ...s,
             session_ts: Date.now() * 1000, // Microsecond timestamp
@@ -2560,7 +2579,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
         // Update the session's last_msg and session_ts
         updateSession(
-          s => s.talker_id === selectedSession.talker_id && s.session_type === selectedSession.session_type,
+          s => isSameChat(s, selectedSession),
           s => ({
             ...s,
             session_ts: Date.now() * 1000,
@@ -2615,7 +2634,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
   }, [])
 
   // Fetch all stored accounts, resolving to them, or to null when that fails
-  const loadAccounts = useCallback(async (): Promise<GetAccountsResult | null> => {
+  const fetchAccounts = useCallback(async (): Promise<GetAccountsResult | null> => {
     try {
       const result = await window.electronAPI.bilibili.getAccounts()
       setAccounts(result.accounts)
@@ -2626,9 +2645,6 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       return null
     }
   }, [])
-  const fetchAccounts = useCallback(async () => {
-    await loadAccounts()
-  }, [loadAccounts])
 
   /** Switch to a different stored account and reload its sessions and WebSocket connection */
   const switchAccount = useCallback(
@@ -2676,7 +2692,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         connectedMidRef.current = null
         rememberShownAccount()
         const account = accountsRef.current.find(a => a.mid === mid)
-        setUserInfo(account ? { isLogin: true, mid, uname: account.uname, face: account.face } : null)
+        setUserInfo(account ? storedLogin(account) : null)
         resetAccountState()
         showAccount(mid)
         initialLoadFailedRef.current = true
@@ -2730,7 +2746,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       const transitionId = beginAccountTransition()
       try {
         snapshots.set(account.mid, lists)
-        setUserInfo({ isLogin: true, mid: account.mid, uname: account.uname, face: account.face })
+        setUserInfo(storedLogin(account))
         showAccount(account.mid)
         setIsConnected(true)
         setInitializing(false)
@@ -2912,22 +2928,9 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       // A full load, another account or the fold setting changing overtook it: only lookups use what it fetched
       if (load !== listsLoadRef.current || fold !== unfollowFoldRef.current) return sessionList
 
-      // The pages loaded past the first stay where they still follow on from it, ending where they did, so a
-      // message doesn't take the list scrolled or searched through back to its first page
-      const hasMore = firstPageGoesOn(data, fold)
-      const kept = keepLoadedPages(sessionsRef.current, sessionList, hasMore)
-      if (kept) {
-        sessionsRef.current = kept
-        setSessions(kept)
-      } else {
-        setSessions(sessionList)
-        setHasMoreSessions(hasMore)
-
-        if (sessionList.length > 0) {
-          const lastSession = sessionList[sessionList.length - 1]
-          setNextEndTs(lastSession.session_ts)
-        }
-      }
+      // The pages loaded past the first stay where they still follow on from it, so a message doesn't take the list
+      // scrolled or searched through back to its first page
+      showSessionsPage(sessionList, firstPageGoesOn(data, fold), true)
 
       // Fetch user info for new sessions, the ones not known already
       const uidsToFetch = sessionList
@@ -2948,7 +2951,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
       console.error('[usePrivateMessages] Silent session refresh error:', err)
       return []
     }
-  }, [fetchUserInfoBatch])
+  }, [showSessionsPage, fetchUserInfoBatch])
 
   // Fetch latest message for notification purposes (when instantMsg not available)
   const fetchLatestMessageForNotification = useCallback(
@@ -3273,12 +3276,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     if (initStartedRef.current) return
     initStartedRef.current = true
     const init = async () => {
-      const stored = await loadAccounts()
+      const stored = await fetchAccounts()
       if (!stored || !(await resumeSavedAccount(stored))) await checkLogin()
       setInitializing(false)
     }
     init()
-  }, [checkLogin, loadAccounts, resumeSavedAccount])
+  }, [checkLogin, fetchAccounts, resumeSavedAccount])
 
   // Set up WebSocket event listeners
   useEffect(() => {

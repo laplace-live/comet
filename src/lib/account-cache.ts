@@ -52,6 +52,11 @@ export function chatKey(session: Pick<BilibiliSession, 'session_type' | 'talker_
   return `${session.session_type}:${session.talker_id}`
 }
 
+/** The session_ts of a list's last session, where its next page starts; null when it has none */
+export function lastSessionTs(list: BilibiliSession[]): number | null {
+  return list.length > 0 ? list[list.length - 1].session_ts : null
+}
+
 /** How many sessions of each list are saved on disk; past them, the lists load as they scroll, as on a first launch */
 export const SAVED_SESSIONS = 200
 
@@ -71,11 +76,11 @@ export function listsToSave(snapshot: AccountSnapshot): AccountSnapshot {
   }
   if (sessions.length < snapshot.sessions.length) {
     saved.hasMoreSessions = true
-    saved.nextEndTs = sessions[sessions.length - 1].session_ts
+    saved.nextEndTs = lastSessionTs(sessions)
   }
   if (unfollowed.length < snapshot.unfollowed.length) {
     saved.hasMoreUnfollowed = true
-    saved.unfollowedNextEndTs = unfollowed[unfollowed.length - 1].session_ts
+    saved.unfollowedNextEndTs = lastSessionTs(unfollowed)
   }
   return saved
 }
@@ -100,6 +105,8 @@ export interface ChatMatch extends MessageMatch {
   key: string
 }
 
+const keyOf = (message: BilibiliMessage) => String(message.msg_key)
+
 /**
  * The newest of a chat's messages that holds `query`, null when none does. Search looks through the messages of the
  * chats held here or on disk this way, as Bilibili has no search to ask, and finds a chat by any of them, not just
@@ -111,7 +118,7 @@ export function findMessage(messages: BilibiliMessage[], query: string): Message
     const message = messages[i]
     if (message.msg_status || message.msg_type === MSG_TYPE.REVOKE) continue
     const text = parseMessageContent(message)
-    if (text.toLowerCase().includes(query)) return { msgKey: String(message.msg_key), text }
+    if (text.toLowerCase().includes(query)) return { msgKey: keyOf(message), text }
   }
   return null
 }
@@ -147,7 +154,10 @@ export function keepLoadedPages(
   return older.length > 0 ? [...page, ...older] : null
 }
 
-const keyOf = (message: BilibiliMessage) => String(message.msg_key)
+/** The newest seqno among messages, or `floor` when none is newer */
+export function newestSeqno(messages: BilibiliMessage[], floor = 0): number {
+  return messages.reduce((max, m) => Math.max(max, m.msg_seqno), floor)
+}
 
 /**
  * A conversation with newer messages merged in by msg_key, oldest first. A message held already takes the newer

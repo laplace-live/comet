@@ -22,6 +22,8 @@ import { findMessage } from '@/lib/account-cache'
 const VERSION = 1
 const LISTS = 'lists'
 const CHATS = 'chats'
+// Messages kept for an account, across its chats; past it, the least recently used chats go
+const BUDGET = 50_000
 
 interface ChatEntry {
   /** The chat's key within its account (chatKey) */
@@ -36,8 +38,6 @@ export interface ChatCacheOptions {
   dir: () => string
   /** The accounts stored now: nothing is saved for another, and what's left of one that's gone is deleted */
   storedMids: () => Promise<number[]>
-  /** Messages kept for an account, across its chats; past it, the least recently used chats go */
-  budget?: number
 }
 
 export interface ChatCacheStore {
@@ -115,9 +115,11 @@ async function list(dir: string): Promise<string[]> {
 
 const isMid = (mid: unknown): mid is number => Number.isSafeInteger(mid) && (mid as number) > 0
 
-export function createChatCacheStore({ dir, storedMids, budget = 50_000 }: ChatCacheOptions): ChatCacheStore {
+export function createChatCacheStore({ dir, storedMids }: ChatCacheOptions): ChatCacheStore {
   const accountDir = (mid: number) => path.join(dir(), String(mid))
+  const chatFile = (mid: number, entry: ChatEntry) => path.join(accountDir(mid), entry.file)
   const readIndex = async (mid: number) => (await read<ChatEntry[]>(path.join(accountDir(mid), CHATS))) ?? []
+  const writeIndex = (mid: number, index: ChatEntry[]) => write(path.join(accountDir(mid), CHATS), index)
   const isStored = async (mid: number) => (await storedMids()).includes(mid)
 
   // One thing at a time: a chat's file and the index naming it change together, and a deletion lands after the
@@ -139,8 +141,17 @@ export function createChatCacheStore({ dir, storedMids, budget = 50_000 }: ChatC
         return fallback
       }
     })
-    queue = result
+    // The next task waits for this one, without holding what it settles on (a whole chat, say) in memory till then
+    queue = result.then(() => undefined)
     return result
+  }
+
+  /**
+   * Run `task`, which reads or writes what's sealed, as enqueue does. While safeStorage can't seal, it settles on
+   * `fallback` without running: nothing is written in the clear, and a read would delete what it can't decrypt.
+   */
+  function enqueueSealed<T>(fallback: T, task: () => Promise<T>): Promise<T> {
+    return enqueue(fallback, async () => ((await canSeal()) ? task() : fallback))
   }
 
   /** Delete what's left of accounts no longer stored, and files no index names, from a crash say: once a launch */
@@ -162,33 +173,33 @@ export function createChatCacheStore({ dir, storedMids, budget = 50_000 }: ChatC
 
   return {
     loadLists: mid =>
-      enqueue(null, async () => {
-        if (!isMid(mid) || !(await canSeal())) return null
+      enqueueSealed(null, async () => {
+        if (!isMid(mid)) return null
         return read<AccountSnapshot>(path.join(accountDir(mid), LISTS))
       }),
 
     saveLists: (mid, lists) =>
-      enqueue(undefined, async () => {
-        if (!isMid(mid) || !(await canSeal()) || !(await isStored(mid))) return
+      enqueueSealed(undefined, async () => {
+        if (!isMid(mid) || !(await isStored(mid))) return
         await write(path.join(accountDir(mid), LISTS), lists)
       }),
 
     loadChat: (mid, key) =>
-      enqueue(null, async () => {
-        if (!isMid(mid) || !(await canSeal())) return null
+      enqueueSealed(null, async () => {
+        if (!isMid(mid)) return null
         const index = await readIndex(mid)
         const entry = index.find(e => e.key === key)
         if (!entry) return null
-        const chat = await read<SavedChat>(path.join(accountDir(mid), entry.file))
+        const chat = await read<SavedChat>(chatFile(mid, entry))
         // Used now, it goes last; unreadable, it leaves the index
         const rest = index.filter(e => e !== entry)
-        await write(path.join(accountDir(mid), CHATS), chat ? [...rest, entry] : rest)
+        await writeIndex(mid, chat ? [...rest, entry] : rest)
         return chat
       }),
 
     saveChat: (mid, key, chat) =>
-      enqueue(undefined, async () => {
-        if (!isMid(mid) || typeof key !== 'string' || !(await canSeal()) || !(await isStored(mid))) return
+      enqueueSealed(undefined, async () => {
+        if (!isMid(mid) || typeof key !== 'string' || !(await isStored(mid))) return
         const index = await readIndex(mid)
         const known = index.find(e => e.key === key)
         const saved: ChatEntry = {
@@ -196,29 +207,29 @@ export function createChatCacheStore({ dir, storedMids, budget = 50_000 }: ChatC
           file: known?.file ?? randomBytes(16).toString('hex'),
           size: chat.messages.length,
         }
-        await write(path.join(accountDir(mid), saved.file), chat)
+        await write(chatFile(mid, saved), chat)
 
         // Past the budget, the least recently used chats go, but never the one just saved
         const chats = [...index.filter(e => e !== known), saved]
         let total = chats.reduce((sum, e) => sum + e.size, 0)
         const dropped: ChatEntry[] = []
         for (const entry of chats) {
-          if (total <= budget || entry === saved) break
+          if (total <= BUDGET || entry === saved) break
           dropped.push(entry)
           total -= entry.size
         }
-        await write(path.join(accountDir(mid), CHATS), chats.slice(dropped.length))
-        for (const entry of dropped) await rm(path.join(accountDir(mid), entry.file), { force: true })
+        await writeIndex(mid, chats.slice(dropped.length))
+        for (const entry of dropped) await rm(chatFile(mid, entry), { force: true })
       }),
 
     searchChats: (mid, query) =>
-      enqueue<ChatMatch[]>([], async () => {
-        if (!isMid(mid) || typeof query !== 'string' || !query.trim() || !(await canSeal())) return []
+      enqueueSealed<ChatMatch[]>([], async () => {
+        if (!isMid(mid) || typeof query !== 'string' || !query.trim()) return []
         const needle = query.trim().toLowerCase()
         const found: ChatMatch[] = []
         // Least recently used first, as the index lists them; the order a search shows them in is the lists'
         for (const entry of await readIndex(mid)) {
-          const chat = await read<SavedChat>(path.join(accountDir(mid), entry.file))
+          const chat = await read<SavedChat>(chatFile(mid, entry))
           const match = chat && findMessage(chat.messages, needle)
           if (match) found.push({ key: entry.key, ...match })
         }

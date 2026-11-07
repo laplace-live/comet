@@ -209,15 +209,11 @@ export function SessionList({
   // ask again and again, until the search changes.
   const nextSearchPage = !searching
     ? null
-    : showingUnfollowed
-      ? unfollowed?.hasMore
+    : !showingUnfollowed && hasMoreSessions
+      ? 'sessions'
+      : unfollowed?.hasMore
         ? 'unfollowed'
         : null
-      : hasMoreSessions
-        ? 'sessions'
-        : searchesFolded && unfollowed?.hasMore
-          ? 'unfollowed'
-          : null
   const searchPageLoading = loadingMore || !!unfollowed?.loadingMore
   const searchLoadRef = useRef<{ query: string; from: number; at: number } | null>(null)
   useEffect(() => {
