@@ -342,7 +342,6 @@ test('settings dialog shows current login session expiration and refresh schedul
             isExpired: false,
             expiresAt,
             hasRefreshToken: true,
-            lastRefreshCheckAt: nowSec,
             nextRefreshCheckAt,
             lastRefreshedAt,
           },
@@ -359,6 +358,35 @@ test('settings dialog shows current login session expiration and refresh schedul
   assert(text.includes('每 6 小时检查一次并在需要时自动续期'), 'settings dialog should explain refresh interval')
   assert(text.includes('下次检查：6 小时后'), 'settings dialog should show next refresh check time')
   assert(text.includes('上次续期：30 分钟前'), 'settings dialog should show last refreshed time when present')
+
+  await flush(() =>
+    root.render(
+      <SettingsDialog
+        accounts={[
+          {
+            mid: 123,
+            uname: 'Expired User',
+            isExpired: true,
+            expiresAt,
+            hasRefreshToken: true,
+            nextRefreshCheckAt,
+          },
+        ]}
+        activeAccountMid={123}
+      />
+    )
+  )
+
+  const expiredText = document.body.textContent ?? ''
+  assert(expiredText.includes('需重新登录'), 'settings dialog should show re-login badge when session is expired')
+  assert(
+    expiredText.includes('当前会话已过期，请重新扫码登录'),
+    'settings dialog should prompt QR re-login when session is expired'
+  )
+  assert(
+    !expiredText.includes('每 6 小时检查一次并在需要时自动续期'),
+    'settings dialog should hide active auto-refresh schedule when session is expired'
+  )
 
   await flush(() =>
     root.render(

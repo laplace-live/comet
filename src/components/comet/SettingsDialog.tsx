@@ -264,31 +264,36 @@ export function SettingsDialog({
                         '当前登录会话有效'
                       )}
                     </p>
-                    <p>
-                      {activeAccount.hasRefreshToken ? (
-                        <>
-                          每 {REFRESH_CHECK_INTERVAL_HOURS} 小时检查一次并在需要时自动续期
-                          {activeAccount.nextRefreshCheckAt !== undefined && (
-                            <>
-                              ，下次检查：
-                              <TimeTooltip timestamp={activeAccount.nextRefreshCheckAt} className={TIME_TOOLTIP_CLASS}>
-                                {formatNextCheckTime(activeAccount.nextRefreshCheckAt)}
-                              </TimeTooltip>
-                            </>
-                          )}
-                          {activeAccount.lastRefreshedAt !== undefined && (
-                            <>
-                              ，上次续期：
-                              <TimeTooltip timestamp={activeAccount.lastRefreshedAt} className={TIME_TOOLTIP_CLASS}>
-                                {timeFromNowGranular(activeAccount.lastRefreshedAt * 1000)}
-                              </TimeTooltip>
-                            </>
-                          )}
-                        </>
-                      ) : (
-                        '当前会话缺少刷新凭据，重新登录后可启用自动续期'
-                      )}
-                    </p>
+                    {!activeAccount.isExpired && (
+                      <p>
+                        {activeAccount.hasRefreshToken ? (
+                          <>
+                            每 {REFRESH_CHECK_INTERVAL_HOURS} 小时检查一次并在需要时自动续期
+                            {activeAccount.nextRefreshCheckAt !== undefined && (
+                              <>
+                                ，下次检查：
+                                <TimeTooltip
+                                  timestamp={activeAccount.nextRefreshCheckAt}
+                                  className={TIME_TOOLTIP_CLASS}
+                                >
+                                  {formatNextCheckTime(activeAccount.nextRefreshCheckAt)}
+                                </TimeTooltip>
+                              </>
+                            )}
+                            {activeAccount.lastRefreshedAt !== undefined && (
+                              <>
+                                ，上次续期：
+                                <TimeTooltip timestamp={activeAccount.lastRefreshedAt} className={TIME_TOOLTIP_CLASS}>
+                                  {timeFromNowGranular(activeAccount.lastRefreshedAt * 1000)}
+                                </TimeTooltip>
+                              </>
+                            )}
+                          </>
+                        ) : (
+                          '当前会话缺少刷新凭据，重新登录后可启用自动续期'
+                        )}
+                      </p>
+                    )}
                   </div>
                 </div>
               </div>

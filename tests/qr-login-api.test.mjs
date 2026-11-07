@@ -458,7 +458,6 @@ test('BILIBILI_CHECK_LOGIN renews cookies when Bilibili signals refresh and pers
   assert.equal(calls.length, 5)
   await assertStored(refreshedCredentials, userInfo, {
     expiresAt: 1_715_552_000,
-    lastRefreshCheckAt: 1_700_000_000,
     nextRefreshCheckAt: 1_700_021_600,
     lastRefreshedAt: 1_700_000_000,
   })
@@ -515,7 +514,6 @@ test('BILIBILI_CHECK_LOGIN marks an explicitly signed-out account expired and sw
         ...otherUser,
         isExpired: false,
         hasRefreshToken: true,
-        lastRefreshCheckAt: 1_700_000_000,
         nextRefreshCheckAt: 1_700_021_600,
       },
     ],
@@ -616,5 +614,56 @@ test('BILIBILI_GET_ACCOUNTS exposes SESSDATA expiration and clears refresh sched
   await assertStored(timedCredentials, userInfo, {
     expiresAt: 1_780_576_320,
     hasRefreshToken: false,
+  })
+})
+
+test('a stale in-flight cookie refresh check cannot clobber the refresh schedule of a re-authenticated session', async t => {
+  mockFetch(t, [pollResponse(), navResponse()])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
+
+  const staleInfoStarted = Promise.withResolvers()
+  const staleInfoReply = Promise.withResolvers()
+  const freshInfoStarted = Promise.withResolvers()
+  const reauthCredentials = {
+    ...credentials,
+    SESSDATA: 'reauth-session,1780576320,reauth-sig',
+    bili_jct: 'reauth-csrf',
+  }
+
+  t.mock.method(globalThis, 'fetch', async (input, init = {}) => {
+    const url = String(input)
+    const cookie = new Headers(init.headers).get('Cookie') || ''
+    if (url === endpoints.NAV) return navResponse()
+    if (url.startsWith(refreshEndpoints.INFO)) {
+      if (cookie.includes('SESSDATA=fixture-session')) {
+        staleInfoStarted.resolve()
+        return staleInfoReply.promise
+      }
+      freshInfoStarted.resolve()
+      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: false, timestamp: 1_700_100_000_000 } })
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+
+  const staleCheck = invoke(channels.BILIBILI_CHECK_LOGIN)
+  await staleInfoStarted.promise
+
+  const reauth = await invoke(channels.BILIBILI_REAUTH_ACCOUNT, {
+    mid: credentials.DedeUserID,
+    credentials: reauthCredentials,
+    refreshToken: 'reauth-refresh-token',
+  })
+  assert.equal(reauth.success, true)
+
+  const freshCheck = invoke(channels.BILIBILI_CHECK_LOGIN)
+  await freshInfoStarted.promise
+  staleInfoReply.resolve(
+    Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: false, timestamp: 1_700_000_000_000 } })
+  )
+  await Promise.all([staleCheck, freshCheck])
+
+  await assertStored(reauthCredentials, userInfo, {
+    expiresAt: 1_780_576_320,
+    nextRefreshCheckAt: 1_700_121_600,
   })
 })

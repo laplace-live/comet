@@ -210,8 +210,14 @@ export interface StoredAccount {
   lastRefreshedAt?: number
 }
 
-// Tracks the Unix timestamp (in seconds) of the most recent cookie refresh check per account mid
-const lastRefreshCheckAtByMid = new Map<number, number>()
+// Tracks the Unix timestamp (in seconds) of the most recent cookie refresh check per account mid and session
+const lastRefreshCheckAtByMid = new Map<number, { sessdata: string; checkedAt: number }>()
+const refreshInFlightByMid = new Map<number, { sessdata: string; refreshToken: string; promise: Promise<void> }>()
+
+function clearRefreshStateForMid(mid: number): void {
+  lastRefreshCheckAtByMid.delete(mid)
+  refreshInFlightByMid.delete(mid)
+}
 
 /**
  * Parse the Unix expiration timestamp (in seconds) from a Bilibili `SESSDATA` cookie value
@@ -227,7 +233,9 @@ function parseSessdataExpiresAt(sessdata: string): number | undefined {
 function toStoredAccountInfo(account: StoredAccount): StoredAccountInfo {
   const expiresAt = parseSessdataExpiresAt(account.credentials.SESSDATA)
   const hasRefreshToken = Boolean(account.refreshToken)
-  const lastRefreshCheckAt = hasRefreshToken ? lastRefreshCheckAtByMid.get(account.userInfo.mid) : undefined
+  const checkEntry =
+    hasRefreshToken && !account.isExpired ? lastRefreshCheckAtByMid.get(account.userInfo.mid) : undefined
+  const lastRefreshCheckAt = checkEntry?.sessdata === account.credentials.SESSDATA ? checkEntry.checkedAt : undefined
   const nextRefreshCheckAt =
     lastRefreshCheckAt !== undefined
       ? lastRefreshCheckAt + Math.floor(LOGIN_CONFIG.COOKIE_CHECK_INTERVAL / 1000)
@@ -240,7 +248,6 @@ function toStoredAccountInfo(account: StoredAccount): StoredAccountInfo {
     isExpired: account.isExpired || false,
     ...(expiresAt !== undefined ? { expiresAt } : {}),
     hasRefreshToken,
-    ...(lastRefreshCheckAt !== undefined ? { lastRefreshCheckAt } : {}),
     ...(nextRefreshCheckAt !== undefined ? { nextRefreshCheckAt } : {}),
     ...(account.lastRefreshedAt !== undefined ? { lastRefreshedAt: account.lastRefreshedAt } : {}),
   }
@@ -390,14 +397,7 @@ async function saveAccounts(accounts: StoredAccount[]): Promise<void> {
     return
   }
   const canEncrypt = await safeStorage.isAsyncEncryptionAvailable()
-  const accountsToSave = canEncrypt
-    ? accounts
-    : accounts.map(account => ({
-        credentials: account.credentials,
-        userInfo: account.userInfo,
-        isExpired: account.isExpired,
-        ...(account.lastRefreshedAt !== undefined ? { lastRefreshedAt: account.lastRefreshedAt } : {}),
-      }))
+  const accountsToSave = canEncrypt ? accounts : accounts.map(account => ({ ...account, refreshToken: undefined }))
   store.set('accounts', await encryptData(accountsToSave))
 }
 
@@ -424,7 +424,7 @@ function saveAccount(
 
     if (existingIndex >= 0) {
       if (accounts[existingIndex].credentials.SESSDATA !== credentials.SESSDATA) {
-        lastRefreshCheckAtByMid.delete(userInfo.mid)
+        clearRefreshStateForMid(userInfo.mid)
       }
       // Update existing account - preserve userInfo but update credentials and clear expired
       accounts[existingIndex] = newAccount
@@ -493,7 +493,7 @@ function removeAccount(mid: number): Promise<boolean> {
     }
 
     await saveAccounts(filteredAccounts)
-    lastRefreshCheckAtByMid.delete(mid)
+    clearRefreshStateForMid(mid)
 
     // If we removed the active account, switch to another one
     const activeAccountMid = getActiveAccountMid()
@@ -548,6 +548,7 @@ function markAccountExpired(mid: number, expectedSessdata?: string): Promise<boo
     if (expectedSessdata !== undefined && account.credentials.SESSDATA !== expectedSessdata) return false
 
     account.isExpired = true
+    clearRefreshStateForMid(mid)
     await saveAccounts(accounts)
     return true
   })
@@ -572,7 +573,7 @@ function updateAccountCredentials(
     if (!sameSession) {
       delete account.refreshToken
       delete account.lastRefreshedAt
-      lastRefreshCheckAtByMid.delete(mid)
+      clearRefreshStateForMid(mid)
     }
     if (refreshToken) {
       account.refreshToken = refreshToken
@@ -590,6 +591,7 @@ function clearAllAccounts(): Promise<void> {
     store.set('accounts', null)
     store.set('activeAccountMid', null)
     lastRefreshCheckAtByMid.clear()
+    refreshInFlightByMid.clear()
     accountStateVersion++
   })
 }
@@ -674,8 +676,6 @@ async function checkNavStatus(credentials: BilibiliCredentials, signal?: AbortSi
   }
 }
 
-const refreshInFlightByMid = new Map<number, Promise<void>>()
-
 /**
  * Check whether an account's cookies are due for rotation, and renew them with its `refreshToken` when Bilibili
  * asks for a refresh. Failures leave the working credentials in place.
@@ -689,7 +689,9 @@ function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
   if (!refreshToken) return Promise.resolve()
 
   const existing = refreshInFlightByMid.get(mid)
-  if (existing) return existing
+  if (existing && existing.sessdata === credentials.SESSDATA && existing.refreshToken === refreshToken) {
+    return existing.promise
+  }
 
   const updateIfTokenMatches = (mutate: (stored: StoredAccount) => void) =>
     changeAccounts(async () => {
@@ -721,7 +723,10 @@ function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
         headers: COMMON_HEADERS,
       })
       const checkedAt = Math.floor((Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now()) / 1000)
-      lastRefreshCheckAtByMid.set(mid, checkedAt)
+      const inFlight = refreshInFlightByMid.get(mid)
+      if (inFlight && inFlight.sessdata === credentials.SESSDATA && inFlight.refreshToken === refreshToken) {
+        lastRefreshCheckAtByMid.set(mid, { sessdata: credentials.SESSDATA, checkedAt })
+      }
       if (!refresh) return
 
       await refreshCookies(credentials, refreshToken, {
@@ -737,25 +742,26 @@ function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
             stored.refreshToken = rotated.refreshToken
             stored.lastRefreshedAt = checkedAt
             stored.isExpired = false
+            lastRefreshCheckAtByMid.set(mid, { sessdata: rotated.credentials.SESSDATA, checkedAt })
           })
         },
       })
     } catch (error) {
       if (error instanceof QRLoginError && error.reason === 'api' && error.code === 86095) {
-        lastRefreshCheckAtByMid.delete(mid)
         await updateIfTokenMatches(stored => {
           delete stored.refreshToken
+          lastRefreshCheckAtByMid.delete(mid)
         })
       }
       console.warn('Failed to refresh Bilibili cookies; keeping current credentials:', error)
     }
   })().finally(() => {
-    if (refreshInFlightByMid.get(mid) === promise) {
+    if (refreshInFlightByMid.get(mid)?.promise === promise) {
       refreshInFlightByMid.delete(mid)
     }
   })
 
-  refreshInFlightByMid.set(mid, promise)
+  refreshInFlightByMid.set(mid, { sessdata: credentials.SESSDATA, refreshToken, promise })
   return promise
 }
 
