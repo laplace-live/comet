@@ -30,7 +30,15 @@ import {
   SESSION_TYPE,
 } from '@/types/bilibili'
 
-import { ChatCache, chatKey, chatToSave, keepLoadedPages, listsToSave, mergeMessages } from '@/lib/account-cache'
+import {
+  ChatCache,
+  chatKey,
+  chatToSave,
+  findMessage,
+  keepLoadedPages,
+  listsToSave,
+  mergeMessages,
+} from '@/lib/account-cache'
 import { getImageType } from '@/lib/const'
 import {
   type CustomerServiceReply,
@@ -210,6 +218,11 @@ export interface UsePrivateMessagesReturn {
   openUnfollowed: () => void
   closeUnfollowed: () => void
   loadMoreUnfollowed: () => Promise<void>
+  /**
+   * The shown account's chats with a message holding `query`, by chat key, each with the newest that does, as the
+   * chats opened before hold them (see searchHeldChats)
+   */
+  searchHeldChats: (query: string) => Promise<Map<string, string>>
 
   // Actions
   checkLogin: () => Promise<boolean>
@@ -594,6 +607,36 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     if (!useSettings.getState().keepChatsOnDevice) return null
     return quietly('load the saved lists', () => window.electronAPI.bilibili.cache.loadLists({ mid }))
   }, [])
+
+  /**
+   * The shown account's chats with a message holding `query`, by chat key, each with the newest that does: those
+   * held here, and those saved on disk unless 在本机保留聊天记录 is off. Bilibili has no search to ask, so a search
+   * finds a chat by an earlier message than its last only once it's been opened, here or before a relaunch.
+   */
+  const searchHeldChats = useCallback(
+    async (query: string): Promise<Map<string, string>> => {
+      const found = new Map<string, string>()
+      const mid = shownMidRef.current
+      const needle = query.trim().toLowerCase()
+      if (mid === null || !needle) return found
+      if (useSettings.getState().keepChatsOnDevice) {
+        const saved = await quietly('search the saved chats', () =>
+          window.electronAPI.bilibili.cache.searchChats({ mid, query: needle })
+        )
+        for (const { key, text } of saved ?? []) found.set(key, text)
+        // Another account showed meanwhile
+        if (mid !== shownMidRef.current) return new Map()
+      }
+      // A chat held here is as new as its copy on disk, or newer (a message recalled since, say), so it decides
+      for (const [key, chat] of chatCache.chatsOf(mid)) {
+        const text = findMessage(chat.messages, needle)
+        if (text === null) found.delete(key)
+        else found.set(key, text)
+      }
+      return found
+    },
+    [chatCache]
+  )
 
   // A session as listed now, in the main list or in 未关注人消息
   const findListedSession = useCallback(
@@ -3349,6 +3392,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
     openUnfollowed,
     closeUnfollowed,
     loadMoreUnfollowed,
+    searchHeldChats,
 
     // Actions
     checkLogin,

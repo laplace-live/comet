@@ -3,7 +3,9 @@ import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promise
 import path from 'node:path'
 import { safeStorage } from 'electron'
 
-import type { AccountSnapshot, SavedChat } from '@/lib/account-cache'
+import type { AccountSnapshot, ChatMatch, SavedChat } from '@/lib/account-cache'
+
+import { findMessage } from '@/lib/account-cache'
 
 /**
  * The renderer's account cache, kept on disk between launches unless Settings › 在本机保留聊天记录 is off: each
@@ -45,6 +47,8 @@ export interface ChatCacheStore {
   /** A chat as last saved, null when there's none */
   loadChat(mid: number, key: string): Promise<SavedChat | null>
   saveChat(mid: number, key: string, chat: SavedChat): Promise<void>
+  /** An account's saved chats with a message holding `query`, each with the newest that does (see findMessage) */
+  searchChats(mid: number, query: string): Promise<ChatMatch[]>
   /** Delete everything saved of an account, as it signs out or is removed */
   forgetAccount(mid: number): Promise<void>
   /** Delete everything saved */
@@ -205,6 +209,20 @@ export function createChatCacheStore({ dir, storedMids, budget = 50_000 }: ChatC
         }
         await write(path.join(accountDir(mid), CHATS), chats.slice(dropped.length))
         for (const entry of dropped) await rm(path.join(accountDir(mid), entry.file), { force: true })
+      }),
+
+    searchChats: (mid, query) =>
+      enqueue<ChatMatch[]>([], async () => {
+        if (!isMid(mid) || typeof query !== 'string' || !query.trim() || !(await canSeal())) return []
+        const needle = query.trim().toLowerCase()
+        const found: ChatMatch[] = []
+        // Least recently used first, as the index lists them; the order a search shows them in is the lists'
+        for (const entry of await readIndex(mid)) {
+          const chat = await read<SavedChat>(path.join(accountDir(mid), entry.file))
+          const text = chat && findMessage(chat.messages, needle)
+          if (text) found.push({ key: entry.key, text })
+        }
+        return found
       }),
 
     forgetAccount: mid =>

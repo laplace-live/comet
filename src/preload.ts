@@ -2,7 +2,7 @@
 // https://www.electronjs.org/docs/latest/tutorial/process-model#preload-scripts
 import { contextBridge, ipcRenderer } from 'electron'
 
-import type { AccountSnapshot, SavedChat } from './lib/account-cache'
+import type { AccountSnapshot, ChatMatch, SavedChat } from './lib/account-cache'
 import type { BilibiliCredentials } from './types/bilibili'
 import type {
   AccountParams,
@@ -31,6 +31,7 @@ import type {
   ReorderAccountsResult,
   SaveCachedChatParams,
   SaveCachedListsParams,
+  SearchCachedChatsParams,
   SendCustomerServiceMessageParams,
   SendMessageParams,
   SessionUpdateNotification,
@@ -124,6 +125,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_LOAD_CHAT, params),
       saveChat: (params: SaveCachedChatParams): Promise<void> =>
         ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_SAVE_CHAT, params),
+      searchChats: (params: SearchCachedChatsParams): Promise<ChatMatch[]> =>
+        ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_SEARCH_CHATS, params),
       clear: (): Promise<void> => ipcRenderer.invoke(IpcChannel.BILIBILI_CACHE_CLEAR),
     },
 

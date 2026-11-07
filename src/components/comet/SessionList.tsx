@@ -8,6 +8,7 @@ import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliSession } from '@/types/bilibili'
 import type { CheckLoginResult, StoredAccountInfo } from '@/types/electron'
 
+import { chatKey } from '@/lib/account-cache'
 import { getLastMessagePreview, getSessionName } from '@/lib/message-utils'
 
 import { isMacOS } from '@/utils/platform'
@@ -40,6 +41,46 @@ const CustomScroller = forwardRef<HTMLDivElement, ScrollerProps>(({ children, ..
 
 type SessionVisibilityFilter = 'all' | 'unread' | 'read'
 
+// How long after asking for a page a search asks for the next, as it loads a long list through, so it keeps under
+// Bilibili's rate limit (-509 请求过于频繁)
+export const SEARCH_PAGE_GAP = 1000
+// How long a search waits for the typing to stop before it looks through the messages held of each chat
+const HELD_SEARCH_DELAY = 250
+
+/** Whether a search finds a session by what the list shows of it: its name, UID or last message */
+function showsQuery(session: BilibiliSession, query: string, userCache: UserCache): boolean {
+  const lower = query.toLowerCase()
+  return (
+    getSessionName(session, userCache).toLowerCase().includes(lower) ||
+    String(session.talker_id).includes(query) ||
+    getLastMessagePreview(session).toLowerCase().includes(lower)
+  )
+}
+
+/**
+ * What a search result shows in place of its last message: the message held of the chat that the search found it by,
+ * when what the list shows of it doesn't hold the text
+ */
+export function searchPreview(
+  session: BilibiliSession,
+  query: string,
+  userCache: UserCache,
+  heldMatches: Map<string, string> | null
+): string | undefined {
+  if (!heldMatches || showsQuery(session, query, userCache)) return undefined
+  return heldMatches.get(chatKey(session))
+}
+
+/**
+ * The main list with 未关注人消息's chats among it by time, below the pinned sessions, for a search that looks
+ * through both. A chat both hold for a moment (moving between them as it's followed, say) shows once.
+ */
+function withFoldedChats(sessions: BilibiliSession[], folded: BilibiliSession[]): BilibiliSession[] {
+  const listed = new Set(sessions.map(chatKey))
+  const rest = [...sessions.filter(s => !s.top_ts), ...folded.filter(s => !listed.has(chatKey(s)))]
+  return [...sessions.filter(s => s.top_ts > 0), ...rest.sort((a, b) => b.session_ts - a.session_ts)]
+}
+
 /** A row of the list: a session, or 未关注人消息 with the newest of its chats */
 type SessionListRow = { type: 'session'; session: BilibiliSession } | { type: 'unfollowed'; newest: BilibiliSession }
 
@@ -63,6 +104,8 @@ interface SessionListProps {
   onOpenUnfollowed?: () => void
   onCloseUnfollowed?: () => void
   onLoadMoreUnfollowed?: () => void
+  /** The chats a message of which holds a search's text, by chat key, each with the newest that does */
+  onSearchMessages?: (query: string) => Promise<Map<string, string>>
   onLogout?: () => void
   onSwitchAccount?: (mid: number) => void
   onAddAccount?: () => void
@@ -89,6 +132,7 @@ export function SessionList({
   onOpenUnfollowed,
   onCloseUnfollowed,
   onLoadMoreUnfollowed,
+  onSearchMessages,
   onLogout,
   onSwitchAccount,
   onAddAccount,
@@ -107,9 +151,35 @@ export function SessionList({
   const query = filterText.trim()
   const searching = query.length > 0
 
+  // From the main list, a search looks through 未关注人消息's chats too, folded away though they are
+  const searchesFolded = searching && !showingUnfollowed && !!unfollowed
+  const foldedSessions = unfollowed?.sessions
+  const searchedSessions = useMemo(
+    () => (searchesFolded && foldedSessions ? withFoldedChats(sessions, foldedSessions) : listedSessions),
+    [searchesFolded, sessions, foldedSessions, listedSessions]
+  )
+
+  // The chats a message of which holds the search's text, besides the last message the list shows, as held of the
+  // chats opened before (on disk too), for the search and account shown
+  const [held, setHeld] = useState<{ query: string; mid: number | null; matches: Map<string, string> } | null>(null)
+  const shownMid = activeAccountMid ?? null
+  useEffect(() => {
+    if (!searching || !onSearchMessages) return
+    let current = true
+    const timer = setTimeout(async () => {
+      const matches = await onSearchMessages(query).catch(() => new Map<string, string>())
+      if (current) setHeld({ query, mid: shownMid, matches })
+    }, HELD_SEARCH_DELAY)
+    return () => {
+      current = false
+      clearTimeout(timer)
+    }
+  }, [searching, query, shownMid, onSearchMessages])
+  const heldMatches = searching && held?.query === query && held.mid === shownMid ? held.matches : null
+
   // Filter sessions based on visibility filter and search text
   const filteredSessions = useMemo(() => {
-    let result = listedSessions
+    let result = searchedSessions
 
     // First, apply visibility filter
     if (visibilityFilter === 'unread') {
@@ -118,55 +188,53 @@ export function SessionList({
       result = result.filter(session => session.unread_count === 0)
     }
 
-    // Then, apply search text filter
+    // Then the search: by name, UID or last message, or by any other message held of the chat
     if (query) {
-      const searchLower = query.toLowerCase()
-      result = result.filter(session => {
-        // Search by username
-        const name = getSessionName(session, userCache).toLowerCase()
-        if (name.includes(searchLower)) return true
-
-        // Search by uid
-        const uid = String(session.talker_id)
-        if (uid.includes(query)) return true
-
-        // Search by last message content
-        const lastMessage = getLastMessagePreview(session).toLowerCase()
-        if (lastMessage.includes(searchLower)) return true
-
-        return false
-      })
+      result = result.filter(session => showsQuery(session, query, userCache) || !!heldMatches?.has(chatKey(session)))
     }
 
     return result
-  }, [listedSessions, query, visibilityFilter, userCache])
+  }, [searchedSessions, query, visibilityFilter, userCache, heldMatches])
 
   const isFiltering = searching || visibilityFilter !== 'all'
 
-  // A search looks through every chat in the list, so it loads the rest of the list page by page as it goes (and
-  // the pages stay loaded after). Where a page adds nothing (it failed, say), it stops rather than ask again and
-  // again, until the search changes.
-  const searchLoadRef = useRef<{ query: string; from: number } | null>(null)
+  // A search looks through every chat in the list, so it loads the rest of the list page by page as it goes (the
+  // main list's, then 未关注人消息's when it looks through those too), and the pages stay loaded after. It asks
+  // for a page at a time, SEARCH_PAGE_GAP apart. Where a page adds nothing (it failed, say), it stops rather than
+  // ask again and again, until the search changes.
+  const nextSearchPage = !searching
+    ? null
+    : showingUnfollowed
+      ? unfollowed?.hasMore
+        ? 'unfollowed'
+        : null
+      : hasMoreSessions
+        ? 'sessions'
+        : searchesFolded && unfollowed?.hasMore
+          ? 'unfollowed'
+          : null
+  const searchPageLoading = loadingMore || !!unfollowed?.loadingMore
+  const searchLoadRef = useRef<{ query: string; from: number; at: number } | null>(null)
   useEffect(() => {
-    if (!searching || !hasMoreListed || loadingMoreListed) return
+    if (!nextSearchPage || searchPageLoading) return
     const last = searchLoadRef.current
-    if (last?.query === query && last.from === listedSessions.length) return
-    searchLoadRef.current = { query, from: listedSessions.length }
-    if (showingUnfollowed) onLoadMoreUnfollowed?.()
-    else onLoadMore()
-  }, [
-    query,
-    searching,
-    hasMoreListed,
-    loadingMoreListed,
-    listedSessions.length,
-    showingUnfollowed,
-    onLoadMore,
-    onLoadMoreUnfollowed,
-  ])
+    if (last?.query === query && last.from === searchedSessions.length) return
+    const ask = () => {
+      searchLoadRef.current = { query, from: searchedSessions.length, at: Date.now() }
+      if (nextSearchPage === 'unfollowed') onLoadMoreUnfollowed?.()
+      else onLoadMore()
+    }
+    const wait = last ? last.at + SEARCH_PAGE_GAP - Date.now() : 0
+    if (wait <= 0) {
+      ask()
+      return
+    }
+    const timer = setTimeout(ask, wait)
+    return () => clearTimeout(timer)
+  }, [query, nextSearchPage, searchPageLoading, searchedSessions.length, onLoadMore, onLoadMoreUnfollowed])
   // Whether pages that may hold what the search looks for are still loading (or about to)
-  const stalled = searchLoadRef.current?.query === query && searchLoadRef.current.from === listedSessions.length
-  const searchingMore = searching && hasMoreListed && (loadingMoreListed || !stalled)
+  const stalled = searchLoadRef.current?.query === query && searchLoadRef.current.from === searchedSessions.length
+  const searchingMore = !!nextSearchPage && (searchPageLoading || !stalled)
 
   // The newest chat 未关注人消息 holds, which it previews and is listed by
   const newestUnfollowed = useMemo(
@@ -230,7 +298,7 @@ export function SessionList({
             />
             <InputGroupAddon align='inline-end'>
               <InputGroupText className='whitespace-nowrap'>
-                {isFiltering ? `${filteredSessions.length} / ${listedSessions.length}` : `${listedSessions.length}`}
+                {isFiltering ? `${filteredSessions.length} / ${searchedSessions.length}` : `${listedSessions.length}`}
               </InputGroupText>
 
               {filterText && (
@@ -300,6 +368,7 @@ export function SessionList({
                 draftKey={getDraftKey(userInfo?.mid ?? 0, row.session)}
                 isSelected={selectedSession?.talker_id === row.session.talker_id}
                 userCache={userCache}
+                preview={searchPreview(row.session, query, userCache, heldMatches)}
                 onClick={() => onSessionClick(row.session)}
               />
             )
@@ -307,7 +376,7 @@ export function SessionList({
           components={{
             Scroller: CustomScroller,
             Footer: () =>
-              hasMoreListed && (!isFiltering || searchingMore) ? (
+              (searching ? searchingMore : hasMoreListed && !isFiltering) ? (
                 <div className='flex items-center justify-center p-4'>
                   <Loader2 className='size-5 animate-spin text-muted-foreground' aria-hidden='true' />
                 </div>

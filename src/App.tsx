@@ -56,6 +56,7 @@ export default function App() {
     openUnfollowed,
     closeUnfollowed,
     loadMoreUnfollowed,
+    searchHeldChats,
     // Multi-account actions
     switchAccount,
     removeAccount,
@@ -195,6 +196,7 @@ export default function App() {
               onOpenUnfollowed={openUnfollowed}
               onCloseUnfollowed={closeUnfollowed}
               onLoadMoreUnfollowed={loadMoreUnfollowed}
+              onSearchMessages={searchHeldChats}
               onLogout={logout}
               onSwitchAccount={switchAccount}
               onAddAccount={startAddingAccount}

@@ -5,7 +5,7 @@
  * All main process handlers and preload bridge implementations should import from here.
  */
 
-import type { AccountSnapshot, SavedChat } from '@/lib/account-cache'
+import type { AccountSnapshot, ChatMatch, SavedChat } from '@/lib/account-cache'
 import type {
   BilibiliCredentials,
   BilibiliLinkSettingResponse,
@@ -46,6 +46,7 @@ import type {
   ReorderAccountsResult,
   SaveCachedChatParams,
   SaveCachedListsParams,
+  SearchCachedChatsParams,
   SendCustomerServiceMessageParams,
   SendMessageParams,
   SessionUpdateNotification,
@@ -123,6 +124,7 @@ export const IpcChannel = {
   BILIBILI_CACHE_SAVE_LISTS: 'bilibili:cache-save-lists',
   BILIBILI_CACHE_LOAD_CHAT: 'bilibili:cache-load-chat',
   BILIBILI_CACHE_SAVE_CHAT: 'bilibili:cache-save-chat',
+  BILIBILI_CACHE_SEARCH_CHATS: 'bilibili:cache-search-chats',
   BILIBILI_CACHE_CLEAR: 'bilibili:cache-clear',
 
   // Bilibili WebSocket
@@ -314,6 +316,10 @@ export interface IpcInvokeContract {
   [IpcChannel.BILIBILI_CACHE_SAVE_CHAT]: {
     params: SaveCachedChatParams
     result: undefined
+  }
+  [IpcChannel.BILIBILI_CACHE_SEARCH_CHATS]: {
+    params: SearchCachedChatsParams
+    result: ChatMatch[]
   }
   [IpcChannel.BILIBILI_CACHE_CLEAR]: {
     params: undefined

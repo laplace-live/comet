@@ -35,6 +35,7 @@ import type {
   FetchCustomerServiceMessagesParams,
   SaveCachedChatParams,
   SaveCachedListsParams,
+  SearchCachedChatsParams,
   SendCustomerServiceMessageParams,
   SetUnfollowFoldParams,
   StoredAccountInfo,
@@ -1163,6 +1164,9 @@ export function registerBilibiliIpcHandlers() {
   )
   ipcMain.handle(IpcChannel.BILIBILI_CACHE_SAVE_CHAT, (_event, params: SaveCachedChatParams) =>
     chatCache.saveChat(params.mid, params.key, params.chat)
+  )
+  ipcMain.handle(IpcChannel.BILIBILI_CACHE_SEARCH_CHATS, (_event, params: SearchCachedChatsParams) =>
+    chatCache.searchChats(params.mid, params.query)
   )
   ipcMain.handle(IpcChannel.BILIBILI_CACHE_CLEAR, () => chatCache.clear())
 

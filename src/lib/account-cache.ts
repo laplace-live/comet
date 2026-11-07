@@ -3,6 +3,8 @@ import type { BilibiliEmojiInfo, BilibiliMessage, BilibiliSession } from '@/type
 
 import { MSG_TYPE } from '@/types/bilibili'
 
+import { parseMessageContent } from '@/lib/message-utils'
+
 // What each account last showed, so switching to an account, opening a chat again or relaunching shows it at once
 // while what's new loads behind it. Kept in memory, and on disk sealed with safeStorage (src/api/chat-cache.ts)
 // unless Settings › 在本机保留聊天记录 is off.
@@ -85,6 +87,28 @@ export function chatToSave(chat: CachedChat, userCache: UserCache): SavedChat {
     if (userCache[uid]) users[uid] = userCache[uid]
   }
   return { ...chat, users }
+}
+
+/** A chat a search finds by a message it holds: its key (chatKey), and that message as the chat shows it */
+export interface ChatMatch {
+  key: string
+  text: string
+}
+
+/**
+ * The newest of a chat's messages that holds `query`, as the chat shows it, null when none does. Search looks
+ * through the messages of the chats held here or on disk this way, as Bilibili has no search to ask, and finds a
+ * chat by any of them, not just its last. A recalled message shows as recalled, so what it said doesn't count.
+ * @param query - lowercase
+ */
+export function findMessage(messages: BilibiliMessage[], query: string): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.msg_status || message.msg_type === MSG_TYPE.REVOKE) continue
+    const text = parseMessageContent(message)
+    if (text.toLowerCase().includes(query)) return text
+  }
+  return null
 }
 
 /**
@@ -193,6 +217,14 @@ export class ChatCache {
       if (this.size <= this.budget || other === id) break
       this.remove(other)
     }
+  }
+
+  /** An account's conversations by their keys (chatKey), leaving their order as it is */
+  chatsOf(mid: number): Array<[string, CachedChat]> {
+    const prefix = `${mid}/`
+    return [...this.chats]
+      .filter(([id]) => id.startsWith(prefix))
+      .map(([id, chat]): [string, CachedChat] => [id.slice(prefix.length), chat])
   }
 
   /** Forget an account's conversations, as it signs out or is removed */

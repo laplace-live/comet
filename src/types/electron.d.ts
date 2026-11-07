@@ -1,4 +1,4 @@
-import type { AccountSnapshot, SavedChat } from '../lib/account-cache'
+import type { AccountSnapshot, ChatMatch, SavedChat } from '../lib/account-cache'
 import type {
   BilibiliCredentials,
   BilibiliLinkSettingResponse,
@@ -227,6 +227,11 @@ export interface SaveCachedChatParams extends CachedChatParams {
   chat: SavedChat
 }
 
+/** A search through an account's chats saved on disk, by the text of their messages */
+export interface SearchCachedChatsParams extends CachedListsParams {
+  query: string
+}
+
 export interface GetAccountsResult {
   accounts: StoredAccountInfo[]
   activeAccountMid: number | null
@@ -412,6 +417,7 @@ export interface ElectronAPI {
       saveLists: (params: SaveCachedListsParams) => Promise<void>
       loadChat: (params: CachedChatParams) => Promise<SavedChat | null>
       saveChat: (params: SaveCachedChatParams) => Promise<void>
+      searchChats: (params: SearchCachedChatsParams) => Promise<ChatMatch[]>
       clear: () => Promise<void>
     }
 

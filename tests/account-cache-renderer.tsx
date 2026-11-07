@@ -20,13 +20,23 @@ import type {
   NewMessageNotification,
   SaveCachedChatParams,
   SaveCachedListsParams,
+  SearchCachedChatsParams,
 } from '@/types/electron'
 
-import { ChatCache, keepLoadedPages, listsToSave, mergeMessages, SAVED_SESSIONS } from '@/lib/account-cache'
+import {
+  ChatCache,
+  findMessage,
+  keepLoadedPages,
+  listsToSave,
+  mergeMessages,
+  SAVED_SESSIONS,
+  type SavedChat,
+} from '@/lib/account-cache'
 
 import { type UsePrivateMessagesReturn, usePrivateMessages } from '@/hooks/usePrivateMessages'
 
-import { SessionList } from '@/components/comet/SessionList'
+import { SessionItem } from '@/components/comet/SessionItem'
+import { SEARCH_PAGE_GAP, SessionList, searchPreview } from '@/components/comet/SessionList'
 
 import { useSettings } from '@/stores/useSettings'
 
@@ -295,6 +305,13 @@ function installApi() {
         saveChat: async ({ mid, key, chat }: SaveCachedChatParams) => {
           if (storedMids.includes(mid)) disk.set(`${mid}/chat/${key}`, structuredClone(chat))
         },
+        // Through the account's saved chats, each giving the newest message that holds the text, as the main process does
+        searchChats: async ({ mid, query }: SearchCachedChatsParams) =>
+          [...disk].flatMap(([id, chat]) => {
+            if (!id.startsWith(`${mid}/chat/`)) return []
+            const text = findMessage((chat as SavedChat).messages, query.toLowerCase())
+            return text === null ? [] : [{ key: id.slice(`${mid}/chat/`.length), text }]
+          }),
         clear: async () => disk.clear(),
       },
       showNotification: async () => ({ shown: true }),
@@ -528,6 +545,53 @@ test('a recall that comes over the WebSocket takes back the message it names', a
   )
   const recalled = current.messages.find(m => m.msg_seqno === 3)
   assert(recalled?.msg_status === 1, `the message it names should show as recalled, got ${recalled?.msg_status}`)
+})
+
+const said = (text: string) => ({ content: JSON.stringify({ content: text }) })
+
+test('a search finds chats by any message held of them, opened here or saved on disk, as their account', async () => {
+  await setup()
+  server[ME].messages[FAN] = [message(FAN, 1, said('早前的 Asdaf 消息')), message(ME, 2), message(FAN, 3)]
+  await flush(() => current.selectSession(chatOf(FAN)))
+  const saved = (talkerId: number, text: string): SavedChat => ({
+    messages: [message(talkerId, 5, said(text)), message(talkerId, 6)],
+    emojiInfoMap: {},
+    syncedSeqno: 6,
+    users: {},
+  })
+  disk.set(`${ME}/chat/1:${COLLEAGUE}`, saved(COLLEAGUE, 'asdaf 也在这'))
+  disk.set(`${OTHER}/chat/1:${OTHER_FRIEND}`, saved(OTHER_FRIEND, '另一个号的 asdaf'))
+
+  const found = await current.searchHeldChats('  ASDAF ')
+  assert(found.get(`1:${FAN}`) === '早前的 Asdaf 消息', `the chat opened here should be found, got ${[...found]}`)
+  assert(found.get(`1:${COLLEAGUE}`) === 'asdaf 也在这', `the chat saved on disk should be found, got ${[...found]}`)
+  assert(found.size === 2, `only the shown account's chats should be searched, got ${[...found.keys()]}`)
+  assert((await current.searchHeldChats('没说过的话')).size === 0, 'text no message holds should find nothing')
+})
+
+test('a message recalled since finds its chat no more, though the copy on disk still holds it', async () => {
+  await setup()
+  server[ME].messages[FAN] = [message(FAN, 1), message(ME, 2), message(FAN, 3, said('asdaf'))]
+  await flush(() => current.selectSession(chatOf(FAN)))
+  disk.set(`${ME}/chat/1:${FAN}`, { messages: server[ME].messages[FAN], emojiInfoMap: {}, syncedSeqno: 3, users: {} })
+  await flush(() =>
+    onNewMessage({
+      talkerId: FAN,
+      sessionType: 1,
+      instantMsg: {
+        senderUid: FAN,
+        receiverType: 1,
+        receiverId: ME,
+        msgType: 5,
+        content: '3000',
+        msgSeqno: 4,
+        timestamp: 4,
+        msgKey: '4000',
+      },
+    })
+  )
+  const found = await current.searchHeldChats('asdaf')
+  assert(!found.has(`1:${FAN}`), `what a recalled message said should no longer find its chat, got ${[...found]}`)
 })
 
 test('a message keeps the pages loaded past the first, instead of going back to the first page', async () => {
@@ -776,66 +840,183 @@ test('the cache keeps the most recently opened chats within its budget', async (
 
 // The session list's search
 
-test('a search loads the rest of the list as it goes, and stops where a page adds nothing', async () => {
-  let pages = 0
-  let failNext = false
-  let props!: Parameters<typeof SessionList>[0]
+/** Wait, flushing as it goes, until `ready` says so, or fail after `ms` */
+async function until(ready: () => boolean, ms: number, what: string) {
+  const start = Date.now()
+  while (!ready()) {
+    if (Date.now() - start > ms) throw new Error(`Timed out waiting for ${what}`)
+    await flush(() => new Promise(resolve => setTimeout(resolve, 50)))
+  }
+}
+
+const pause = (ms: number) => flush(() => new Promise(resolve => setTimeout(resolve, ms)))
+
+/** Mount the session list alone, with a way to type into its search box */
+function mountList() {
   const container = document.createElement('div')
   document.body.replaceChildren(container)
   root = createRoot(container)
+  const type = (text: string) =>
+    flush(() => {
+      const input = container.querySelector('input[type="search"]') as HTMLInputElement
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(input, text)
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+  return { container, type, text: () => container.textContent ?? '' }
+}
 
+const listProps = (props: Partial<Parameters<typeof SessionList>[0]>): Parameters<typeof SessionList>[0] => ({
+  sessions: [],
+  selectedSession: null,
+  loading: false,
+  loadingMore: false,
+  hasMoreSessions: false,
+  isHidden: false,
+  isConnected: true,
+  userCache: {},
+  onSessionClick: () => undefined,
+  onLoadMore: () => undefined,
+  onRefresh: () => undefined,
+  ...props,
+})
+
+test('a search loads the rest of the list a page at a time, and stops where a page adds nothing', async () => {
+  const asked: number[] = []
+  let failNext = false
+  const { type, text } = mountList()
+  let props!: Parameters<typeof SessionList>[0]
   const render = () => root.render(<SessionList {...props} />)
   const loadMore = async () => {
-    pages++
+    asked.push(Date.now())
+    const page = asked.length
     props = { ...props, loadingMore: true }
     render()
     await new Promise(resolve => setTimeout(resolve, 0))
     const failed = failNext
     failNext = false
-    const more = failed ? [] : Array.from({ length: 2 }, (_, i) => session(10_000 * pages + i, 1000 - 10 * pages - i))
-    props = { ...props, sessions: [...props.sessions, ...more], loadingMore: false, hasMoreSessions: pages < 3 }
+    const more = failed ? [] : Array.from({ length: 2 }, (_, i) => session(10_000 * page + i, 1000 - 10 * page - i))
+    props = { ...props, sessions: [...props.sessions, ...more], loadingMore: false, hasMoreSessions: page < 3 }
     render()
   }
-  props = {
+  props = listProps({
     sessions: [session(FRIEND, 2000)],
-    selectedSession: null,
-    loading: false,
-    loadingMore: false,
     hasMoreSessions: true,
-    isHidden: false,
-    isConnected: true,
     userCache: { [FRIEND]: { name: '朋友', face: '' } },
-    onSessionClick: () => undefined,
     onLoadMore: () => void loadMore(),
-    onRefresh: () => undefined,
-  }
+  })
   await flush(render)
-  assert(pages === 0, 'nothing should load before a search')
+  assert(asked.length === 0, 'nothing should load before a search')
 
-  const input = container.querySelector('input[type="search"]') as HTMLInputElement
-  const type = (text: string) => {
-    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-    setValue?.call(input, text)
-    input.dispatchEvent(new Event('input', { bubbles: true }))
-  }
-  await flush(() => type('  朋友  '))
-  for (let i = 0; i < 5; i++) await flush()
-  assert(pages === 3, `a search should load every page, got ${pages}`)
+  await type('  朋友  ')
+  await until(() => asked.length === 3 && !props.loadingMore, SEARCH_PAGE_GAP * 4, 'every page')
+  assert(text().includes('1 / 7'), `the search, spaces aside, should find the chat among all 7, got ${text()}`)
   assert(
-    container.textContent?.includes('1 / 7'),
-    `the search, spaces aside, should find the chat among all 7, got ${container.textContent}`
+    asked[1] - asked[0] >= SEARCH_PAGE_GAP - 20 && asked[2] - asked[1] >= SEARCH_PAGE_GAP - 20,
+    `pages should be asked for SEARCH_PAGE_GAP apart, got ${asked.map(t => t - asked[0])}`
   )
 
   // A page that fails stops a search loading
-  await flush(() => type(''))
+  await type('')
   props = { ...props, sessions: [session(FRIEND, 2000)], hasMoreSessions: true }
-  pages = 0
+  asked.length = 0
   await flush(render)
-  assert(pages === 0, 'nothing should load without a search')
+  assert(asked.length === 0, 'nothing should load without a search')
   failNext = true
-  await flush(() => type('另一个'))
-  for (let i = 0; i < 5; i++) await flush()
-  assert(pages === 1, `a page that adds nothing should stop the search loading, got ${pages}`)
+  await type('另一个')
+  await until(() => asked.length === 1 && !props.loadingMore, SEARCH_PAGE_GAP * 3, 'the first page')
+  await pause(SEARCH_PAGE_GAP + 300)
+  assert(asked.length === 1, `a page that adds nothing should stop the search loading, got ${asked.length}`)
+})
+
+test('from the main list, a search looks through 未关注人消息 too, loading its pages after the main list', async () => {
+  let foldedPages = 0
+  const { type, text } = mountList()
+  let props!: Parameters<typeof SessionList>[0]
+  const render = () => root.render(<SessionList {...props} />)
+  const fold = (sessions: BilibiliSession[], hasMore: boolean, loadingMore = false) => ({
+    sessions,
+    unread: 0,
+    hasMore,
+    loadingMore,
+    open: false,
+  })
+  const loadMoreFolded = async () => {
+    foldedPages++
+    const held = props.unfollowed?.sessions ?? []
+    props = { ...props, unfollowed: fold(held, true, true) }
+    render()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    props = { ...props, unfollowed: fold([...held, session(NEWCOMER, 100, { is_follow: 0 })], false) }
+    render()
+  }
+  props = listProps({
+    sessions: [session(FRIEND, 2000)],
+    userCache: {
+      [FRIEND]: { name: '朋友', face: '' },
+      [FAN]: { name: '粉丝', face: '' },
+      [NEWCOMER]: { name: '路人', face: '' },
+    },
+    unfollowed: fold([session(FAN, 1500, { is_follow: 0 })], true),
+    onLoadMoreUnfollowed: () => void loadMoreFolded(),
+  })
+  await flush(render)
+
+  // The list draws no rows in a hidden window, but its count shows what the search found among how many
+  await type('粉丝')
+  await until(() => foldedPages === 1 && !props.unfollowed?.loadingMore, SEARCH_PAGE_GAP * 3, '未关注人消息 to load')
+  assert(text().includes('1 / 3'), `a chat folded into 未关注人消息 should be found from the main list, got ${text()}`)
+  await type('路人')
+  assert(text().includes('1 / 3'), `a chat on 未关注人消息's next page should be found among all 3, got ${text()}`)
+  await type('没有这个人')
+  assert(text().includes('没有找到匹配的会话'), `text no chat holds should find none, got ${text()}`)
+})
+
+test('a search finds a chat by an earlier message held of it, and shows that message in place of its last', async () => {
+  const asked: string[] = []
+  const friend = session(FRIEND, 2000, { last_msg: message(FRIEND, 9, said('最后一句')) })
+  const fan = session(FAN, 1000, { last_msg: message(FAN, 8, said('asdaf 也是最后一句')) })
+  const userCache = { [FRIEND]: { name: '朋友', face: '' }, [FAN]: { name: '粉丝', face: '' } }
+  const held = new Map([
+    [`1:${FRIEND}`, '早前的 asdaf 消息'],
+    [`1:${FAN}`, '早前的 asdaf'],
+  ])
+  const { type, text } = mountList()
+  root.render(
+    <SessionList
+      {...listProps({
+        sessions: [friend, session(COLLEAGUE, 1500)],
+        userCache,
+        onSearchMessages: async query => {
+          asked.push(query)
+          return query === 'Asdaf' ? held : new Map()
+        },
+      })}
+    />
+  )
+  await flush()
+
+  await type('Asdaf')
+  await until(() => text().includes('1 / 2'), 2000, 'the chat found by a message held of it')
+  assert(asked.at(-1) === 'Asdaf', `the messages held should be searched for the text typed, got ${asked}`)
+
+  // The message it was found by shows in place of its last, unless what the list shows of it holds the text already
+  assert(searchPreview(friend, 'Asdaf', userCache, held) === '早前的 asdaf 消息', 'the held message should show')
+  assert(searchPreview(fan, 'Asdaf', userCache, held) === undefined, 'its own last message should show')
+  root.render(
+    <SessionItem
+      session={friend}
+      draftKey=''
+      isSelected={false}
+      userCache={userCache}
+      preview='早前的 asdaf 消息'
+      onClick={() => undefined}
+    />
+  )
+  await flush()
+  assert(
+    text().includes('早前的 asdaf 消息') && !text().includes('最后一句'),
+    `the row should show the message in place of its last, got ${text()}`
+  )
 })
 
 void (async () => {
