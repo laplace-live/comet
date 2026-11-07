@@ -146,8 +146,12 @@ export const WEBSOCKET_CONFIG = {
 export const LOGIN_CONFIG = {
   /** Deadline for a single login-related request in milliseconds (15 seconds) */
   REQUEST_TIMEOUT: 15_000,
+  /** Bounded deadline for opportunistic cookie refresh during a login check in milliseconds (5 seconds) */
+  COOKIE_REFRESH_TIMEOUT: 5000,
   /** Delay between QR code status polls in milliseconds (3 seconds) */
   QR_POLL_INTERVAL: 3000,
+  /** Interval for background login and cookie refresh checks while running (6 hours) */
+  COOKIE_CHECK_INTERVAL: 6 * 60 * 60 * 1000,
 } as const
 
 // ============================================================================

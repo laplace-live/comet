@@ -1,7 +1,7 @@
 {
   "name": "@laplace.live/bilibili-qr",
   "version": "0.1.0",
-  "description": "Bilibili QR code login: issue the code, poll it, and collect the session cookies",
+  "description": "Bilibili QR code login and cookie refresh: issue the code, poll it, collect the session cookies, and renew them",
   "license": "AGPL-3.0",
   "type": "module",
   "author": "LAPLACE Live! <s@laplace.live>",

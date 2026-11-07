@@ -4,13 +4,17 @@ import { inspect } from 'node:util'
 
 import {
   type BilibiliCredentials,
+  COOKIE_REFRESH_ENDPOINTS,
+  checkCookieRefresh,
   cookieStringFromCredentials,
   DEFAULT_HEADERS,
   generateQRCode,
+  getCorrespondPath,
   pollQRCode,
   QR_CODE_STATUS,
   QR_LOGIN_ENDPOINTS,
   QRLoginError,
+  refreshCookies,
 } from '../src/index.ts'
 
 const credentials: BilibiliCredentials = {
@@ -334,4 +338,232 @@ test('cookieStringFromCredentials encodes SESSDATA back for the Cookie header', 
     cookieStringFromCredentials({ SESSDATA, DedeUserID, bili_jct }),
     'SESSDATA=fixture-session%2Cpercent%25value; DedeUserID=12345; bili_jct=fixture-csrf'
   )
+})
+
+test('getCorrespondPath encrypts refresh_timestamp into a 1024-bit RSA-OAEP hex path', async t => {
+  const realImportKey = globalThis.crypto.subtle.importKey.bind(globalThis.crypto.subtle)
+  const realEncrypt = globalThis.crypto.subtle.encrypt.bind(globalThis.crypto.subtle)
+  let importedFormat: KeyFormat | undefined
+  let importedKeyData: JsonWebKey | BufferSource | undefined
+  let importedAlgorithm: AlgorithmIdentifier | RsaHashedImportParams | EcKeyImportParams | HmacImportParams | undefined
+  let encryptedPlaintext = ''
+
+  t.mock.method(
+    globalThis.crypto.subtle,
+    'importKey',
+    async (
+      format: KeyFormat,
+      keyData: JsonWebKey | BufferSource,
+      algorithm: AlgorithmIdentifier | RsaHashedImportParams | EcKeyImportParams | HmacImportParams,
+      extractable: boolean,
+      keyUsages: readonly KeyUsage[]
+    ) => {
+      importedFormat = format
+      importedKeyData = keyData
+      importedAlgorithm = algorithm
+      return realImportKey(format as 'jwk', keyData as JsonWebKey, algorithm, extractable, keyUsages)
+    }
+  )
+  t.mock.method(
+    globalThis.crypto.subtle,
+    'encrypt',
+    async (algorithm: AlgorithmIdentifier | RsaOaepParams, key: CryptoKey, data: BufferSource) => {
+      encryptedPlaintext = new TextDecoder().decode(data)
+      return realEncrypt(algorithm, key, data)
+    }
+  )
+
+  const path = await getCorrespondPath(1_700_000_000_000)
+  assert.match(path, /^[0-9a-f]{256}$/)
+  assert.equal(importedFormat, 'jwk')
+  assert.deepEqual(importedKeyData, {
+    kty: 'RSA',
+    n: 'y4HdjgJHBlbaBN04VERG4qNBIFHP6a3GozCl75AihQloSWCXC5HDNgyinEnhaQ_4-gaMud_GF50elYXLlCToR9se9Z8z433U3KjM-3Yx7ptKkmQNAMggQwAVKgq3zYAoidNEWuxpkY_mAitTSRLnsJW-NCTa0bqBFF6Wm1MxgfE',
+    e: 'AQAB',
+  })
+  assert.deepEqual(importedAlgorithm, { name: 'RSA-OAEP', hash: 'SHA-256' })
+  assert.equal(encryptedPlaintext, 'refresh_1700000000000')
+  await assert.rejects(getCorrespondPath(Number.NaN), RangeError)
+})
+
+test('checkCookieRefresh sends csrf and Cookie and returns whether a refresh is due', async () => {
+  const infoResponse = {
+    code: 0,
+    message: '0',
+    ttl: 1,
+    data: { refresh: true, timestamp: 1_700_000_000_000 },
+  }
+  const signal = new AbortController().signal
+  const { fetch, calls } = fakeFetch(Response.json(infoResponse))
+  assert.deepEqual(await checkCookieRefresh(credentials, { fetch, signal }), {
+    refresh: true,
+    timestamp: 1_700_000_000_000,
+    response: infoResponse,
+  })
+  const url = new URL(calls[0]?.url ?? '')
+  assert.equal(`${url.origin}${url.pathname}`, COOKIE_REFRESH_ENDPOINTS.INFO)
+  assert.equal(url.searchParams.get('csrf'), credentials.bili_jct)
+  assert.deepEqual(calls[0]?.init.headers, {
+    ...DEFAULT_HEADERS,
+    Cookie: cookieStringFromCredentials(credentials),
+  })
+  assert.equal(calls[0]?.init.signal, signal)
+})
+
+for (const body of ['{"code":0}', '{"code":0,"data":{"refresh":true}}', '{"code":0,"data":{"timestamp":1}}']) {
+  test(`checkCookieRefresh rejects an answer without refresh info: ${body}`, async () => {
+    const { fetch } = fakeFetch(new Response(body))
+    await assert.rejects(checkCookieRefresh(credentials, { fetch }), { reason: 'response' })
+  })
+}
+
+test('refreshCookies exchanges refresh_csrf and refresh_token for new cookies and confirms them', async () => {
+  const nextCredentials: BilibiliCredentials = {
+    SESSDATA: 'next-session,percent%value',
+    DedeUserID: 12345,
+    DedeUserID__ckMd5: 'next-checksum',
+    bili_jct: 'next-csrf',
+  }
+  const nextCookies: Record<string, string> = {
+    ...nextCredentials,
+    DedeUserID: String(nextCredentials.DedeUserID),
+  }
+  const refreshBody = {
+    code: 0,
+    message: '0',
+    ttl: 1,
+    data: { status: 0, message: '', refresh_token: 'next-refresh-token' },
+  }
+  const signal = new AbortController().signal
+  const { fetch, calls } = fakeFetch(
+    new Response('<html><body><div id="1-name">fixture-refresh-csrf</div></body></html>'),
+    Response.json(refreshBody, { headers: cookieHeaders(nextCookies) }),
+    Response.json({ code: 0, message: '0', ttl: 1 })
+  )
+
+  let callsCountWhenRotated = -1
+  const result = await refreshCookies(credentials, 'old-refresh-token', {
+    fetch,
+    signal,
+    timestamp: 1_700_000_000_000,
+    onCredentialsRotated: rotated => {
+      callsCountWhenRotated = calls.length
+      assert.deepEqual(rotated, {
+        credentials: nextCredentials,
+        refreshToken: 'next-refresh-token',
+        response: refreshBody,
+      })
+    },
+  })
+  assert.deepEqual(result, {
+    credentials: nextCredentials,
+    refreshToken: 'next-refresh-token',
+    response: refreshBody,
+  })
+  assert.equal(callsCountWhenRotated, 2, 'onCredentialsRotated runs before confirm/refresh')
+  assert.equal(calls.length, 3)
+
+  const correspondPrefix = `${COOKIE_REFRESH_ENDPOINTS.CORRESPOND}/`
+  assert.ok((calls[0]?.url ?? '').startsWith(correspondPrefix))
+  assert.match((calls[0]?.url ?? '').slice(correspondPrefix.length), /^[0-9a-f]{256}$/)
+  assert.equal(new Headers(calls[0]?.init.headers).get('Cookie'), cookieStringFromCredentials(credentials))
+
+  assert.equal(calls[1]?.url, COOKIE_REFRESH_ENDPOINTS.REFRESH)
+  assert.equal(calls[1]?.init.method, 'POST')
+  assert.equal(new Headers(calls[1]?.init.headers).get('Cookie'), cookieStringFromCredentials(credentials))
+  assert.equal(new Headers(calls[1]?.init.headers).get('Content-Type'), 'application/x-www-form-urlencoded')
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(String(calls[1]?.init.body))), {
+    csrf: credentials.bili_jct,
+    refresh_csrf: 'fixture-refresh-csrf',
+    source: 'main_web',
+    refresh_token: 'old-refresh-token',
+  })
+
+  assert.equal(calls[2]?.url, COOKIE_REFRESH_ENDPOINTS.CONFIRM)
+  assert.equal(calls[2]?.init.method, 'POST')
+  assert.equal(new Headers(calls[2]?.init.headers).get('Cookie'), cookieStringFromCredentials(nextCredentials))
+  assert.deepEqual(Object.fromEntries(new URLSearchParams(String(calls[2]?.init.body))), {
+    csrf: nextCredentials.bili_jct,
+    refresh_token: 'old-refresh-token',
+  })
+  assert.ok(
+    calls.every(call => call.init.signal === signal),
+    "every step listens to the caller's signal"
+  )
+})
+
+test('refreshCookies rejects an empty refreshToken before making any request', async () => {
+  const { fetch, calls } = fakeFetch()
+  await assert.rejects(refreshCookies(credentials, '', { fetch }), { reason: 'credentials' })
+  assert.equal(calls.length, 0)
+})
+
+test("refreshCookies releases the correspond page's body on an HTTP error", async () => {
+  let cancelled = false
+  const body = new ReadableStream({
+    cancel() {
+      cancelled = true
+    },
+  })
+  const { fetch } = fakeFetch(new Response(body, { status: 404 }))
+  await assert.rejects(refreshCookies(credentials, 'old-refresh-token', { fetch }), {
+    reason: 'http',
+    status: 404,
+  })
+  assert.ok(cancelled)
+})
+
+for (const html of ['<html></html>', '<div id="1-name">   </div>']) {
+  test(`refreshCookies rejects a correspond page without refresh_csrf: ${html}`, async () => {
+    const { fetch } = fakeFetch(new Response(html))
+    await assert.rejects(refreshCookies(credentials, 'old-refresh-token', { fetch }), { reason: 'response' })
+  })
+}
+
+test('refreshCookies rejects a refresh answer without a new refresh_token', async () => {
+  const { fetch, calls } = fakeFetch(
+    new Response('<div id="1-name">fixture-refresh-csrf</div>'),
+    Response.json({ code: 0, message: '0', ttl: 1, data: { status: 0, message: '', refresh_token: '' } })
+  )
+  await assert.rejects(refreshCookies(credentials, 'old-refresh-token', { fetch }), { reason: 'response' })
+  assert.equal(calls.length, 2)
+})
+
+test('refreshCookies rejects a refresh answer without complete Set-Cookie credentials before confirming', async () => {
+  const { fetch, calls } = fakeFetch(
+    new Response('<div id="1-name">fixture-refresh-csrf</div>'),
+    Response.json({ code: 0, message: '0', ttl: 1, data: { status: 0, message: '', refresh_token: 'next-token' } })
+  )
+  await assert.rejects(refreshCookies(credentials, 'old-refresh-token', { fetch }), { reason: 'credentials' })
+  assert.equal(calls.length, 2)
+})
+
+test('refreshCookies keeps rotated credentials when confirm fails', async () => {
+  const nextCredentials: BilibiliCredentials = {
+    SESSDATA: 'next-session',
+    DedeUserID: 12345,
+    DedeUserID__ckMd5: 'next-checksum',
+    bili_jct: 'next-csrf',
+  }
+  const refreshBody = {
+    code: 0,
+    message: '0',
+    ttl: 1,
+    data: { status: 0, message: '', refresh_token: 'next-refresh-token' },
+  }
+  const { fetch, calls } = fakeFetch(
+    new Response('<div id="1-name">fixture-refresh-csrf</div>'),
+    Response.json(refreshBody, {
+      headers: cookieHeaders({ ...nextCredentials, DedeUserID: String(nextCredentials.DedeUserID) }),
+    }),
+    new Response('Bad gateway', { status: 502 })
+  )
+
+  const result = await refreshCookies(credentials, 'old-refresh-token', { fetch, timestamp: 1_700_000_000_000 })
+  assert.deepEqual(result, {
+    credentials: nextCredentials,
+    refreshToken: 'next-refresh-token',
+    response: refreshBody,
+  })
+  assert.equal(calls.length, 3)
 })

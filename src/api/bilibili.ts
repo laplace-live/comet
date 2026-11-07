@@ -1,5 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { cookieStringFromCredentials, generateQRCode, pollQRCode, QRLoginError } from '@laplace.live/bilibili-qr'
+import {
+  checkCookieRefresh,
+  cookieStringFromCredentials,
+  generateQRCode,
+  pollQRCode,
+  QRLoginError,
+  refreshCookies,
+} from '@laplace.live/bilibili-qr'
 import { Byte, Encoder } from '@nuintun/qrcode'
 import { ipcMain, safeStorage } from 'electron'
 import Store from 'electron-store'
@@ -19,6 +26,7 @@ import type {
   CustomerServiceSessionsResponse,
 } from '@/types/bilibili'
 import type {
+  CheckLoginResult,
   CustomerServiceShop,
   FetchCustomerServiceMessagesParams,
   SendCustomerServiceMessageParams,
@@ -195,6 +203,7 @@ export interface StoredAccountUserInfo {
 
 export interface StoredAccount {
   credentials: BilibiliCredentials
+  refreshToken?: string
   userInfo: StoredAccountUserInfo
   isExpired?: boolean
 }
@@ -332,23 +341,47 @@ function resealAccounts(encrypted: string): void {
   }).catch(error => console.error('Failed to re-encrypt accounts:', error))
 }
 
-// Save all accounts (replaces existing)
+/**
+ * Save all accounts (replaces existing). Renewable `refreshToken` secrets are only persisted when OS keychain
+ * encryption (`safeStorage`) is available.
+ */
 async function saveAccounts(accounts: StoredAccount[]): Promise<void> {
   if (accounts.length === 0) {
     store.set('accounts', null)
     store.set('activeAccountMid', null)
     return
   }
-  store.set('accounts', await encryptData(accounts))
+  const canEncrypt = await safeStorage.isAsyncEncryptionAvailable()
+  const accountsToSave = canEncrypt
+    ? accounts
+    : accounts.map(account => ({
+        credentials: account.credentials,
+        userInfo: account.userInfo,
+        isExpired: account.isExpired,
+      }))
+  store.set('accounts', await encryptData(accountsToSave))
 }
 
-// Add or update an account
-function saveAccount(credentials: BilibiliCredentials, userInfo: StoredAccountUserInfo): Promise<void> {
+// Bumped whenever activeAccountMid, account ordering, or an account's stored credentials change, so in-flight
+// login checks cannot coalesce across account mutations or overwrite a newer selection.
+let accountStateVersion = 0
+
+/** Add or update a stored account and ensure an active account is selected */
+function saveAccount(
+  credentials: BilibiliCredentials,
+  userInfo: StoredAccountUserInfo,
+  refreshToken?: string
+): Promise<void> {
   return changeAccounts(async () => {
     const accounts = await getAccounts()
     const existingIndex = accounts.findIndex(a => a.userInfo.mid === userInfo.mid)
 
-    const newAccount: StoredAccount = { credentials, userInfo, isExpired: false }
+    const newAccount: StoredAccount = {
+      credentials,
+      ...(refreshToken ? { refreshToken } : {}),
+      userInfo,
+      isExpired: false,
+    }
 
     if (existingIndex >= 0) {
       // Update existing account - preserve userInfo but update credentials and clear expired
@@ -365,15 +398,16 @@ function saveAccount(credentials: BilibiliCredentials, userInfo: StoredAccountUs
     if (!activeAccountMid || accounts.length === 1) {
       store.set('activeAccountMid', userInfo.mid)
     }
+    accountStateVersion++
   })
 }
 
-// Get the active account's mid
+/** Get the active account's mid */
 function getActiveAccountMid(): number | null {
   return store.get('activeAccountMid')
 }
 
-// Set the active account by mid
+/** Set the active account by mid */
 function setActiveAccount(mid: number): Promise<boolean> {
   return changeAccounts(async () => {
     const accounts = await getAccounts()
@@ -381,11 +415,12 @@ function setActiveAccount(mid: number): Promise<boolean> {
     if (!account) return false
 
     store.set('activeAccountMid', mid)
+    accountStateVersion++
     return true
   })
 }
 
-// Get credentials for the active account
+/** Get credentials for the active account */
 async function getCredentials(): Promise<BilibiliCredentials | null> {
   const activeAccountMid = getActiveAccountMid()
   if (!activeAccountMid) return null
@@ -395,7 +430,7 @@ async function getCredentials(): Promise<BilibiliCredentials | null> {
   return account?.credentials || null
 }
 
-// Get the active account (credentials + userInfo)
+/** Get the active account (credentials + userInfo) */
 async function getActiveAccount(): Promise<StoredAccount | null> {
   const activeAccountMid = getActiveAccountMid()
   if (!activeAccountMid) return null
@@ -404,7 +439,7 @@ async function getActiveAccount(): Promise<StoredAccount | null> {
   return accounts.find(a => a.userInfo.mid === activeAccountMid) || null
 }
 
-// Remove an account by mid
+/** Remove an account by mid */
 function removeAccount(mid: number): Promise<boolean> {
   return changeAccounts(async () => {
     const accounts = await getAccounts()
@@ -426,12 +461,13 @@ function removeAccount(mid: number): Promise<boolean> {
         store.set('activeAccountMid', null)
       }
     }
+    accountStateVersion++
 
     return true
   })
 }
 
-// Reorder accounts by an array of mids
+/** Reorder accounts by an array of mids */
 function reorderAccounts(mids: number[]): Promise<boolean> {
   return changeAccounts(async () => {
     const accounts = await getAccounts()
@@ -455,16 +491,18 @@ function reorderAccounts(mids: number[]): Promise<boolean> {
     }
 
     await saveAccounts(reordered)
+    accountStateVersion++
     return true
   })
 }
 
-// Mark an account as expired
-function markAccountExpired(mid: number): Promise<boolean> {
+/** Mark an account as expired (only if its SESSDATA has not been replaced by a newer login or re-auth) */
+function markAccountExpired(mid: number, expectedSessdata?: string): Promise<boolean> {
   return changeAccounts(async () => {
     const accounts = await getAccounts()
     const account = accounts.find(a => a.userInfo.mid === mid)
     if (!account) return false
+    if (expectedSessdata !== undefined && account.credentials.SESSDATA !== expectedSessdata) return false
 
     account.isExpired = true
     await saveAccounts(accounts)
@@ -472,25 +510,40 @@ function markAccountExpired(mid: number): Promise<boolean> {
   })
 }
 
-// Update credentials for an existing account (re-authentication)
-function updateAccountCredentials(mid: number, credentials: BilibiliCredentials): Promise<boolean> {
+/**
+ * Update credentials for an existing account (re-authentication).
+ * Preserves an existing `refreshToken` if the same session (`SESSDATA`) is re-submitted without a token.
+ */
+function updateAccountCredentials(
+  mid: number,
+  credentials: BilibiliCredentials,
+  refreshToken?: string
+): Promise<boolean> {
   return changeAccounts(async () => {
     const accounts = await getAccounts()
     const account = accounts.find(a => a.userInfo.mid === mid)
     if (!account) return false
 
+    const sameSession = account.credentials.SESSDATA === credentials.SESSDATA
     account.credentials = credentials
+    if (refreshToken) {
+      account.refreshToken = refreshToken
+    } else if (!sameSession) {
+      delete account.refreshToken
+    }
     account.isExpired = false // Clear expired flag on successful re-auth
     await saveAccounts(accounts)
+    accountStateVersion++
     return true
   })
 }
 
-// Clear all accounts (full logout)
+/** Clear all accounts (full logout) */
 function clearAllAccounts(): Promise<void> {
   return changeAccounts(async () => {
     store.set('accounts', null)
     store.set('activeAccountMid', null)
+    accountStateVersion++
   })
 }
 
@@ -512,6 +565,29 @@ async function cookieHeaderWithBuvids(credentials: BilibiliCredentials): Promise
     .join('; ')
 }
 
+/** Request `/x/web-interface/nav` with the given credentials and return the parsed JSON body on HTTP 2xx */
+async function requestNav(
+  credentials: BilibiliCredentials,
+  signal: AbortSignal = AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT)
+): Promise<BilibiliNavResponse | null> {
+  const resp = await fetch(BILIBILI_ENDPOINTS.NAV, {
+    headers: { Cookie: cookieStringFromCredentials(credentials), ...COMMON_HEADERS },
+    signal,
+  })
+  if (!resp.ok) {
+    await resp.body?.cancel()
+    return null
+  }
+
+  return resp.json()
+}
+
+/** Extract the logged-in user's profile from a Bilibili NAV response, or null when not logged in */
+function navProfile(data: BilibiliNavResponse): StoredAccountUserInfo | null {
+  if (data.code !== 0 || !data.data?.isLogin || !data.data.mid) return null
+  return { mid: data.data.mid, uname: data.data.uname || `User ${data.data.mid}`, face: data.data.face }
+}
+
 /**
  * Look up the account profile the given credentials authenticate as.
  * Returns null when the response says the credentials are not logged in.
@@ -520,18 +596,116 @@ async function cookieHeaderWithBuvids(credentials: BilibiliCredentials): Promise
  */
 async function fetchNavProfile(
   credentials: BilibiliCredentials,
-  signal: AbortSignal = AbortSignal.timeout(LOGIN_CONFIG.REQUEST_TIMEOUT)
+  signal?: AbortSignal
 ): Promise<StoredAccountUserInfo | null> {
-  const resp = await fetch(BILIBILI_ENDPOINTS.NAV, {
-    headers: { Cookie: cookieStringFromCredentials(credentials), ...COMMON_HEADERS },
-    signal,
+  const data = await requestNav(credentials, signal)
+  return data ? navProfile(data) : null
+}
+
+type NavCheckResult =
+  | { status: 'logged_in'; profile: StoredAccountUserInfo }
+  | { status: 'expired' }
+  | { status: 'unreachable' }
+
+/**
+ * Check whether stored credentials are still signed in on Bilibili.
+ * Distinguishes an explicit sign-out (`expired`) from network, timeout, or server failures (`unreachable`),
+ * so a transient outage never marks valid accounts expired.
+ */
+async function checkNavStatus(credentials: BilibiliCredentials, signal?: AbortSignal): Promise<NavCheckResult> {
+  try {
+    const data = await requestNav(credentials, signal)
+    if (!data) return { status: 'unreachable' }
+
+    const profile = navProfile(data)
+    if (profile) return { status: 'logged_in', profile }
+    if (data.code === -101 || data.data?.isLogin === false) return { status: 'expired' }
+    return { status: 'unreachable' }
+  } catch (error) {
+    console.error('Failed to check login status:', error)
+    return { status: 'unreachable' }
+  }
+}
+
+const refreshInFlightByMid = new Map<number, Promise<void>>()
+
+/**
+ * Check whether an account's cookies are due for rotation, and renew them with its `refreshToken` when Bilibili
+ * asks for a refresh. Failures leave the working credentials in place.
+ */
+function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
+  const {
+    credentials,
+    refreshToken,
+    userInfo: { mid },
+  } = account
+  if (!refreshToken) return Promise.resolve()
+
+  const existing = refreshInFlightByMid.get(mid)
+  if (existing) return existing
+
+  const updateIfTokenMatches = (mutate: (stored: StoredAccount) => void) =>
+    changeAccounts(async () => {
+      const accounts = await getAccounts()
+      const stored = accounts.find(a => a.userInfo.mid === mid)
+      if (
+        !stored ||
+        stored.credentials.SESSDATA !== credentials.SESSDATA ||
+        (stored.refreshToken !== undefined && stored.refreshToken !== refreshToken)
+      ) {
+        return
+      }
+      mutate(stored)
+      await saveAccounts(accounts)
+    })
+
+  const fetchWithRefreshTimeout: typeof fetch = (input, init) =>
+    fetch(input, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, AbortSignal.timeout(LOGIN_CONFIG.COOKIE_REFRESH_TIMEOUT)])
+        : AbortSignal.timeout(LOGIN_CONFIG.COOKIE_REFRESH_TIMEOUT),
+    })
+
+  const promise = (async () => {
+    try {
+      const { refresh, timestamp } = await checkCookieRefresh(credentials, {
+        fetch: fetchWithRefreshTimeout,
+        headers: COMMON_HEADERS,
+      })
+      if (!refresh) return
+
+      await refreshCookies(credentials, refreshToken, {
+        fetch: fetchWithRefreshTimeout,
+        headers: COMMON_HEADERS,
+        timestamp,
+        onCredentialsRotated: async rotated => {
+          if (rotated.credentials.DedeUserID !== mid) {
+            throw new Error('Refreshed cookies belong to a different UID')
+          }
+          await updateIfTokenMatches(stored => {
+            stored.credentials = rotated.credentials
+            stored.refreshToken = rotated.refreshToken
+            stored.isExpired = false
+          })
+        },
+      })
+    } catch (error) {
+      if (error instanceof QRLoginError && error.reason === 'api' && error.code === 86095) {
+        await updateIfTokenMatches(stored => {
+          delete stored.refreshToken
+        })
+      }
+      console.warn('Failed to refresh Bilibili cookies; keeping current credentials:', error)
+    }
+  })().finally(() => {
+    if (refreshInFlightByMid.get(mid) === promise) {
+      refreshInFlightByMid.delete(mid)
+    }
   })
-  if (!resp.ok) return null
 
-  const data: BilibiliNavResponse = await resp.json()
-  if (data.code !== 0 || !data.data?.isLogin || !data.data.mid) return null
-
-  return { mid: data.data.mid, uname: data.data.uname || `User ${data.data.mid}`, face: data.data.face }
+  refreshInFlightByMid.set(mid, promise)
+  return promise
 }
 
 /**
@@ -639,7 +813,7 @@ export function registerBilibiliIpcHandlers() {
 
       // If login successful, store credentials
       if (result.status === 'success') {
-        const { credentials } = result
+        const { credentials, refreshToken } = result
         let userInfo: StoredAccountUserInfo = {
           mid: credentials.DedeUserID,
           uname: `User ${credentials.DedeUserID}`,
@@ -658,7 +832,7 @@ export function registerBilibiliIpcHandlers() {
         }
 
         if (!skipSave) {
-          await saveAccount(credentials, userInfo)
+          await saveAccount(credentials, userInfo, refreshToken)
         }
 
         return {
@@ -704,109 +878,159 @@ export function registerBilibiliIpcHandlers() {
   })
 
   // Check if credentials are valid
-  // This function validates the active account and automatically tries the next account if expired
-  ipcMain.handle(IpcChannel.BILIBILI_CHECK_LOGIN, async () => {
-    // Helper function to check a specific account's credentials
-    const checkAccountCredentials = async (
-      credentials: BilibiliCredentials
-    ): Promise<{ isLogin: boolean; mid?: number; uname?: string; face?: string }> => {
-      try {
-        const profile = await fetchNavProfile(credentials)
-        return profile ? { isLogin: true, ...profile } : { isLogin: false }
-      } catch (error) {
-        console.error('Failed to check login status:', error)
-        return { isLogin: false }
-      }
-    }
+  // Validates the active account, renews its cookies when due, and switches to the next valid account if expired.
+  // Concurrent calls share one in-flight check so mount-time checks never race a one-use refresh_token, while
+  // any account mutation invalidates the in-flight check so callers always observe the updated account state.
+  let checkLoginInFlight: { version: number; promise: Promise<CheckLoginResult> } | null = null
 
-    const activeAccountMid = getActiveAccountMid()
-    const credentials = await getCredentials()
+  /**
+   * Synchronize a verified logged-in account's cookies and profile, or recheck the current active account
+   * if an account mutation invalidated `version` while the check was in flight.
+   */
+  const syncLoggedInAccount = async (
+    account: StoredAccount,
+    profile: StoredAccountUserInfo,
+    version: number,
+    switchActive = false
+  ): Promise<CheckLoginResult> => {
+    await refreshAccountCookiesIfNeeded(account)
 
-    if (!credentials || !activeAccountMid) {
-      return { isLogin: false }
-    }
-
-    // Check the active account
-    const result = await checkAccountCredentials(credentials)
-
-    if (result.isLogin) {
-      // Active account is valid - clear any expired flag and update user info (avatar, etc.)
-      await changeAccounts(async () => {
+    if (switchActive) {
+      const switched = await changeAccounts(async () => {
+        if (accountStateVersion !== version) return false
         const accounts = await getAccounts()
-        const account = accounts.find(a => a.userInfo.mid === activeAccountMid)
-        if (account) {
+        if (!accounts.some(a => a.userInfo.mid === account.userInfo.mid)) return false
+        store.set('activeAccountMid', account.userInfo.mid)
+        accountStateVersion++
+        return true
+      })
+      if (!switched) {
+        return checkLogin()
+      }
+    } else if (accountStateVersion !== version) {
+      return checkLogin()
+    }
+
+    if (
+      account.isExpired ||
+      (profile.face && profile.face !== account.userInfo.face) ||
+      (profile.uname && profile.uname !== account.userInfo.uname)
+    ) {
+      try {
+        await changeAccounts(async () => {
+          const accounts = await getAccounts()
+          const stored = accounts.find(a => a.userInfo.mid === account.userInfo.mid)
+          if (!stored) return
+
           let needsSave = false
-
-          // Clear expired flag if it was set
-          if (account.isExpired) {
-            account.isExpired = false
+          if (stored.isExpired && stored.credentials.SESSDATA === account.credentials.SESSDATA) {
+            stored.isExpired = false
             needsSave = true
           }
-
-          // Update user info if changed (e.g., avatar, username)
-          if (result.face && result.face !== account.userInfo.face) {
-            account.userInfo.face = result.face
+          if (profile.face && profile.face !== stored.userInfo.face) {
+            stored.userInfo.face = profile.face
             needsSave = true
           }
-          if (result.uname && result.uname !== account.userInfo.uname) {
-            account.userInfo.uname = result.uname
+          if (profile.uname && profile.uname !== stored.userInfo.uname) {
+            stored.userInfo.uname = profile.uname
             needsSave = true
           }
-
           if (needsSave) {
             await saveAccounts(accounts)
           }
-        }
-      })
-      return result
+        })
+      } catch (error) {
+        console.warn('Failed to persist updated profile during login check:', error)
+      }
+    }
+
+    return { isLogin: true, ...profile }
+  }
+
+  /**
+   * Validate the active account's login state, failing over to the next valid account on explicit sign-out
+   * and re-running against the latest state if accounts changed mid-flight.
+   */
+  const runCheckLogin = async (version: number): Promise<CheckLoginResult> => {
+    const activeAccount = await getActiveAccount()
+    if (accountStateVersion !== version) {
+      return checkLogin()
+    }
+    if (!activeAccount) {
+      return { isLogin: false }
+    }
+
+    const activeAccountMid = activeAccount.userInfo.mid
+    const navResult = await checkNavStatus(activeAccount.credentials)
+    if (accountStateVersion !== version) {
+      return checkLogin()
+    }
+
+    if (navResult.status === 'logged_in') {
+      return syncLoggedInAccount(activeAccount, navResult.profile, version)
+    }
+
+    if (navResult.status === 'unreachable') {
+      if (!activeAccount.isExpired) {
+        return { isLogin: true, ...activeAccount.userInfo }
+      }
+      return { isLogin: false, expiredAccountMid: activeAccountMid }
     }
 
     // Active account is expired - mark it as expired instead of removing
-    await markAccountExpired(activeAccountMid)
+    await markAccountExpired(activeAccountMid, activeAccount.credentials.SESSDATA)
+
+    // If the user changed accounts while this check was in flight, recheck the new state instead of failing over
+    if (accountStateVersion !== version) {
+      return checkLogin()
+    }
 
     // Try to find another non-expired account with valid credentials
     const accounts = await getAccounts()
     for (const account of accounts) {
+      if (accountStateVersion !== version) {
+        return checkLogin()
+      }
       if (account.userInfo.mid === activeAccountMid) continue // Skip the one we just marked expired
       if (account.isExpired) continue // Skip already-expired accounts
 
-      const accountResult = await checkAccountCredentials(account.credentials)
-      if (accountResult.isLogin) {
-        // Found a valid account - switch to it and update user info
-        await setActiveAccount(account.userInfo.mid)
-
-        // Re-fetch accounts to get fresh state (previous markAccountExpired calls may have modified the store)
-        await changeAccounts(async () => {
-          const freshAccounts = await getAccounts()
-          const freshAccount = freshAccounts.find(a => a.userInfo.mid === account.userInfo.mid)
-
-          // Update user info if changed (e.g., avatar, username)
-          if (freshAccount) {
-            let needsSave = false
-            if (accountResult.face && accountResult.face !== freshAccount.userInfo.face) {
-              freshAccount.userInfo.face = accountResult.face
-              needsSave = true
-            }
-            if (accountResult.uname && accountResult.uname !== freshAccount.userInfo.uname) {
-              freshAccount.userInfo.uname = accountResult.uname
-              needsSave = true
-            }
-            if (needsSave) {
-              await saveAccounts(freshAccounts)
-            }
-          }
-        })
-
-        return accountResult
+      const accountNav = await checkNavStatus(account.credentials)
+      if (accountStateVersion !== version) {
+        return checkLogin()
       }
-      // This account is also expired - mark it
-      await markAccountExpired(account.userInfo.mid)
+      if (accountNav.status === 'logged_in') {
+        return syncLoggedInAccount(account, accountNav.profile, version, true)
+      }
+      if (accountNav.status === 'expired') {
+        // This account is also expired - mark it
+        await markAccountExpired(account.userInfo.mid, account.credentials.SESSDATA)
+      }
+    }
+
+    if (accountStateVersion !== version) {
+      return checkLogin()
     }
 
     // No valid accounts found - return expired state with the active account mid
     // The frontend can use this to prompt re-authentication
     return { isLogin: false, expiredAccountMid: activeAccountMid }
-  })
+  }
+
+  /** Coalesce concurrent login checks for the same `accountStateVersion` */
+  const checkLogin = (): Promise<CheckLoginResult> => {
+    if (!checkLoginInFlight || checkLoginInFlight.version !== accountStateVersion) {
+      const version = accountStateVersion
+      const promise = runCheckLogin(version).finally(() => {
+        if (checkLoginInFlight?.promise === promise) {
+          checkLoginInFlight = null
+        }
+      })
+      checkLoginInFlight = { version, promise }
+    }
+    return checkLoginInFlight.promise
+  }
+
+  ipcMain.handle(IpcChannel.BILIBILI_CHECK_LOGIN, () => checkLogin())
 
   // Get all stored accounts (for account switcher UI)
   ipcMain.handle(IpcChannel.BILIBILI_GET_ACCOUNTS, async () => {
@@ -873,8 +1097,8 @@ export function registerBilibiliIpcHandlers() {
   // Re-authenticate an expired account (update credentials for existing account)
   ipcMain.handle(
     IpcChannel.BILIBILI_REAUTH_ACCOUNT,
-    async (_event, params: { mid: number; credentials: BilibiliCredentials }) => {
-      const { mid, credentials } = params
+    async (_event, params: { mid: number; credentials: BilibiliCredentials; refreshToken?: string }) => {
+      const { mid, credentials, refreshToken } = params
       const accounts = await getAccounts()
       const account = accounts.find(a => a.userInfo.mid === mid)
 
@@ -883,7 +1107,12 @@ export function registerBilibiliIpcHandlers() {
       }
 
       // Verify the new credentials are valid
-      const profile = await fetchNavProfile(credentials)
+      let profile: StoredAccountUserInfo | null
+      try {
+        profile = await fetchNavProfile(credentials)
+      } catch {
+        return { success: false, error: 'Failed to verify credentials' }
+      }
 
       if (!profile) {
         return { success: false, error: 'Invalid credentials' }
@@ -899,7 +1128,7 @@ export function registerBilibiliIpcHandlers() {
       }
 
       // Update the account credentials
-      await updateAccountCredentials(mid, credentials)
+      await updateAccountCredentials(mid, credentials, refreshToken)
 
       return { success: true, userInfo: profile }
     }

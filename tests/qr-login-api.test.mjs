@@ -31,6 +31,7 @@ let api
 let channels
 let endpoints
 let qrEndpoints
+let refreshEndpoints
 let qrStatus
 let cookieStringFromCredentials
 let commonHeaders
@@ -66,6 +67,7 @@ before(async () => {
           export { IpcChannel as channels } from '@/lib/ipc'
           export { BILIBILI_ENDPOINTS as endpoints, COMMON_HEADERS as commonHeaders } from '@/lib/const'
           export {
+            COOKIE_REFRESH_ENDPOINTS as refreshEndpoints,
             cookieStringFromCredentials,
             DEFAULT_HEADERS as defaultHeaders,
             QR_CODE_STATUS as qrStatus,
@@ -88,6 +90,7 @@ before(async () => {
     channels,
     endpoints,
     qrEndpoints,
+    refreshEndpoints,
     qrStatus,
     cookieStringFromCredentials,
     commonHeaders,
@@ -407,4 +410,160 @@ test('two logins that finish together both keep their account', async t => {
     [credentials.DedeUserID, other.DedeUserID].sort(),
     "neither login's save may drop the other's account"
   )
+})
+
+test('BILIBILI_CHECK_LOGIN renews cookies when Bilibili signals refresh and persists the rotated token', async t => {
+  mockFetch(t, [pollResponse(), navResponse()])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
+
+  const refreshedCredentials = {
+    SESSDATA: 'refreshed-session',
+    DedeUserID: 12345,
+    DedeUserID__ckMd5: 'refreshed-checksum',
+    bili_jct: 'refreshed-csrf',
+  }
+  const calls = []
+  t.mock.method(globalThis, 'fetch', async (input, init = {}) => {
+    const url = String(input)
+    calls.push({ url, init })
+    if (url === endpoints.NAV) return navResponse()
+    if (url.startsWith(refreshEndpoints.INFO)) {
+      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: true, timestamp: 1_700_000_000_000 } })
+    }
+    if (url.startsWith(`${refreshEndpoints.CORRESPOND}/`)) {
+      return new Response('<html><div id="1-name">fixture-refresh-csrf</div></html>')
+    }
+    if (url === refreshEndpoints.REFRESH) {
+      return Response.json(
+        { code: 0, message: '0', ttl: 1, data: { status: 0, message: '', refresh_token: 'rotated-refresh' } },
+        { headers: cookieHeaders(refreshedCredentials) }
+      )
+    }
+    if (url === refreshEndpoints.CONFIRM) {
+      return Response.json({ code: 0, message: '0', ttl: 1 })
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+
+  const checkResult = await invoke(channels.BILIBILI_CHECK_LOGIN)
+  assert.deepEqual(checkResult, { isLogin: true, ...userInfo })
+  assert.equal(calls.length, 5)
+  await assertStored(refreshedCredentials, userInfo)
+  const storedAccounts = await api.getAccounts()
+  assert.equal(storedAccounts[0]?.refreshToken, 'rotated-refresh')
+})
+
+test('BILIBILI_CHECK_LOGIN does not mark accounts expired on transient network or HTTP failures', async t => {
+  mockFetch(t, [pollResponse(), navResponse()])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
+
+  t.mock.method(globalThis, 'fetch', async () => {
+    throw new Error('Network offline')
+  })
+  assert.deepEqual(await invoke(channels.BILIBILI_CHECK_LOGIN), { isLogin: true, ...userInfo })
+  await assertStored()
+
+  t.mock.method(globalThis, 'fetch', async () => new Response('Bad gateway', { status: 502 }))
+  assert.deepEqual(await invoke(channels.BILIBILI_CHECK_LOGIN), { isLogin: true, ...userInfo })
+  await assertStored()
+})
+
+test('BILIBILI_CHECK_LOGIN marks an explicitly signed-out account expired and switches to the next valid account', async t => {
+  const other = { ...credentials, DedeUserID: 67890, SESSDATA: 'other-session' }
+  const otherUser = { mid: 67890, uname: 'Second user', face: 'https://example.invalid/second.png' }
+
+  mockFetch(t, [pollResponse(), navResponse()])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
+
+  mockFetch(t, [pollResponse(legacyUrl(other)), Response.json({ code: 0, data: { isLogin: true, ...otherUser } })])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'other-key' })
+
+  t.mock.method(globalThis, 'fetch', async (input, init = {}) => {
+    const url = String(input)
+    const cookie = new Headers(init.headers).get('Cookie') || ''
+    if (url === endpoints.NAV) {
+      if (cookie.includes(`DedeUserID=${credentials.DedeUserID}`)) {
+        return Response.json({ code: -101, message: '账号未登录', data: { isLogin: false } })
+      }
+      return Response.json({ code: 0, data: { isLogin: true, ...otherUser } })
+    }
+    if (url.startsWith(refreshEndpoints.INFO)) {
+      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: false, timestamp: 1_700_000_000_000 } })
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+
+  const checkResult = await invoke(channels.BILIBILI_CHECK_LOGIN)
+  assert.deepEqual(checkResult, { isLogin: true, ...otherUser })
+  assert.deepEqual(await invoke(channels.BILIBILI_GET_ACCOUNTS), {
+    accounts: [
+      { ...userInfo, isExpired: true },
+      { ...otherUser, isExpired: false },
+    ],
+    activeAccountMid: otherUser.mid,
+  })
+})
+
+test('BILIBILI_REAUTH_ACCOUNT updates credentials and refreshToken', async t => {
+  mockFetch(t, [pollResponse(), navResponse()])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
+
+  const nextCredentials = { ...credentials, SESSDATA: 'reauth-session', bili_jct: 'reauth-csrf' }
+  t.mock.method(globalThis, 'fetch', async () => navResponse())
+  const reauth = await invoke(channels.BILIBILI_REAUTH_ACCOUNT, {
+    mid: credentials.DedeUserID,
+    credentials: nextCredentials,
+    refreshToken: 'reauth-refresh-token',
+  })
+  assert.equal(reauth.success, true)
+  await assertStored(nextCredentials, userInfo)
+  const storedAccounts = await api.getAccounts()
+  assert.equal(storedAccounts[0]?.refreshToken, 'reauth-refresh-token')
+
+  const sameSessionReauth = await invoke(channels.BILIBILI_REAUTH_ACCOUNT, {
+    mid: credentials.DedeUserID,
+    credentials: nextCredentials,
+  })
+  assert.equal(sameSessionReauth.success, true)
+  assert.equal((await api.getAccounts())[0]?.refreshToken, 'reauth-refresh-token')
+})
+
+test('BILIBILI_CHECK_LOGIN starts a fresh check when the active account changes while a check is in flight', async t => {
+  const other = { ...credentials, DedeUserID: 67890, SESSDATA: 'other-session' }
+  const otherUser = { mid: 67890, uname: 'Second user', face: 'https://example.invalid/second.png' }
+
+  mockFetch(t, [pollResponse(), navResponse()])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'fixture-key' })
+
+  mockFetch(t, [pollResponse(legacyUrl(other)), Response.json({ code: 0, data: { isLogin: true, ...otherUser } })])
+  await invoke(channels.BILIBILI_QR_POLL, { qrcodeKey: 'other-key' })
+
+  const firstNav = Promise.withResolvers()
+  const firstNavStarted = Promise.withResolvers()
+  t.mock.method(globalThis, 'fetch', async (input, init = {}) => {
+    const url = String(input)
+    const cookie = new Headers(init.headers).get('Cookie') || ''
+    if (url === endpoints.NAV) {
+      if (cookie.includes(`DedeUserID=${credentials.DedeUserID}`)) {
+        firstNavStarted.resolve()
+        return firstNav.promise
+      }
+      return Response.json({ code: 0, data: { isLogin: true, ...otherUser } })
+    }
+    if (url.startsWith(refreshEndpoints.INFO)) {
+      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: false, timestamp: 1_700_000_000_000 } })
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+
+  const staleCheck = invoke(channels.BILIBILI_CHECK_LOGIN)
+  await firstNavStarted.promise
+
+  await invoke(channels.BILIBILI_SET_ACTIVE_ACCOUNT, { mid: otherUser.mid })
+  const switchedCheck = invoke(channels.BILIBILI_CHECK_LOGIN)
+  firstNav.resolve(navResponse())
+
+  assert.deepEqual(await switchedCheck, { isLogin: true, ...otherUser })
+  assert.deepEqual(await staleCheck, { isLogin: true, ...otherUser })
+  assert.equal(api.getActiveAccountMid(), otherUser.mid)
 })

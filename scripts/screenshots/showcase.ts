@@ -3,8 +3,12 @@
 // field fails `pnpm typecheck` instead of drifting a picture. Everyone in it is made up.
 
 import { createHash } from 'node:crypto'
-import type { BilibiliQRCodeGenerateResponse, BilibiliQRCodePollResponse } from '@laplace.live/bilibili-qr'
-import { QR_CODE_STATUS, QR_LOGIN_ENDPOINTS } from '@laplace.live/bilibili-qr'
+import type {
+  BilibiliCookieInfoResponse,
+  BilibiliQRCodeGenerateResponse,
+  BilibiliQRCodePollResponse,
+} from '@laplace.live/bilibili-qr'
+import { COOKIE_REFRESH_ENDPOINTS, QR_CODE_STATUS, QR_LOGIN_ENDPOINTS } from '@laplace.live/bilibili-qr'
 
 import type {
   BilibiliLinkSettingResponse,
@@ -399,6 +403,10 @@ export function createShowcase(): Showcase {
                 message: '',
               }
         return Response.json({ ...ok, data } satisfies BilibiliQRCodePollResponse)
+      }
+      case COOKIE_REFRESH_ENDPOINTS.INFO: {
+        const data: BilibiliCookieInfoResponse['data'] = { refresh: false, timestamp: SHOWCASE_NOW }
+        return Response.json({ ...ok, data } satisfies BilibiliCookieInfoResponse)
       }
       case BILIBILI_ENDPOINTS.NAV: {
         const entry = Object.entries(ACCOUNTS).find(([, a]) => a.mid === mid && !expired.has(a.mid))

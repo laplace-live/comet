@@ -1,4 +1,4 @@
-/** Bilibili's passport, which runs QR login */
+/** Bilibili's passport, which runs QR login and cookie refresh */
 export const PASSPORT = 'https://passport.bilibili.com'
 
 /** Bilibili's web QR login endpoints */
@@ -7,6 +7,18 @@ export const QR_LOGIN_ENDPOINTS = {
   GENERATE: `${PASSPORT}/x/passport-login/web/qrcode/generate`,
   /** Poll a QR code's login state, which hands over the login once confirmed */
   POLL: `${PASSPORT}/x/passport-login/web/qrcode/poll`,
+} as const
+
+/** Bilibili's web cookie refresh endpoints */
+export const COOKIE_REFRESH_ENDPOINTS = {
+  /** Check whether a login's cookies are due for a refresh, and the server timestamp to sign it with */
+  INFO: `${PASSPORT}/x/passport-login/web/cookie/info`,
+  /** Prefix of the page whose `<div id="1-name">` carries `refresh_csrf` for an encrypted `correspondPath` */
+  CORRESPOND: 'https://www.bilibili.com/correspond/1',
+  /** Exchange the current cookies, `refresh_csrf` and `refresh_token` for new cookies and a new `refresh_token` */
+  REFRESH: `${PASSPORT}/x/passport-login/web/cookie/refresh`,
+  /** Confirm the new cookies with the old `refresh_token`, invalidating the old one */
+  CONFIRM: `${PASSPORT}/x/passport-login/web/confirm/refresh`,
 } as const
 
 /** Allowed origins for QR login ticket exchange and redirects. */
