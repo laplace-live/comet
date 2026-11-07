@@ -211,7 +211,7 @@ export interface StoredAccount {
 }
 
 // Tracks the Unix timestamp (in seconds) of the most recent cookie refresh check per account mid and session
-const lastRefreshCheckAtByMid = new Map<number, { sessdata: string; checkedAt: number }>()
+const lastRefreshCheckAtByMid = new Map<number, { sessdata: string; refreshToken: string; checkedAt: number }>()
 const refreshInFlightByMid = new Map<number, { sessdata: string; refreshToken: string; promise: Promise<void> }>()
 
 function clearRefreshStateForMid(mid: number): void {
@@ -234,8 +234,13 @@ function toStoredAccountInfo(account: StoredAccount): StoredAccountInfo {
   const expiresAt = parseSessdataExpiresAt(account.credentials.SESSDATA)
   const hasRefreshToken = Boolean(account.refreshToken)
   const checkEntry =
-    hasRefreshToken && !account.isExpired ? lastRefreshCheckAtByMid.get(account.userInfo.mid) : undefined
-  const lastRefreshCheckAt = checkEntry?.sessdata === account.credentials.SESSDATA ? checkEntry.checkedAt : undefined
+    account.refreshToken && !account.isExpired ? lastRefreshCheckAtByMid.get(account.userInfo.mid) : undefined
+  const lastRefreshCheckAt =
+    checkEntry &&
+    checkEntry.sessdata === account.credentials.SESSDATA &&
+    checkEntry.refreshToken === account.refreshToken
+      ? checkEntry.checkedAt
+      : undefined
   const nextRefreshCheckAt =
     lastRefreshCheckAt !== undefined
       ? lastRefreshCheckAt + Math.floor(LOGIN_CONFIG.COOKIE_CHECK_INTERVAL / 1000)
@@ -423,7 +428,10 @@ function saveAccount(
     }
 
     if (existingIndex >= 0) {
-      if (accounts[existingIndex].credentials.SESSDATA !== credentials.SESSDATA) {
+      if (
+        accounts[existingIndex].credentials.SESSDATA !== credentials.SESSDATA ||
+        accounts[existingIndex].refreshToken !== refreshToken
+      ) {
         clearRefreshStateForMid(userInfo.mid)
       }
       // Update existing account - preserve userInfo but update credentials and clear expired
@@ -569,14 +577,16 @@ function updateAccountCredentials(
     if (!account) return false
 
     const sameSession = account.credentials.SESSDATA === credentials.SESSDATA
+    const nextRefreshToken = refreshToken || (sameSession ? account.refreshToken : undefined)
     account.credentials = credentials
-    if (!sameSession) {
-      delete account.refreshToken
+    if (!sameSession || account.refreshToken !== nextRefreshToken) {
       delete account.lastRefreshedAt
       clearRefreshStateForMid(mid)
     }
-    if (refreshToken) {
-      account.refreshToken = refreshToken
+    if (nextRefreshToken) {
+      account.refreshToken = nextRefreshToken
+    } else {
+      delete account.refreshToken
     }
     account.isExpired = false // Clear expired flag on successful re-auth
     await saveAccounts(accounts)
@@ -725,7 +735,7 @@ function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
       const checkedAt = Math.floor((Number.isFinite(timestamp) && timestamp > 0 ? timestamp : Date.now()) / 1000)
       const inFlight = refreshInFlightByMid.get(mid)
       if (inFlight && inFlight.sessdata === credentials.SESSDATA && inFlight.refreshToken === refreshToken) {
-        lastRefreshCheckAtByMid.set(mid, { sessdata: credentials.SESSDATA, checkedAt })
+        lastRefreshCheckAtByMid.set(mid, { sessdata: credentials.SESSDATA, refreshToken, checkedAt })
       }
       if (!refresh) return
 
@@ -742,7 +752,11 @@ function refreshAccountCookiesIfNeeded(account: StoredAccount): Promise<void> {
             stored.refreshToken = rotated.refreshToken
             stored.lastRefreshedAt = checkedAt
             stored.isExpired = false
-            lastRefreshCheckAtByMid.set(mid, { sessdata: rotated.credentials.SESSDATA, checkedAt })
+            lastRefreshCheckAtByMid.set(mid, {
+              sessdata: rotated.credentials.SESSDATA,
+              refreshToken: rotated.refreshToken,
+              checkedAt,
+            })
           })
         },
       })

@@ -543,6 +543,27 @@ test('BILIBILI_REAUTH_ACCOUNT updates credentials and refreshToken', async t => 
   })
   assert.equal(sameSessionReauth.success, true)
   assert.equal((await api.getAccounts())[0]?.refreshToken, 'reauth-refresh-token')
+
+  t.mock.method(globalThis, 'fetch', async input => {
+    const url = String(input)
+    if (url === endpoints.NAV) return navResponse()
+    if (url.startsWith(refreshEndpoints.INFO)) {
+      return Response.json({ code: 0, message: '0', ttl: 1, data: { refresh: false, timestamp: 1_700_000_000_000 } })
+    }
+    throw new Error(`Unexpected fetch: ${url}`)
+  })
+  await invoke(channels.BILIBILI_CHECK_LOGIN)
+  await assertStored(nextCredentials, userInfo, { nextRefreshCheckAt: 1_700_021_600 })
+
+  // Replacing refreshToken while keeping the same SESSDATA clears the prior token's check schedule
+  t.mock.method(globalThis, 'fetch', async () => navResponse())
+  const rotatedTokenReauth = await invoke(channels.BILIBILI_REAUTH_ACCOUNT, {
+    mid: credentials.DedeUserID,
+    credentials: nextCredentials,
+    refreshToken: 'newer-refresh-token',
+  })
+  assert.equal(rotatedTokenReauth.success, true)
+  await assertStored(nextCredentials, userInfo)
 })
 
 test('BILIBILI_CHECK_LOGIN starts a fresh check when the active account changes while a check is in flight', async t => {

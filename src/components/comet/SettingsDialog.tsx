@@ -150,11 +150,26 @@ export function SettingsDialog({
   }, [accounts])
 
   const activeAccount = localAccounts.find(a => a.mid === activeAccountMid) ?? localAccounts[0]
+  const [, setClockTick] = useState(0)
   const statusBadge = activeAccount?.isExpired
     ? { variant: 'warning' as const, label: '需重新登录' }
     : activeAccount?.hasRefreshToken
       ? { variant: 'success' as const, label: '自动续期已开启' }
       : { variant: 'secondary' as const, label: '未开启自动续期' }
+
+  // Keep relative expiration and refresh countdown labels live while Settings is open
+  useEffect(() => {
+    if (!settingsOpen || !activeAccount) return
+    let timerId: ReturnType<typeof setTimeout>
+    const scheduleTick = () => {
+      timerId = setTimeout(() => {
+        setClockTick(tick => tick + 1)
+        scheduleTick()
+      }, 1_000)
+    }
+    scheduleTick()
+    return () => clearTimeout(timerId)
+  }, [settingsOpen, activeAccount])
 
   // DnD sensors
   const sensors = useSensors(
