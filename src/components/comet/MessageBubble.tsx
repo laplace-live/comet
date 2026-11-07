@@ -27,6 +27,7 @@ import { cn } from '@/lib/utils'
 
 import { enforceHttps } from '@/utils/enforceHttps'
 
+import { Highlight } from '@/components/comet/Highlight'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { ContextMenu, ContextMenuItem, ContextMenuPopup, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -48,7 +49,13 @@ interface MessageBubbleProps {
   onRecall?: (msgSeqno: number, msgKeyStr: string) => Promise<{ success: boolean; error?: string }>
   /** Sends what picking one of a customer service bot's suggestions sends */
   onCustomerServiceReply?: (reply: CustomerServiceReply) => Promise<boolean>
+  /** The text of the search the chat was opened from, marked wherever it occurs in a text message or plain text */
+  highlight?: string | null
 }
+
+// How a search's text is marked in a bubble: solid, as find in page marks it, so it reads the same on a sent bubble's
+// blue as on a received one's white or zinc, in either theme
+const SEARCH_MARK = 'bg-amber-300 text-zinc-900 dark:bg-amber-300'
 
 // Get message source label
 function getMessageSourceLabel(msgSource: number): string | null {
@@ -107,14 +114,18 @@ function isAutoReplySource(msgSource: number): boolean {
   return AUTO_REPLY_SOURCES.includes(msgSource)
 }
 
-// Parse and render message content based on type
-function renderMessageContent(message: BilibiliMessage, emojiInfoMap: EmojiInfoMap): React.ReactNode {
+// Parse and render message content based on type, marking `highlight` in text messages and plain text
+function renderMessageContent(
+  message: BilibiliMessage,
+  emojiInfoMap: EmojiInfoMap,
+  highlight?: string | null
+): React.ReactNode {
   try {
     const content = JSON.parse(message.content)
 
     switch (message.msg_type) {
       case MSG_TYPE.TEXT:
-        return renderTextContent(content, emojiInfoMap)
+        return renderTextContent(content, emojiInfoMap, highlight)
 
       case MSG_TYPE.IMAGE:
         return renderImageContent(content)
@@ -150,7 +161,11 @@ function renderMessageContent(message: BilibiliMessage, emojiInfoMap: EmojiInfoM
     // If content is not JSON, render as plain text
     return (
       <p className='text-sm leading-relaxed wrap-break-word whitespace-break-spaces'>
-        {typeof message.content === 'string' ? message.content : '[无法解析的消息]'}
+        {typeof message.content === 'string' ? (
+          <Highlight text={message.content} query={highlight} className={SEARCH_MARK} />
+        ) : (
+          '[无法解析的消息]'
+        )}
       </p>
     )
   }
@@ -178,8 +193,8 @@ function extractTextContent(value: unknown): string {
   return ''
 }
 
-// Parse text and replace emoji codes with inline images
-function parseTextWithEmojis(text: string, emojiInfoMap: EmojiInfoMap): React.ReactNode[] {
+// Parse text and replace emoji codes with inline images, marking `highlight` in the text between them
+function parseTextWithEmojis(text: string, emojiInfoMap: EmojiInfoMap, highlight?: string | null): React.ReactNode[] {
   if (!text) return []
 
   // Match emoji codes like [tv_doge], [口罩], etc.
@@ -188,19 +203,27 @@ function parseTextWithEmojis(text: string, emojiInfoMap: EmojiInfoMap): React.Re
   let lastIndex = 0
   let match: RegExpExecArray | null
 
+  // The text since the last emoji shown, up to `end`, marked as one piece: codes with no emoji info stay in it as
+  // text, so a match can run on into them
+  const pushText = (end: number) => {
+    if (end > lastIndex) {
+      parts.push(
+        <Highlight key={lastIndex} text={text.slice(lastIndex, end)} query={highlight} className={SEARCH_MARK} />
+      )
+    }
+  }
+
   // biome-ignore lint/suspicious/noAssignInExpressions: regex exec loop pattern
   while ((match = emojiPattern.exec(text)) !== null) {
     const emojiCode = match[0] // Full match including brackets, e.g., "[tv_doge]"
     const startIndex = match.index
 
-    // Add text before this emoji
-    if (startIndex > lastIndex) {
-      parts.push(text.slice(lastIndex, startIndex))
-    }
-
-    // Check if we have info for this emoji
+    // Check if we have info for this emoji; with none, the code stays in the text as it is
     const emojiInfo = emojiInfoMap[emojiCode]
     if (emojiInfo) {
+      // Add text before this emoji
+      pushText(startIndex)
+
       // Use gif_url if available, otherwise use regular url
       const emojiUrl = enforceHttps(emojiInfo.gif_url || emojiInfo.url)
       // Size 1 = small (inline), Size 2 = large
@@ -216,30 +239,28 @@ function parseTextWithEmojis(text: string, emojiInfoMap: EmojiInfoMap): React.Re
           referrerPolicy='no-referrer'
         />
       )
-    } else {
-      // No emoji info available, keep the text as-is
-      parts.push(emojiCode)
+      lastIndex = startIndex + emojiCode.length
     }
-
-    lastIndex = startIndex + emojiCode.length
   }
 
   // Add remaining text after last emoji
-  if (lastIndex < text.length) {
-    parts.push(text.slice(lastIndex))
-  }
+  pushText(text.length)
 
-  return parts.length > 0 ? parts : [text]
+  return parts
 }
 
 // Text message
-function renderTextContent(content: { content?: unknown }, emojiInfoMap: EmojiInfoMap): React.ReactNode {
+function renderTextContent(
+  content: { content?: unknown },
+  emojiInfoMap: EmojiInfoMap,
+  highlight?: string | null
+): React.ReactNode {
   const text = extractTextContent(content.content) || extractTextContent(content)
   if (!text) {
     return <p className='text-sm leading-relaxed wrap-break-word break-all whitespace-break-spaces'>[空消息]</p>
   }
 
-  const parsedContent = parseTextWithEmojis(text, emojiInfoMap)
+  const parsedContent = parseTextWithEmojis(text, emojiInfoMap, highlight)
 
   return <p className='text-sm leading-relaxed wrap-break-word break-all whitespace-break-spaces'>{parsedContent}</p>
 }
@@ -905,6 +926,7 @@ export function MessageBubble({
   userInfo,
   onRecall,
   onCustomerServiceReply,
+  highlight,
 }: MessageBubbleProps) {
   const { developerMode } = useSettings()
   const sourceLabel = getMessageSourceLabel(message.msg_source)
@@ -1040,7 +1062,7 @@ export function MessageBubble({
     return (
       <div className='flex items-center justify-center gap-1 py-1'>
         <div className='rounded-full bg-zinc-100 px-3 py-1 text-xs text-muted-foreground dark:bg-zinc-800/50'>
-          {renderMessageContent(message, emojiInfoMap)}
+          {renderMessageContent(message, emojiInfoMap, highlight)}
         </div>
         {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
       </div>
@@ -1057,7 +1079,7 @@ export function MessageBubble({
         return (
           <div className='flex items-center justify-center gap-1 py-1'>
             <div className='rounded bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>
-              {renderMessageContent(message, emojiInfoMap)}
+              {renderMessageContent(message, emojiInfoMap, highlight)}
             </div>
             {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
           </div>
@@ -1069,7 +1091,7 @@ export function MessageBubble({
       return (
         <div className='flex items-center justify-center gap-1 py-1'>
           <div className='rounded-full bg-zinc-100 px-3 py-1 dark:bg-zinc-800/50'>
-            {renderMessageContent(message, emojiInfoMap)}
+            {renderMessageContent(message, emojiInfoMap, highlight)}
           </div>
           {developerMode && <MessageInspector message={message} emojiInfoMap={emojiInfoMap} />}
         </div>
@@ -1221,7 +1243,7 @@ export function MessageBubble({
                       onCustomerServiceReply,
                       String(message.msg_key)
                     )
-                  : renderMessageContent(message, emojiInfoMap)}
+                  : renderMessageContent(message, emojiInfoMap, highlight)}
               </div>
             }
           />

@@ -181,6 +181,7 @@ export default function App() {
             <SessionList
               sessions={sessions}
               selectedSession={selectedSession}
+              openedMsgKey={chatOpening?.msgKey}
               loading={loading}
               loadingMore={loadingMore}
               hasMoreSessions={hasMoreSessions}

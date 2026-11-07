@@ -85,42 +85,79 @@ export function listsToSave(snapshot: AccountSnapshot): AccountSnapshot {
   return saved
 }
 
+/** The names `users` holds of the people with `uids` */
+function namesOf(uids: number[], users: UserCache): UserCache {
+  const names: UserCache = {}
+  for (const uid of uids) {
+    if (users[uid]) names[uid] = users[uid]
+  }
+  return names
+}
+
 /** A chat to save on disk, with the names its messages' senders have in `userCache` */
 export function chatToSave(chat: CachedChat, userCache: UserCache): SavedChat {
-  const users: UserCache = {}
-  for (const { sender_uid: uid } of chat.messages) {
-    if (userCache[uid]) users[uid] = userCache[uid]
-  }
-  return { ...chat, users }
+  const senders = chat.messages.map(m => m.sender_uid)
+  return { ...chat, users: namesOf(senders, userCache) }
 }
 
-/** A message a search found a chat by: its msg_key, which the chat opens at, and what it says as the chat shows it */
+/** A message a search found a chat by */
 export interface MessageMatch {
+  /** Its msg_key, which the chat opens at */
   msgKey: string
+  /** What it says, as the chat shows it */
   text: string
+  senderUid: number
+  /** When it was sent, in seconds */
+  timestamp: number
 }
-
-/** A chat a search finds by a message it holds: its key (chatKey), and that message */
-export interface ChatMatch extends MessageMatch {
-  key: string
-}
-
-const keyOf = (message: BilibiliMessage) => String(message.msg_key)
 
 /**
- * The newest of a chat's messages that holds `query`, null when none does. Search looks through the messages of the
- * chats held here or on disk this way, as Bilibili has no search to ask, and finds a chat by any of them, not just
- * its last. A recalled message shows as recalled, so what it said doesn't count.
+ * A saved chat a search finds by the messages it holds: its key (chatKey), those messages, newest first, and the names
+ * of those who sent them as the chat saved them, which the account's lists may not hold (a fan group's members, say)
+ */
+export interface ChatMatch {
+  key: string
+  matches: MessageMatch[]
+  users: UserCache
+}
+
+const keyOf = (message: Pick<BilibiliMessage, 'msg_key'>) => String(message.msg_key)
+
+/** A message a search found, saying `text` as the chat shows it */
+export function matchOf(
+  message: Pick<BilibiliMessage, 'msg_key' | 'sender_uid' | 'timestamp'>,
+  text: string
+): MessageMatch {
+  return { msgKey: keyOf(message), text, senderUid: message.sender_uid, timestamp: message.timestamp }
+}
+
+/**
+ * Every one of a chat's messages that holds `query`, newest first. Search looks through the messages of the chats
+ * held here or on disk this way, as Bilibili has no search to ask, and finds a chat by any of them, not just its last.
+ * A recalled message shows as recalled, so what it said doesn't count.
  * @param query - lowercase
  */
-export function findMessage(messages: BilibiliMessage[], query: string): MessageMatch | null {
+export function findMessages(messages: BilibiliMessage[], query: string): MessageMatch[] {
+  const found: MessageMatch[] = []
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i]
     if (message.msg_status || message.msg_type === MSG_TYPE.REVOKE) continue
     const text = parseMessageContent(message)
-    if (text.toLowerCase().includes(query)) return { msgKey: keyOf(message), text }
+    if (text.toLowerCase().includes(query)) found.push(matchOf(message, text))
   }
-  return null
+  return found
+}
+
+/**
+ * What a search finds in a chat saved on disk, a ChatMatch but for its key: every message that holds `query` (see
+ * findMessages), with the names of those who sent them; null when none does
+ * @param query - lowercase
+ */
+export function searchSavedChat(chat: SavedChat, query: string): Omit<ChatMatch, 'key'> | null {
+  const matches = findMessages(chat.messages, query)
+  if (matches.length === 0) return null
+  const senders = matches.map(m => m.senderUid)
+  return { matches, users: namesOf(senders, chat.users ?? {}) }
 }
 
 /**

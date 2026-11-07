@@ -408,6 +408,7 @@ function ChatView({
           key={`${chatKey(session)}@${chatOpening?.id ?? 0}`}
           virtuosoRef={virtuosoRef}
           targetMsgKey={chatOpening?.msgKey}
+          highlight={chatOpening?.query}
           messages={messages}
           emojiInfoMap={emojiInfoMap}
           session={session}

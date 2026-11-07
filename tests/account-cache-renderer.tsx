@@ -27,20 +27,23 @@ import type {
 
 import {
   ChatCache,
-  findMessage,
   keepLoadedPages,
   listsToSave,
   type MessageMatch,
   mergeMessages,
   SAVED_SESSIONS,
   type SavedChat,
+  searchSavedChat,
 } from '@/lib/account-cache'
+import { formatTime } from '@/lib/message-utils'
+import { excerpt, findChat, matchRanges } from '@/lib/search'
 
 import { type ChatOpening, type UsePrivateMessagesReturn, usePrivateMessages } from '@/hooks/usePrivateMessages'
 
+import { HighlightExcerpt } from '@/components/comet/Highlight'
 import { MessagesPanel } from '@/components/comet/MessagesPanel'
 import { SessionItem } from '@/components/comet/SessionItem'
-import { SEARCH_PAGE_GAP, SessionList, searchMatch } from '@/components/comet/SessionList'
+import { SEARCH_PAGE_GAP, SessionList } from '@/components/comet/SessionList'
 
 import { useSettings } from '@/stores/useSettings'
 
@@ -323,11 +326,12 @@ function installApi() {
         saveChat: async ({ mid, key, chat }: SaveCachedChatParams) => {
           if (storedMids.includes(mid)) disk.set(`${mid}/chat/${key}`, structuredClone(chat))
         },
-        // Through the account's saved chats, each giving the newest message that holds the text, as the main process does
+        // Through the account's saved chats, each giving every message that holds the text and the names of those who
+        // sent them, as the main process does
         searchChats: async ({ mid, query }: SearchCachedChatsParams) =>
           [...disk].flatMap(([id, chat]) => {
             if (!id.startsWith(`${mid}/chat/`)) return []
-            const match = findMessage((chat as SavedChat).messages, query.toLowerCase())
+            const match = searchSavedChat(chat as SavedChat, query.toLowerCase())
             return match === null ? [] : [{ key: id.slice(`${mid}/chat/`.length), ...match }]
           }),
         clear: async () => disk.clear(),
@@ -568,6 +572,13 @@ test('a recall that comes over the WebSocket takes back the message it names', a
 })
 
 const said = (text: string) => ({ content: JSON.stringify({ content: text }) })
+// A message a search finds, as message() makes it
+const hit = (senderUid: number, seqno: number, text: string): MessageMatch => ({
+  msgKey: `${seqno}000`,
+  text,
+  senderUid,
+  timestamp: seqno,
+})
 
 test("a chat's new messages fetched for one account don't land in its contact's chat under another", async () => {
   await setup()
@@ -663,52 +674,69 @@ test("a recall answered after another chat opened leaves that chat's messages as
   assert(same?.msg_status === 0, `the other chat's message should not show as recalled, got ${same?.msg_status}`)
 })
 
-test('a search finds chats by any message held of them, opened here or saved on disk, as their account', async () => {
+test('a search finds chats by every message held of them, opened here or saved on disk, as their account', async () => {
   await setup()
-  server[ME].messages[FAN] = [message(FAN, 1, said('早前的 Asdaf 消息')), message(ME, 2), message(FAN, 3)]
+  server[ME].messages[FAN] = [
+    message(FAN, 1, said('早前的 Asdaf 消息')),
+    message(ME, 2, said('我也说 asdaf')),
+    message(FAN, 3),
+  ]
   await flush(() => current.selectSession(chatOf(FAN)))
+  // Someone no list holds, as a fan group's members are
+  const member = 501
   const saved = (talkerId: number, text: string): SavedChat => ({
-    messages: [message(talkerId, 5, said(text)), message(talkerId, 6)],
+    messages: [message(member, 5, said(text)), message(talkerId, 6)],
     emojiInfoMap: {},
     syncedSeqno: 6,
-    users: {},
+    users: { [member]: { name: '群友', face: '' } },
   })
   disk.set(`${ME}/chat/1:${COLLEAGUE}`, saved(COLLEAGUE, 'asdaf 也在这'))
   disk.set(`${OTHER}/chat/1:${OTHER_FRIEND}`, saved(OTHER_FRIEND, '另一个号的 asdaf'))
 
   const found = await current.searchHeldChats('  ASDAF ')
-  const opened = found.get(`1:${FAN}`)
+  const opened = found.get(`1:${FAN}`)?.map(m => `${m.senderUid} at ${m.timestamp}: ${m.msgKey} ${m.text}`)
   assert(
-    opened?.text === '早前的 Asdaf 消息' && opened.msgKey === '1000',
-    `the chat opened here should be found, by that message, got ${JSON.stringify(opened)}`
+    opened?.join(', ') === `${ME} at 2: 2000 我也说 asdaf, ${FAN} at 1: 1000 早前的 Asdaf 消息`,
+    `the chat opened here should be found by every message that holds the text, newest first, got ${opened}`
   )
   const onDisk = found.get(`1:${COLLEAGUE}`)
   assert(
-    onDisk?.text === 'asdaf 也在这' && onDisk.msgKey === '5000',
+    onDisk?.length === 1 && onDisk[0].text === 'asdaf 也在这' && onDisk[0].msgKey === '5000',
     `the chat saved on disk should be found, by that message, got ${JSON.stringify(onDisk)}`
   )
   assert(found.size === 2, `only the shown account's chats should be searched, got ${[...found.keys()]}`)
+  await flush()
+  assert(current.userCache[member]?.name === '群友', 'whoever sent a message found on disk should be known by name')
   assert((await current.searchHeldChats('没说过的话')).size === 0, 'text no message holds should find nothing')
 })
 
 test('each opening of a chat is new, at the message a search found it by or at its newest', async () => {
   await setup()
-  await flush(() => current.selectSession(chatOf(FAN), '1000'))
+  await flush(() => current.selectSession(chatOf(FAN), { msgKey: '1000', query: 'asdaf' }))
   const first = current.chatOpening
-  assert(first?.msgKey === '1000', `the chat should open at the message, got ${JSON.stringify(first)}`)
-  await flush(() => current.selectSession(chatOf(FAN), '1000'))
+  assert(
+    first?.msgKey === '1000' && first.query === 'asdaf',
+    `the chat should open at the message, marking what the search looked for, got ${JSON.stringify(first)}`
+  )
+  await flush(() => current.selectSession(chatOf(FAN), { msgKey: '1000', query: 'asdaf' }))
   const again = current.chatOpening
   assert(
     again?.msgKey === '1000' && again.id !== first?.id,
     `opening it there again should go back there, got ${JSON.stringify(again)}`
   )
+  await flush(() => current.selectSession(chatOf(FAN), { query: 'asdaf' }))
+  const byName = current.chatOpening
+  assert(
+    byName?.msgKey === null && byName.query === 'asdaf' && byName.id !== again?.id,
+    `a search that found it by its name should open it at its newest, got ${JSON.stringify(byName)}`
+  )
   await flush(() => current.selectSession(chatOf(FAN)))
   const plain = current.chatOpening
   assert(
-    plain?.msgKey === null && plain.id !== again?.id,
-    `opened otherwise, it should open anew at its newest, got ${JSON.stringify(plain)}`
+    plain?.msgKey === null && plain.query === null && plain.id !== byName?.id,
+    `opened otherwise, it should open anew at its newest, marking nothing, got ${JSON.stringify(plain)}`
   )
-  await flush(() => current.selectSession(chatOf(FRIEND), '1000'))
+  await flush(() => current.selectSession(chatOf(FRIEND), { msgKey: '1000', query: 'asdaf' }))
   await flush(() => current.clearSelectedSession())
   assert(current.chatOpening === null, 'a chat closed should leave nothing to open at')
 })
@@ -1247,7 +1275,7 @@ test('a search pages the list of an account switched to, though it lists as many
 })
 
 test("while the messages held are searched, the list says it's searching, not that nothing matched", async () => {
-  const held = deferred<Map<string, MessageMatch>>()
+  const held = deferred<Map<string, MessageMatch[]>>()
   const { type, text } = mountList()
   root.render(
     <SessionList
@@ -1262,7 +1290,7 @@ test("while the messages held are searched, the list says it's searching, not th
   await type('早前')
   await pause(300)
   assert(!text().includes('没有找到匹配的会话'), `it shouldn't say nothing matched before it knows, got ${text()}`)
-  await flush(() => held.resolve(new Map([[`1:${FRIEND}`, { msgKey: '1000', text: '早前的话' }]])))
+  await flush(() => held.resolve(new Map([[`1:${FRIEND}`, [hit(FRIEND, 1, '早前的话')]]])))
   await until(() => text().includes('1 / 1'), 2000, 'the chat found by a message held of it')
 })
 
@@ -1315,8 +1343,8 @@ test('a search finds a chat by an earlier message held of it, and shows that mes
   const fan = session(FAN, 1000, { last_msg: message(FAN, 8, said('asdaf 也是最后一句')) })
   const userCache = { [FRIEND]: { name: '朋友', face: '' }, [FAN]: { name: '粉丝', face: '' } }
   const held = new Map([
-    [`1:${FRIEND}`, { msgKey: '3000', text: '早前的 asdaf 消息' }],
-    [`1:${FAN}`, { msgKey: '4000', text: '早前的 asdaf' }],
+    [`1:${FRIEND}`, [hit(FRIEND, 3, '早前的 asdaf 消息')]],
+    [`1:${FAN}`, [hit(FAN, 4, '早前的 asdaf')]],
   ])
   const { type, text } = mountList()
   root.render(
@@ -1337,9 +1365,27 @@ test('a search finds a chat by an earlier message held of it, and shows that mes
   await until(() => text().includes('1 / 2'), 2000, 'the chat found by a message held of it')
   assert(asked.at(-1) === 'Asdaf', `the messages held should be searched for the text typed, got ${asked}`)
 
-  // The message it was found by shows in place of its last, unless what the list shows of it holds the text already
-  assert(searchMatch(friend, 'Asdaf', userCache, held)?.text === '早前的 asdaf 消息', 'the held message should show')
-  assert(searchMatch(fan, 'Asdaf', userCache, held) === undefined, 'its own last message should show')
+  // Found by the message held of it; a last message that holds the text is among what's found too, newest first
+  const byHeld = findChat(friend, 'Asdaf', userCache, held)
+  assert(
+    byHeld?.byName === false && byHeld.hits.map(h => h.text).join() === '早前的 asdaf 消息',
+    `the chat should be found by the message held of it, got ${JSON.stringify(byHeld)}`
+  )
+  const byBoth = findChat(fan, 'Asdaf', userCache, held)?.hits.map(h => h.text)
+  assert(
+    byBoth?.join(', ') === 'asdaf 也是最后一句, 早前的 asdaf',
+    `its last message should be found too, newest first, got ${byBoth}`
+  )
+  // A last message recalled, or the recall itself, says nothing a search finds, as with the messages held
+  const recalled = session(COLLEAGUE, 900, {
+    last_msg: message(COLLEAGUE, 7, { ...said('asdaf 撤回了'), msg_status: 1 }),
+  })
+  assert(findChat(recalled, 'asdaf', userCache, held) === null, 'a recalled last message should find nothing')
+  const recall = session(COLLEAGUE, 900, { last_msg: message(COLLEAGUE, 7, { msg_type: 5, content: '6000' }) })
+  assert(
+    findChat(recall, '撤回', userCache, held) === null,
+    'a recall should find nothing by what the list shows of it'
+  )
   root.render(
     <SessionItem
       session={friend}
@@ -1360,38 +1406,252 @@ test('a search finds a chat by an earlier message held of it, and shows that mes
 // The list draws rows in a hidden window only at the sizes Virtuoso is told
 const drawn = { viewportHeight: 600, itemHeight: 60 }
 
-test('a search result found by an earlier message opens the chat at it, and one found otherwise at its newest', async () => {
-  const opened: Array<[number, string | undefined]> = []
-  const userCache = { [FRIEND]: { name: '朋友', face: '' }, [FAN]: { name: 'asdaf 粉丝', face: '' } }
+/** The session list, drawing its rows */
+const drawnList = (props: Parameters<typeof SessionList>[0]) => (
+  <VirtuosoMockContext.Provider value={drawn}>
+    <SessionList {...props} />
+  </VirtuosoMockContext.Provider>
+)
+
+/** The rows a list draws, in order */
+const drawnRows = (container: HTMLElement) => [...container.querySelectorAll('[data-index]')]
+
+/** A message found, as its row under the chat reads: who sent it, what it says, and when */
+const result = (sender: string, { text, timestamp }: MessageMatch) => `${sender}：${text}${formatTime(timestamp)}`
+
+test('a search result opens its chat at the message it found, and a chat found by its name at its newest', async () => {
+  const opened: string[] = []
+  const userCache = {
+    [FRIEND]: { name: '朋友', face: '' },
+    [FAN]: { name: 'asdaf 粉丝', face: '' },
+    [COLLEAGUE]: { name: '同事', face: '' },
+  }
   const { type, container } = mountList()
   root.render(
-    <VirtuosoMockContext.Provider value={drawn}>
-      <SessionList
-        {...listProps({
-          sessions: [session(FRIEND, 2000), session(FAN, 1500)],
-          userCache,
-          onSessionClick: (s, msgKey) => opened.push([s.talker_id, msgKey]),
-          onSearchMessages: async () =>
-            new Map([
-              [`1:${FRIEND}`, { msgKey: '3000', text: '早前的 asdaf 消息' }],
-              [`1:${FAN}`, { msgKey: '4000', text: '粉丝说的 asdaf' }],
-            ]),
-        })}
-      />
-    </VirtuosoMockContext.Provider>
+    drawnList(
+      listProps({
+        sessions: [session(FRIEND, 2000), session(FAN, 1500), session(COLLEAGUE, 1000)],
+        userCache,
+        onSessionClick: (s, search) =>
+          opened.push(`${s.talker_id} at ${search?.msgKey ?? 'its newest'}${search ? ` for ${search.query}` : ''}`),
+        onSearchMessages: async () =>
+          new Map([
+            [`1:${FRIEND}`, [hit(FRIEND, 3, '早前的 asdaf 消息')]],
+            [`1:${FAN}`, [hit(FAN, 4, '粉丝说的 asdaf')]],
+            [`1:${COLLEAGUE}`, [hit(COLLEAGUE, 7, '同事说的 asdaf'), hit(ME, 6, '我说的 asdaf')]],
+          ]),
+      })
+    )
   )
   await flush()
   await type('asdaf')
-  const row = (name: string) =>
-    [...container.querySelectorAll('button')].find(b => b.textContent?.includes(name)) as HTMLButtonElement | undefined
-  await until(() => !!row('早前的 asdaf 消息'), 2000, 'the chat found by an earlier message')
-  await flush(() => row('早前的 asdaf 消息')?.click())
-  await flush(() => row('asdaf 粉丝')?.click())
-  const got = opened.map(([talkerId, msgKey]) => `${talkerId} at ${msgKey ?? 'its newest'}`).join(', ')
+  const row = (text: string) =>
+    [...container.querySelectorAll('button')].find(b => b.textContent?.includes(text)) as HTMLButtonElement | undefined
+  await until(() => !!row('早前的 asdaf 消息') && !!row('2 条相关消息'), 2000, 'the chats found')
+  // A chat found by an earlier message, one found by its name and one found by two messages; then two of the
+  // messages found, listed under their chats
+  for (const text of ['早前的 asdaf 消息', 'asdaf 粉丝', '2 条相关消息', '粉丝说的 asdaf', '我说的 asdaf']) {
+    await flush(() => row(text)?.click())
+  }
+  const got = opened.join(', ')
   assert(
-    got === `${FRIEND} at 3000, ${FAN} at its newest`,
-    `the one found by an earlier message should open at it, the one found by its name at its newest, got ${got}`
+    got ===
+      `${FRIEND} at 3000 for asdaf, ${FAN} at its newest for asdaf, ${COLLEAGUE} at 7000 for asdaf, ` +
+        `${FAN} at 4000 for asdaf, ${COLLEAGUE} at 6000 for asdaf`,
+    `a chat found by its messages should open at the newest of them, one found by its name at its newest, and a ` +
+      `message found at it, each with the text searched for, got ${got}`
   )
+
+  // Outside a search, a chat opens as ever, at its newest, with nothing marked
+  opened.length = 0
+  await type('')
+  await until(() => !!row('同事') && !row('2 条相关消息'), 2000, 'every chat')
+  assert(!container.querySelector('mark'), `nothing should be marked, got ${container.innerHTML}`)
+  await flush(() => row('朋友')?.click())
+  assert(opened.join() === `${FRIEND} at its newest`, `the chat should open as ever, got ${opened}`)
+})
+
+test('a chat found by several messages says how many, and lists the newest 3 under it until all are asked for', async () => {
+  const found = [
+    hit(ME, 8, 'test111 再来一次'),
+    hit(FRIEND, 7, '好的 test111'),
+    hit(ME, 6, 'test111'),
+    hit(FRIEND, 5, '早前的 test111'),
+    hit(ME, 4, '最早的 test111'),
+  ]
+  const { type, container } = mountList()
+  root.render(
+    drawnList(
+      listProps({
+        sessions: [session(FRIEND, 2000, { last_msg: message(FRIEND, 9, said('最后一句')) })],
+        userCache: { [FRIEND]: { name: '朋友', face: '' } },
+        activeAccountMid: ME,
+        onSearchMessages: async () => new Map([[`1:${FRIEND}`, found]]),
+      })
+    )
+  )
+  await flush()
+  const rows = () => drawnRows(container).map(row => row.textContent ?? '')
+  // Among the rows, not the menu above them
+  const toggle = () => container.querySelector<HTMLButtonElement>('[data-index] button[aria-expanded]')
+  const newest = [result('我', found[0]), result('朋友', found[1]), result('我', found[2])]
+
+  await type('test111')
+  await until(() => rows().length > 1, 2000, 'the chat found by its messages')
+  const [chat, ...under] = rows()
+  assert(
+    chat.includes('朋友') && chat.includes('5 条相关消息') && !chat.includes('最后一句'),
+    `the chat should say how many of its messages were found, got ${chat}`
+  )
+  assert(
+    under.join(' | ') === [...newest, '查看全部 5 条'].join(' | '),
+    `its newest 3 should show under it, newest first, then a way to see all 5, got ${under.join(' | ')}`
+  )
+  assert(toggle()?.getAttribute('aria-expanded') === 'false', 'the rest should read as folded away')
+
+  // The toggle stays the same button as the rows open above it, so it keeps the focus
+  const button = toggle()
+  await flush(() => button?.click())
+  await until(() => rows().length === 7, 2000, 'every message found')
+  assert(
+    rows().slice(1).join(' | ') === [...newest, result('朋友', found[3]), result('我', found[4]), '收起'].join(' | '),
+    `all 5 should show, then a way to fold them away, got ${rows().slice(1).join(' | ')}`
+  )
+  assert(toggle() === button && button?.getAttribute('aria-expanded') === 'true', 'the toggle should stay, expanded')
+
+  await flush(() => toggle()?.click())
+  await until(() => rows().length === 5, 2000, 'the newest 3 again')
+  assert(rows().at(-1) === '查看全部 5 条', `folded away, the newest 3 should show again, got ${rows()}`)
+
+  // Expanded, then searched for something else, the chat starts out with its newest 3 again
+  await flush(() => toggle()?.click())
+  await until(() => rows().length === 7, 2000, 'every message found again')
+  await type('test11')
+  await until(() => rows().length === 5 && rows()[0].includes('5 条相关消息'), 2000, 'the next search')
+  assert(rows().at(-1) === '查看全部 5 条', `another search should start folded, got ${rows()}`)
+
+  // And so does the same search typed again after clearing it
+  await flush(() => toggle()?.click())
+  await until(() => rows().length === 7, 2000, 'every message found once more')
+  await type('')
+  await until(() => rows().length === 1, 2000, 'the list outside a search')
+  await type('test11')
+  await until(() => rows().length === 5, 2000, 'the same search again')
+  assert(rows().at(-1) === '查看全部 5 条', `the same search typed again should start folded, got ${rows()}`)
+})
+
+test('a chat found by one message shows it in place of its last, one found by its name lists the rest under it', async () => {
+  const friend = session(FRIEND, 2000, { last_msg: message(FRIEND, 9, said('最后一句')) })
+  const fan = session(FAN, 1500, { last_msg: message(FAN, 8, said('Asdaf 也是最后一句')) })
+  const byFan = [hit(ME, 6, '我说的 asdaf'), hit(FAN, 5, '粉丝说的 aSdAf')]
+  const { type, container, text } = mountList()
+  root.render(
+    drawnList(
+      listProps({
+        sessions: [friend, fan, session(COLLEAGUE, 1000)],
+        userCache: { [FRIEND]: { name: '朋友', face: '' }, [FAN]: { name: 'ASDAF 粉丝', face: '' } },
+        activeAccountMid: ME,
+        onSearchMessages: async () =>
+          new Map([
+            [`1:${FRIEND}`, [hit(FRIEND, 3, 'Asdaf ok')]],
+            [`1:${FAN}`, byFan],
+          ]),
+      })
+    )
+  )
+  await flush()
+  await type('asdaf')
+  await until(() => drawnRows(container).length === 4, 2000, 'the chats found')
+  assert(text().includes('2 / 3'), `the count should go by the chats found, got ${text()}`)
+  const [byMessage, byName, ...under] = drawnRows(container)
+  assert(
+    byMessage.textContent?.includes('Asdaf ok') && !byMessage.textContent.includes('最后一句'),
+    `the chat found by one message should show it in place of its last, got ${byMessage.textContent}`
+  )
+  assert(
+    byName.textContent?.includes('ASDAF 粉丝') && byName.textContent.includes('Asdaf 也是最后一句'),
+    `the chat found by its name should show its last message as ever, got ${byName.textContent}`
+  )
+  const results = under.map(row => row.textContent).join(' | ')
+  assert(
+    results === `${result('我', byFan[0])} | ${result('ASDAF 粉丝', byFan[1])}`,
+    `only the chat found by its name should list messages under it, those besides its last, got ${results}`
+  )
+
+  // What's marked is the text as written, whatever case the search was typed in
+  const marks = (row: Element) => [...row.querySelectorAll('mark')].map(mark => mark.textContent).join()
+  const marked = [byMessage, byName, ...under].map(marks).join(' | ')
+  assert(marked === 'Asdaf | ASDAF,Asdaf | asdaf | aSdAf', `the text found should be marked as written, got ${marked}`)
+})
+
+test('a result shows a long message on one line, from a little before the text found, and marks it as written', async () => {
+  assert(
+    JSON.stringify(matchRanges('Test111 和 test111', 'TEST111')) === '[[0,7],[10,17]]',
+    'every occurrence should be found, whatever its case'
+  )
+  assert(matchRanges('test111', '').length === 0, 'an empty search should mark nothing')
+  // Lowercasing İ makes it two characters, so the text after it would be marked a character off
+  const turkish = JSON.stringify(matchRanges('İstanbul test111 İ', 'test111'))
+  assert(turkish === '[[9,16]]', `a match after an İ should be marked where it is, got ${turkish}`)
+  const dotted = JSON.stringify(matchRanges('İstanbul', 'i'))
+  assert(dotted === '[[0,1]]', `a match within İ's lowercase should mark all of İ, got ${dotted}`)
+
+  assert(excerpt('短的 test111', 'test111') === '短的 test111', 'a match near the start should show from the start')
+  const further = excerpt('这是一条很长很长很长的消息\n里面提到了 test111 呢', 'TEST111')
+  assert(further === '…提到了 test111 呢', `a match further in should show from a little before it, got ${further}`)
+  const emoji = excerpt('很长很长的开头😀abctest111', 'test111')
+  assert(emoji === '…😀abctest111', `an excerpt shouldn't start between the halves of an emoji, got ${emoji}`)
+  assert(excerpt('  多行\n\n  消息  ', '没有') === '多行 消息', 'with no match, the whole text should show on one line')
+
+  // A search with a run of spaces finds a message holding them, which the row shows on one line: so is the search
+  const spaced = excerpt('这是一条很长很长的消息 foo  bar 结尾', 'foo  bar')
+  assert(spaced === '…的消息 foo bar 结尾', `a search with spaces should still find its place, got ${spaced}`)
+  const container = document.createElement('div')
+  document.body.replaceChildren(container)
+  root = createRoot(container)
+  await flush(() => root.render(<HighlightExcerpt text='这是一条很长很长的消息 foo  bar 结尾' query='foo  bar' />))
+  const marked = [...container.querySelectorAll('mark')].map(mark => mark.textContent).join()
+  assert(marked === 'foo bar', `a search with spaces should be marked in the row, got ${marked}`)
+})
+
+test('the message a chat was opened at reads as the current row, not the chat', async () => {
+  const fan = session(FAN, 1500)
+  // All mine, so only the chat's own row reads 粉丝
+  const found = [hit(ME, 8, 'asdaf 八'), hit(ME, 7, 'asdaf 七'), hit(ME, 6, 'asdaf 六'), hit(ME, 5, 'asdaf 五')]
+  const { type, container } = mountList()
+  const render = (openedMsgKey: string | null) =>
+    root.render(
+      drawnList(
+        listProps({
+          // A fan group whose id is the same number as the chat's talker: another chat, never current with it
+          sessions: [session(FRIEND, 2000), fan, session(FAN, 1000, { session_type: 2, group_name: '同号的粉丝群' })],
+          selectedSession: fan,
+          openedMsgKey,
+          userCache: { [FRIEND]: { name: '朋友', face: '' }, [FAN]: { name: '粉丝', face: '' } },
+          activeAccountMid: ME,
+          onSearchMessages: async () => new Map([[`1:${FAN}`, found]]),
+        })
+      )
+    )
+  const currentRows = () => [...container.querySelectorAll('[aria-current="true"]')].map(row => row.textContent ?? '')
+  const chatIsCurrent = () => currentRows().length === 1 && currentRows()[0].startsWith('粉丝')
+
+  await flush(() => render('7000'))
+  await until(() => currentRows().length > 0, 2000, 'the list')
+  assert(chatIsCurrent(), `outside a search, the chat should be the current row, got ${currentRows()}`)
+
+  await type('asdaf')
+  await until(() => drawnRows(container).length === 5, 2000, 'the messages found')
+  assert(
+    currentRows().join(' | ') === result('我', found[1]),
+    `the message it was opened at should be the current row, alone, got ${currentRows().join(' | ')}`
+  )
+
+  // Opened at a message folded away (its 4th), or otherwise, the chat is the current row again
+  await flush(() => render('5000'))
+  assert(chatIsCurrent(), `opened at a message not shown, the chat should be current, got ${currentRows()}`)
+  await flush(() => render(null))
+  assert(chatIsCurrent(), `opened otherwise, the chat should be current, got ${currentRows()}`)
 })
 
 test('a chat opens at the message it was opened at, centered and marked, and otherwise at its newest', async () => {
@@ -1437,7 +1697,7 @@ test('a chat opens at the message it was opened at, centered and marked, and oth
   }
   const scroller = () => container.querySelector('[data-virtuoso-scroller]')
 
-  await open({ msgKey: '100000', id: 1 })
+  await open({ msgKey: '100000', id: 1, query: null })
   assert(showsAround(99), `it should open at the message, got rows ${rows()}`)
   assert(
     rows().some(i => i < 99) && rows().some(i => i > 99),
@@ -1445,20 +1705,20 @@ test('a chat opens at the message it was opened at, centered and marked, and oth
   )
   assert(marked().length === 1 && marked()[0]?.includes('消息 100'), `the message should be marked, got ${marked()}`)
 
-  await open({ msgKey: null, id: 2 })
+  await open({ msgKey: null, id: 2, query: null })
   assert(rows().includes(messages.length - 1), `opened otherwise, it should open at its newest, got rows ${rows()}`)
   assert(marked().length === 0, `nothing should be marked, got ${marked()}`)
 
   // Opened again, from wherever it was scrolled to, it opens anew
   const shown = scroller()
-  await open({ msgKey: null, id: 3 })
+  await open({ msgKey: null, id: 3, query: null })
   assert(scroller() !== shown, 'opening it again should open it anew, at its newest')
 
-  await open({ msgKey: '100000', id: 4 })
+  await open({ msgKey: '100000', id: 4, query: null })
   assert(showsAround(99), `opened at the message again, it should go back there, got rows ${rows()}`)
 
   // A message it doesn't hold (gone since) leaves it at its newest
-  await open({ msgKey: '999000', id: 5 })
+  await open({ msgKey: '999000', id: 5, query: null })
   assert(rows().includes(messages.length - 1), `it should open at its newest, got rows ${rows()}`)
 })
 

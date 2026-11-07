@@ -1,4 +1,5 @@
 import { BellOff, Pin, User, Users } from 'lucide-react'
+import type { ReactNode } from 'react'
 
 import type { UserCache } from '@/lib/message-utils'
 import type { BilibiliSession } from '@/types/bilibili'
@@ -15,16 +16,25 @@ import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 
 import { getSessionDraft, useDrafts } from '@/stores/useDrafts'
+import { Highlight, HighlightExcerpt } from './Highlight'
 import { VerifiedBadge } from './VerifiedBadge'
 
 interface SessionItemProps {
   session: BilibiliSession
   /** Draft store key for this session, from getDraftKey() */
   draftKey: string
+  /** Whether the row reads as the current one */
   isSelected: boolean
+  /**
+   * Whether the chat is the one open, its draft being written in the input then: by default, while the row is
+   * selected. A search result under the row can be the current one instead.
+   */
+  isOpen?: boolean
   userCache: UserCache
-  /** Shown in place of the last message: the message a search found the chat by */
-  preview?: string
+  /** A search's text, marked in the name and the last message wherever they hold it */
+  highlight?: string
+  /** Shown in place of the last message and the draft: what a search found the chat by */
+  preview?: ReactNode
   onClick: () => void
 }
 
@@ -43,12 +53,21 @@ function getVipNicknameColor(userCache: UserCache, talkerId: number): string | u
   return undefined
 }
 
-export function SessionItem({ session, draftKey, isSelected, userCache, preview, onClick }: SessionItemProps) {
+export function SessionItem({
+  session,
+  draftKey,
+  isSelected,
+  isOpen = isSelected,
+  userCache,
+  highlight,
+  preview,
+  onClick,
+}: SessionItemProps) {
   const avatar = getSessionAvatar(session, userCache)
   const cachedUser = userCache[session.talker_id]
   const vipNicknameColor = getVipNicknameColor(userCache, session.talker_id)
   // Only mark sessions the user has left; the open one is being edited in the input
-  const draft = useDrafts(state => (isSelected ? undefined : getSessionDraft(state.drafts, draftKey)?.trim()))
+  const draft = useDrafts(state => (isOpen ? undefined : getSessionDraft(state.drafts, draftKey)?.trim()))
 
   return (
     <button
@@ -59,6 +78,7 @@ export function SessionItem({ session, draftKey, isSelected, userCache, preview,
           'bg-accent': isSelected,
         }
       )}
+      aria-current={isSelected ? 'true' : undefined}
       onClick={onClick}
     >
       <div className='relative'>
@@ -79,7 +99,8 @@ export function SessionItem({ session, draftKey, isSelected, userCache, preview,
         <div className='flex items-center justify-between gap-2'>
           <div className='flex min-w-0 items-center gap-1.5'>
             <span className='truncate font-medium' style={vipNicknameColor ? { color: vipNicknameColor } : undefined}>
-              {getSessionName(session, userCache)}
+              {/* Marked in the name's own color, a VIP's too */}
+              <Highlight text={getSessionName(session, userCache)} query={highlight} className='text-inherit' />
             </span>
             {session.top_ts > 0 && <Pin className='size-3.5 flex-none text-muted-foreground' aria-label='置顶' />}
             {session.is_dnd === 1 && (
@@ -107,7 +128,7 @@ export function SessionItem({ session, draftKey, isSelected, userCache, preview,
                 <span className='text-destructive'>[草稿]</span> {draft}
               </>
             ) : (
-              getLastMessagePreview(session)
+              <HighlightExcerpt text={getLastMessagePreview(session)} query={highlight} />
             )}
           </p>
           {session.unread_count > 0 && (
