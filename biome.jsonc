@@ -36,9 +36,7 @@
       "preset": "recommended",
       "suspicious": {
         "noDuplicateProperties": "off",
-        "noDuplicateCustomProperties": "off",
-        // https://github.com/biomejs/biome/issues/7223
-        "noUnknownAtRules": "off"
+        "noDuplicateCustomProperties": "off"
       },
       "complexity": {
         "noImportantStyles": "off"
