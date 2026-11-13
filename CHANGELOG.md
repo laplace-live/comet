@@ -1,5 +1,11 @@
 # laplace-comet
 
+## 1.8.0
+
+### Minor Changes
+
+- bdce755: Customize notification sounds for chats, fan groups, and system alerts
+
 ## 1.7.1
 
 ### Patch Changes
