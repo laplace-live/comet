@@ -17,6 +17,7 @@ const iconEnv = process.env.NODE_ENV === 'development' ? 'dev' : 'prod'
 let tray: Tray | null = null
 let normalIcon: NativeImage | null = null
 let unreadIcon: NativeImage | null = null
+const activeTrayNotifications = new Set<Notification>()
 
 // Tracks the last unread state so the tray image is only swapped when crossing
 // the zero boundary (e.g. 3 -> 4 updates the tooltip but not the image).
@@ -164,8 +165,16 @@ export function maybeShowTrayHint(): void {
       silent: soundOpts.silent,
       ...(soundOpts.sound ? { sound: soundOpts.sound } : {}),
     })
+    activeTrayNotifications.add(notification)
+    notification.on('close', () => activeTrayNotifications.delete(notification))
+    notification.on('failed', () => activeTrayNotifications.delete(notification))
+    if (soundOpts.afterShow) {
+      const onShown = soundOpts.afterShow
+      notification.once('show', () => {
+        void onShown()
+      })
+    }
     notification.show()
-    soundOpts.afterShow?.()
 
     store.set('hasShownTrayHint', true)
   } catch (err) {

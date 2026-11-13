@@ -122,6 +122,8 @@ export function getSystemSoundGroupLabel(platform?: string): string {
   return '系统音效'
 }
 
+export const WINDOWS_APP_USER_MODEL_ID = 'live.laplace.comet'
+
 export interface NotificationCategoryInput {
   sessionType: number
   systemMsgType?: number
@@ -131,7 +133,13 @@ export interface NotificationCategoryInput {
 
 export function getNotificationSoundCategory(input: NotificationCategoryInput): NotificationSoundCategory {
   if (input.isCustomerService) return 'system'
+  if (
+    (input.systemMsgType ?? 0) > 0 ||
+    input.msgType === MSG_TYPE.NOTIFICATION ||
+    input.msgType === MSG_TYPE.FAN_GROUP_SYSTEM
+  ) {
+    return 'system'
+  }
   if (input.sessionType === SESSION_TYPE.FAN_GROUP) return 'group'
-  if ((input.systemMsgType ?? 0) > 0 || input.msgType === MSG_TYPE.NOTIFICATION) return 'system'
   return 'direct'
 }

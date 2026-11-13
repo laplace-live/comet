@@ -15,6 +15,7 @@ import type {
   FetchUsersParams,
   NewMessageNotification,
   NotificationSoundParams,
+  PlayNotificationSoundEvent,
   ShowNotificationParams,
 } from '@/types/electron'
 
@@ -32,6 +33,7 @@ import { type UsePrivateMessagesReturn, usePrivateMessages } from '@/hooks/usePr
 
 import { SettingsDialog } from '@/components/comet/SettingsDialog'
 
+import App from '@/App'
 import { useSettings } from '@/stores/useSettings'
 
 const globals = window as unknown as {
@@ -180,6 +182,30 @@ test('getNotificationSoundCategory classifies direct chats, fan groups, system n
       msgType: MSG_TYPE.NOTIFICATION,
     }) === 'system',
     'notification card message (MSG_TYPE.NOTIFICATION) should use system sound category'
+  )
+  assert(
+    getNotificationSoundCategory({
+      sessionType: SESSION_TYPE.FAN_GROUP,
+      systemMsgType: 2,
+      msgType: MSG_TYPE.TEXT,
+    }) === 'system',
+    'fan group session with positive systemMsgType should use system sound category'
+  )
+  assert(
+    getNotificationSoundCategory({
+      sessionType: SESSION_TYPE.FAN_GROUP,
+      systemMsgType: 0,
+      msgType: MSG_TYPE.NOTIFICATION,
+    }) === 'system',
+    'fan group notification card should use system sound category'
+  )
+  assert(
+    getNotificationSoundCategory({
+      sessionType: SESSION_TYPE.FAN_GROUP,
+      systemMsgType: 0,
+      msgType: MSG_TYPE.FAN_GROUP_SYSTEM,
+    }) === 'system',
+    'fan group system notice (MSG_TYPE.FAN_GROUP_SYSTEM) should use system sound category'
   )
   assert(
     getNotificationSoundCategory({ sessionType: SESSION_TYPE.USER, isCustomerService: true }) === 'system',
@@ -544,6 +570,133 @@ test('Windows/Linux renderer sound player decodes WAV bytes via Web Audio and ca
   assert(
     fallbackPreviewCalls.length === 0,
     `valid WAV playback on Windows should not fall back to shell.beep(), got ${JSON.stringify(fallbackPreviewCalls)}`
+  )
+})
+
+test('SettingsDialog preserves saved system sound label on discovery error and retries when reopened', async () => {
+  const listAttempts: string[] = []
+  window.electronAPI = {
+    platform: 'darwin',
+    notificationSounds: {
+      listSystemSounds: async () => {
+        listAttempts.push('attempt')
+        if (listAttempts.length === 1) {
+          throw new Error('temporary discovery failure')
+        }
+        return [{ id: 'system:Glass.aiff', label: 'Crystal (Glass)' }]
+      },
+      readSoundData: async () => null,
+      preview: async () => undefined,
+      setSystemSoundPref: async () => undefined,
+      onPlaySound: () => () => undefined,
+    },
+  } as unknown as typeof window.electronAPI
+
+  useSettings.setState({
+    settingsOpen: true,
+    notificationSounds: {
+      direct: DEFAULT_NOTIFICATION_SOUNDS.direct,
+      group: DEFAULT_NOTIFICATION_SOUNDS.group,
+      system: 'system:Glass.aiff',
+    },
+  })
+
+  const container = document.createElement('div')
+  document.body.replaceChildren(container)
+  root = createRoot(container)
+  await flush(() => root?.render(<SettingsDialog accounts={[]} activeAccountMid={null} />))
+  await flush()
+
+  assert(
+    listAttempts.join(',') === 'attempt',
+    `expected 1 discovery attempt on initial open, got ${listAttempts.length}`
+  )
+  assert(
+    useSettings.getState().notificationSounds.system === 'system:Glass.aiff',
+    'saved system sound preference must remain unchanged when discovery fails'
+  )
+  const systemTriggerAfterFail = document.getElementById('notification-sound-system')
+  assert(
+    systemTriggerAfterFail?.textContent?.includes('Glass') && !systemTriggerAfterFail.textContent.includes('系统默认'),
+    `saved system sound should preserve fallback label 'Glass', got: ${systemTriggerAfterFail?.textContent}`
+  )
+  assert(
+    document.body.textContent?.includes('暂时无法读取系统音效列表') === true,
+    'SettingsDialog should display a discovery error hint while system sounds are unavailable'
+  )
+
+  // Close and reopen SettingsDialog -> discovery should retry and upgrade label to Crystal (Glass)
+  await flush(() => useSettings.getState().closeSettings())
+  await flush(() => useSettings.getState().openSettings())
+  await flush()
+
+  assert(listAttempts.join(',') === 'attempt,attempt', `expected discovery retry on reopen, got ${listAttempts.length}`)
+  const systemTriggerAfterRetry = document.getElementById('notification-sound-system')
+  assert(
+    systemTriggerAfterRetry?.textContent?.includes('Crystal (Glass)') === true,
+    `reopened SettingsDialog should display discovered label 'Crystal (Glass)', got: ${systemTriggerAfterRetry?.textContent}`
+  )
+  assert(
+    document.body.textContent?.includes('暂时无法读取系统音效列表') === false,
+    'discovery error hint should clear once retry succeeds'
+  )
+})
+
+test('App notification sound listener falls back to default sound when renderer playback fails', async () => {
+  resetSoundPlayerCache()
+  let onPlaySoundHandler: ((event: PlayNotificationSoundEvent) => void) | undefined
+  const fallbackPreviewCalls: string[] = []
+
+  window.electronAPI = {
+    platform: 'win32',
+    onOpenAbout: () => () => undefined,
+    onOpenSettings: () => () => undefined,
+    onUpdateStatus: () => () => undefined,
+    getVersion: async () => '1.7.1',
+    setBadgeCount: async () => ({ success: true }),
+    bilibili: {
+      getAccounts: async () => ({ accounts: [], activeAccountMid: null }),
+      checkLogin: async () => ({ isLogin: false }),
+      generateQrCode: async () => ({
+        qrcodeKey: 'k',
+        url: 'https://example.com',
+        imageDataUrl: 'data:image/png;base64,',
+      }),
+      pollQrCode: async () => ({ status: 'waiting' }),
+      wsConnect: async () => ({ success: true }),
+      wsDisconnect: async () => ({ success: true }),
+      onNewMessage: () => () => undefined,
+      onSessionUpdate: () => () => undefined,
+      onWsConnected: () => () => undefined,
+      onWsDisconnected: () => () => undefined,
+      onNavigateToSession: () => () => undefined,
+    },
+    notificationSounds: {
+      listSystemSounds: async () => [],
+      readSoundData: async () => null,
+      preview: async ({ soundId }: NotificationSoundParams) => {
+        fallbackPreviewCalls.push(soundId)
+      },
+      setSystemSoundPref: async () => undefined,
+      onPlaySound: (cb: (event: PlayNotificationSoundEvent) => void) => {
+        onPlaySoundHandler = cb
+        return () => undefined
+      },
+    },
+  } as unknown as typeof window.electronAPI
+
+  const container = document.createElement('div')
+  document.body.replaceChildren(container)
+  root = createRoot(container)
+  await flush(() => root?.render(<App />))
+  assert(typeof onPlaySoundHandler === 'function', 'App should register notificationSounds.onPlaySound listener')
+
+  await flush(() => onPlaySoundHandler?.({ soundId: 'custom:snd-sine-notification' }))
+  await flush()
+
+  assert(
+    fallbackPreviewCalls.join(',') === NOTIFICATION_SOUND_DEFAULT,
+    `failed renderer notification sound should fall back to default preview, got ${JSON.stringify(fallbackPreviewCalls)}`
   )
 })
 

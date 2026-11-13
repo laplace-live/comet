@@ -25,6 +25,7 @@ import {
 } from './api/notification-sounds'
 import { UPDATE_BASE_URL } from './lib/const'
 import { IpcChannel, IpcEvent } from './lib/ipc'
+import { WINDOWS_APP_USER_MODEL_ID } from './lib/notification-sounds'
 import {
   createTray,
   destroyTray,
@@ -110,7 +111,7 @@ autoUpdater.on('update-downloaded', (_event, _releaseNotes, releaseName) => {
 // Set AppUserModelId for Windows - required for proper notification behavior
 // This must match the Squirrel installer name for notifications to work correctly
 if (process.platform === 'win32') {
-  app.setAppUserModelId('live.laplace.comet')
+  app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID)
 }
 
 // Security helper: only allow http(s) URLs to be opened externally
@@ -236,13 +237,21 @@ ipcMain.handle(IpcChannel.SHOW_NOTIFICATION, async (_event, params: ShowNotifica
     activeNotifications.delete(notification)
   })
 
-  // Also clean up on close (dismissed without clicking)
+  // Also clean up on close (dismissed without clicking) or native failure
   notification.on('close', () => {
     activeNotifications.delete(notification)
   })
+  notification.on('failed', () => {
+    activeNotifications.delete(notification)
+  })
+  if (soundOpts.afterShow) {
+    const onShown = soundOpts.afterShow
+    notification.once('show', () => {
+      void onShown()
+    })
+  }
 
   notification.show()
-  soundOpts.afterShow?.()
   console.log('[Notification] Shown for:', params.title)
   return { shown: true }
 })

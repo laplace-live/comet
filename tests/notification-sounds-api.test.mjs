@@ -18,6 +18,7 @@ const mockModules = {
       getAppPath: () => ${JSON.stringify(projectRoot)},
     }
     export const BrowserWindow = { getAllWindows: () => [] }
+    export const powerMonitor = { getSystemIdleState: () => 'active' }
     export const shell = { beep: () => {} }
   `,
 }
@@ -243,10 +244,11 @@ test('prepareNotificationSound selects native UNNotificationSound, afplay, or re
     isPackaged: false,
     appPath: projectRoot,
     hasRendererWindow: () => true,
+    canPlayWindowsSound: () => true,
     sendPlayToRenderer: id => rendererPayloads.push(id),
   })
   assert.equal(winCustom.silent, true)
-  winCustom.afterShow?.()
+  await winCustom.afterShow?.()
   assert.deepEqual(rendererPayloads, ['custom:snd-sine-notification'])
 
   // 5. Windows + custom sound without any renderer window -> graceful fallback to OS default toast sound
@@ -257,6 +259,100 @@ test('prepareNotificationSound selects native UNNotificationSound, afplay, or re
     hasRendererWindow: () => false,
   })
   assert.deepEqual(winNoWindow, { silent: false })
+})
+
+test('Windows notification sound check respects Do Not Disturb, per-app sound toggle, global sound toggle, and lock screen', async () => {
+  const GLOBAL_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings'
+  const APP_KEY = `${GLOBAL_KEY}\\live.laplace.comet`
+  const QUIET_KEY =
+    'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\Cache\\DefaultAccount\\$$windows.data.notifications.quiethourssettings\\Current'
+
+  const makeCloudStoreHex = (headerByteCount, ...profiles) => {
+    const chunks = [Buffer.alloc(headerByteCount, 0x43)]
+    for (const profile of profiles) {
+      chunks.push(Buffer.from(`Microsoft.QuietHoursProfile.${profile}`, 'utf16le'))
+      chunks.push(Buffer.alloc(8, 0))
+    }
+    return Buffer.concat(chunks).toString('hex').toUpperCase()
+  }
+
+  const runWinAfterShow = async (regMap, isScreenLocked = false) => {
+    const sent = []
+    const prepared = soundsApi.prepareNotificationSound('custom:snd-sine-notification', {
+      platform: 'win32',
+      isPackaged: false,
+      appPath: projectRoot,
+      hasRendererWindow: () => true,
+      isScreenLocked: () => isScreenLocked,
+      queryWindowsRegistryKey: async key => regMap[key] ?? null,
+      sendPlayToRenderer: id => sent.push(id),
+    })
+    await prepared.afterShow?.()
+    return sent
+  }
+
+  // Missing keys (default Windows install) -> allowed
+  assert.deepEqual(await runWinAfterShow({}), ['custom:snd-sine-notification'])
+
+  // Global notification sound disabled -> suppressed
+  assert.deepEqual(
+    await runWinAfterShow({
+      [GLOBAL_KEY]: `${GLOBAL_KEY}\r\n    NOC_GLOBAL_SETTING_ALLOW_NOTIFICATION_SOUND    REG_DWORD    0x0\r\n`,
+    }),
+    []
+  )
+
+  // Global toasts disabled -> suppressed
+  assert.deepEqual(
+    await runWinAfterShow({
+      [GLOBAL_KEY]: `${GLOBAL_KEY}\r\n    NOC_GLOBAL_SETTING_TOASTS_ENABLED    REG_DWORD    0x0\r\n`,
+    }),
+    []
+  )
+
+  // Per-app AllowNotificationSound / Sound / Enabled = 0 -> suppressed
+  for (const valueName of ['AllowNotificationSound', 'Sound', 'Enabled']) {
+    assert.deepEqual(
+      await runWinAfterShow({
+        [APP_KEY]: `${APP_KEY}\r\n    ${valueName}    REG_DWORD    0x0\r\n`,
+      }),
+      [],
+      `${valueName}=0x0 should suppress Windows renderer notification sound`
+    )
+  }
+
+  // Windows Do Not Disturb active (PriorityOnly / AlarmsOnly, including odd-offset binary header) -> suppressed
+  assert.deepEqual(
+    await runWinAfterShow({
+      [QUIET_KEY]: `${QUIET_KEY}\r\n    Data    REG_BINARY    ${makeCloudStoreHex(23, 'PriorityOnly')}\r\n`,
+    }),
+    []
+  )
+  assert.deepEqual(
+    await runWinAfterShow({
+      [QUIET_KEY]: `${QUIET_KEY}\r\n    Data    REG_BINARY    ${makeCloudStoreHex(24, 'AlarmsOnly')}\r\n`,
+    }),
+    []
+  )
+
+  // Unrestricted active profile with trailing automatic rule mentioning PriorityOnly -> allowed
+  assert.deepEqual(
+    await runWinAfterShow({
+      [QUIET_KEY]: `${QUIET_KEY}\r\n    Data    REG_BINARY    ${makeCloudStoreHex(23, 'Unrestricted', 'PriorityOnly')}\r\n`,
+    }),
+    ['custom:snd-sine-notification']
+  )
+
+  // Screen locked with above-lock toasts disabled -> suppressed
+  assert.deepEqual(
+    await runWinAfterShow(
+      {
+        [GLOBAL_KEY]: `${GLOBAL_KEY}\r\n    NOC_GLOBAL_SETTING_ALLOW_TOASTS_ABOVE_LOCK    REG_DWORD    0x0\r\n`,
+      },
+      true
+    ),
+    []
+  )
 })
 
 test('IPC handlers expose list, readData, preview, and system preference sync', async () => {

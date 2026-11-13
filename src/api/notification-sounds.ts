@@ -2,7 +2,7 @@ import { type ChildProcess, execFile } from 'node:child_process'
 import { type Dirent, readdirSync, statSync } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { app, BrowserWindow, ipcMain, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, powerMonitor, shell } from 'electron'
 
 import type { SystemNotificationSoundOption } from '@/lib/notification-sounds'
 import type { NotificationSoundParams } from '@/types/electron'
@@ -14,6 +14,7 @@ import {
   NOTIFICATION_SOUND_DEFAULT,
   NOTIFICATION_SOUND_NONE,
   SYSTEM_SOUND_PREFIX,
+  WINDOWS_APP_USER_MODEL_ID,
 } from '@/lib/notification-sounds'
 
 /**
@@ -68,10 +69,14 @@ export interface NotificationSoundEnvOptions {
   appPath?: string
   resourcesPath?: string
   systemSoundsDir?: string
+  appUserModelId?: string
   hasRendererWindow?: () => boolean
   sendPlayToRenderer?: (soundId: string) => void
   playMacFile?: (filePath: string) => void
   beep?: () => void
+  canPlayWindowsSound?: () => boolean | Promise<boolean>
+  queryWindowsRegistryKey?: (keyPath: string) => Promise<string | null>
+  isScreenLocked?: () => boolean
 }
 
 export type ResolvedNotificationSound =
@@ -83,7 +88,7 @@ export type ResolvedNotificationSound =
 export interface PreparedNotificationSound {
   silent: boolean
   sound?: string
-  afterShow?: () => void
+  afterShow?: () => void | Promise<void>
 }
 
 let activePlaybackProcess: ChildProcess | null = null
@@ -329,6 +334,128 @@ function defaultSendPlayToRenderer(soundId: string): void {
   win?.webContents.send(IpcEvent.APP_PLAY_NOTIFICATION_SOUND, { soundId })
 }
 
+const WINDOWS_NOTIFICATIONS_SETTINGS_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Notifications\\Settings'
+const WINDOWS_QUIET_HOURS_KEY =
+  'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\CloudStore\\Store\\Cache\\DefaultAccount\\$$windows.data.notifications.quiethourssettings\\Current'
+
+const QUIET_HOURS_PREFIX_UTF16LE = Buffer.from('Microsoft.QuietHoursProfile.', 'utf16le')
+const PRIORITY_ONLY_UTF16LE = Buffer.from('PriorityOnly', 'utf16le')
+const ALARMS_ONLY_UTF16LE = Buffer.from('AlarmsOnly', 'utf16le')
+
+/** Parse `reg.exe query <key>` output into value-name -> `{ type, data }` pairs. */
+export function parseRegQueryOutput(stdout: string): Map<string, { type: string; data: string }> {
+  const values = new Map<string, { type: string; data: string }>()
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const match = /^\s+(\S+)\s+(REG_\S+)\s+(\S+)\s*$/.exec(rawLine)
+    if (match) {
+      values.set(match[1], { type: match[2], data: match[3] })
+    }
+  }
+  return values
+}
+
+/**
+ * Inspect the `Data` `REG_BINARY` blob from Windows CloudStore `quiethourssettings\Current`.
+ * Checks the active `SelectedProfile` (first `Microsoft.QuietHoursProfile.*` entry in the blob)
+ * so trailing automatic-rule definitions do not false-positive when Do Not Disturb is off.
+ */
+export function isWindowsQuietHoursActiveInCloudStoreData(dataBytes: Uint8Array): boolean {
+  const buf = Buffer.from(dataBytes.buffer, dataBytes.byteOffset, dataBytes.byteLength)
+  const idx = buf.indexOf(QUIET_HOURS_PREFIX_UTF16LE)
+  if (idx === -1) return false
+  const rest = buf.subarray(idx + QUIET_HOURS_PREFIX_UTF16LE.length)
+  return (
+    rest.subarray(0, PRIORITY_ONLY_UTF16LE.length).equals(PRIORITY_ONLY_UTF16LE) ||
+    rest.subarray(0, ALARMS_ONLY_UTF16LE.length).equals(ALARMS_ONLY_UTF16LE)
+  )
+}
+
+function isRegDwordZero(values: Map<string, { type: string; data: string }>, name: string): boolean {
+  const entry = values.get(name)
+  if (entry?.type !== 'REG_DWORD' || entry.data.length === 0) return false
+  return Number(entry.data) === 0
+}
+
+function defaultQueryWindowsRegistryKey(keyPath: string): Promise<string | null> {
+  if (process.platform !== 'win32') {
+    return Promise.resolve(null)
+  }
+  const winRoot = process.env.SystemRoot || process.env.WINDIR || 'C:\\Windows'
+  const regExe = path.win32.join(winRoot, 'System32', 'reg.exe')
+  return new Promise(resolve => {
+    try {
+      execFile(regExe, ['query', keyPath], { windowsHide: true, timeout: 1500 }, (err, stdout) => {
+        resolve(err ? null : stdout)
+      })
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
+/**
+ * Check whether Windows currently allows Comet notification sounds to play, respecting:
+ * - Global toast & notification-sound toggles (`NOC_GLOBAL_SETTING_*`)
+ * - Lock-screen toast suppression (`NOC_GLOBAL_SETTING_ALLOW_TOASTS_ABOVE_LOCK`)
+ * - Per-app notification & sound toggles (`Notifications\Settings\<AUMID>`)
+ * - Windows Do Not Disturb / Focus Assist (`quiethourssettings\Current`)
+ */
+export async function canPlayWindowsNotificationSound(options?: NotificationSoundEnvOptions): Promise<boolean> {
+  if (options?.canPlayWindowsSound) {
+    return await options.canPlayWindowsSound()
+  }
+
+  const queryKey = options?.queryWindowsRegistryKey ?? defaultQueryWindowsRegistryKey
+  const isLocked = options?.isScreenLocked ?? (() => powerMonitor.getSystemIdleState(60) === 'locked')
+  const appId = options?.appUserModelId ?? WINDOWS_APP_USER_MODEL_ID
+  const appSettingsKey = `${WINDOWS_NOTIFICATIONS_SETTINGS_KEY}\\${appId}`
+
+  const [globalOut, appOut, quietOut] = await Promise.all([
+    queryKey(WINDOWS_NOTIFICATIONS_SETTINGS_KEY),
+    queryKey(appSettingsKey),
+    queryKey(WINDOWS_QUIET_HOURS_KEY),
+  ])
+
+  if (globalOut) {
+    const globalVals = parseRegQueryOutput(globalOut)
+    if (
+      isRegDwordZero(globalVals, 'NOC_GLOBAL_SETTING_TOASTS_ENABLED') ||
+      isRegDwordZero(globalVals, 'NOC_GLOBAL_SETTING_ALLOW_NOTIFICATION_SOUND') ||
+      (isLocked() && isRegDwordZero(globalVals, 'NOC_GLOBAL_SETTING_ALLOW_TOASTS_ABOVE_LOCK'))
+    ) {
+      return false
+    }
+  }
+
+  if (appOut) {
+    const appVals = parseRegQueryOutput(appOut)
+    if (
+      isRegDwordZero(appVals, 'Enabled') ||
+      isRegDwordZero(appVals, 'AllowNotificationSound') ||
+      isRegDwordZero(appVals, 'Sound')
+    ) {
+      return false
+    }
+  }
+
+  if (quietOut) {
+    const quietVals = parseRegQueryOutput(quietOut)
+    const dataEntry = quietVals.get('Data')
+    if (
+      dataEntry?.type === 'REG_BINARY' &&
+      dataEntry.data.length > 0 &&
+      dataEntry.data.length % 2 === 0 &&
+      /^[0-9a-fA-F]+$/.test(dataEntry.data)
+    ) {
+      if (isWindowsQuietHoursActiveInCloudStoreData(Buffer.from(dataEntry.data, 'hex'))) {
+        return false
+      }
+    }
+  }
+
+  return true
+}
+
 /**
  * Prepare Electron `Notification` constructor options (`silent`, `sound`) and an optional post-`show()`
  * audio trigger so custom and OS sounds play consistently across macOS, Windows, and Linux.
@@ -368,11 +495,17 @@ export function prepareNotificationSound(
   }
 
   // On Windows and Linux, Electron ignores Notification.sound; mute the toast's default chime
-  // and play the selected sound through Web Audio in the renderer window.
+  // and play the selected sound through Web Audio in the renderer window once shown (respecting
+  // Windows Do Not Disturb and notification sound settings).
   if (soundId && hasWindow()) {
     return {
       silent: true,
-      afterShow: () => sendToRenderer(soundId),
+      afterShow: async () => {
+        if (platform === 'win32' && !(await canPlayWindowsNotificationSound(options))) {
+          return
+        }
+        sendToRenderer(soundId)
+      },
     }
   }
 

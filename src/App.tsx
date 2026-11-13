@@ -1,7 +1,7 @@
 import { useCallback, useEffect } from 'react'
 
 import { LOGIN_CONFIG } from '@/lib/const'
-import { playNotificationSoundInRenderer } from '@/lib/sound-player'
+import { previewNotificationSound } from '@/lib/sound-player'
 
 import { usePrivateMessages } from '@/hooks/usePrivateMessages'
 
@@ -81,10 +81,11 @@ export default function App() {
     })
   }, [])
 
-  // Play notification audio in renderer when main process suppresses native toast sound (Windows/Linux)
+  // Play notification audio in renderer when main process suppresses native toast sound (Windows/Linux),
+  // falling back to the default system tone if reading or decoding the selected sound fails.
   useEffect(() => {
     const cleanup = window.electronAPI?.notificationSounds?.onPlaySound(payload => {
-      void playNotificationSoundInRenderer(payload.soundId)
+      void previewNotificationSound(payload.soundId)
     })
     return () => {
       cleanup?.()

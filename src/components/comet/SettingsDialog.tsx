@@ -160,6 +160,7 @@ export function SettingsDialog({
   } = useSettings()
 
   const [systemSounds, setSystemSounds] = useState<SystemNotificationSoundOption[] | null>(null)
+  const [systemSoundsError, setSystemSoundsError] = useState(false)
   const systemGroupLabel = getSystemSoundGroupLabel(window.electronAPI?.platform)
 
   useEffect(() => {
@@ -170,12 +171,16 @@ export function SettingsDialog({
       return
     }
     let cancelled = false
+    setSystemSoundsError(false)
     void listSystemSounds()
       .then(items => {
-        if (!cancelled) setSystemSounds(items)
+        if (!cancelled) {
+          setSystemSoundsError(false)
+          setSystemSounds(items)
+        }
       })
       .catch(() => {
-        if (!cancelled) setSystemSounds([])
+        if (!cancelled) setSystemSoundsError(true)
       })
     return () => {
       cancelled = true
@@ -426,6 +431,9 @@ export function SettingsDialog({
                 <p className='text-xs text-muted-foreground'>
                   为不同类型的通知选择专属提示音（应用处于前台时不会发出通知）
                 </p>
+                {systemSoundsError && (
+                  <p className='text-xs text-muted-foreground'>暂时无法读取系统音效列表，重新打开设置后将自动重试</p>
+                )}
               </div>
               <div className='space-y-3'>
                 {NOTIFICATION_SOUND_CATEGORIES.map(category => {
@@ -472,7 +480,7 @@ export function SettingsDialog({
                                 </SelectItem>
                               ))}
                             </SelectGroup>
-                            {systemSounds && systemSounds.length > 0 && (
+                            {systemSounds && systemSounds.length > 0 ? (
                               <>
                                 <SelectSeparator />
                                 <SelectGroup>
@@ -484,6 +492,18 @@ export function SettingsDialog({
                                   ))}
                                 </SelectGroup>
                               </>
+                            ) : (
+                              systemSounds === null &&
+                              storedValue.startsWith(SYSTEM_SOUND_PREFIX) &&
+                              Object.hasOwn(soundItemLabels, storedValue) && (
+                                <>
+                                  <SelectSeparator />
+                                  <SelectGroup>
+                                    <SelectGroupLabel>{systemGroupLabel}</SelectGroupLabel>
+                                    <SelectItem value={storedValue}>{soundItemLabels[storedValue]}</SelectItem>
+                                  </SelectGroup>
+                                </>
+                              )
                             )}
                           </SelectPopup>
                         </Select>
