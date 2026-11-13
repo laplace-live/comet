@@ -353,6 +353,36 @@ test('Windows notification sound check respects Do Not Disturb, per-app sound to
     ),
     []
   )
+
+  // Out-of-order completion: an older notification whose registry query finishes after a newer one must not interrupt it
+  let resolveOlderCheck
+  const olderGate = new Promise(resolve => {
+    resolveOlderCheck = resolve
+  })
+  const orderedSent = []
+  const olderPrepared = soundsApi.prepareNotificationSound('custom:snd-sine-notification', {
+    platform: 'win32',
+    isPackaged: false,
+    appPath: projectRoot,
+    hasRendererWindow: () => true,
+    canPlayWindowsSound: () => olderGate,
+    sendPlayToRenderer: id => orderedSent.push(id),
+  })
+  const newerPrepared = soundsApi.prepareNotificationSound('custom:snd-sine-toggle-on', {
+    platform: 'win32',
+    isPackaged: false,
+    appPath: projectRoot,
+    hasRendererWindow: () => true,
+    canPlayWindowsSound: async () => true,
+    sendPlayToRenderer: id => orderedSent.push(id),
+  })
+
+  const olderPromise = olderPrepared.afterShow?.()
+  await newerPrepared.afterShow?.()
+  resolveOlderCheck(true)
+  await olderPromise
+
+  assert.deepEqual(orderedSent, ['custom:snd-sine-toggle-on'])
 })
 
 test('IPC handlers expose list, readData, preview, and system preference sync', async () => {

@@ -92,9 +92,11 @@ export interface PreparedNotificationSound {
 }
 
 let activePlaybackProcess: ChildProcess | null = null
+let latestRendererSoundToken = 0
 
-/** Kill any in-flight `afplay` process (used before starting a new sound or on app quit). */
+/** Kill any in-flight `afplay` process and cancel pending async notification sound triggers. */
 export function stopActiveSoundPlayback(): void {
+  latestRendererSoundToken++
   if (!activePlaybackProcess) return
   const proc = activePlaybackProcess
   activePlaybackProcess = null
@@ -501,8 +503,12 @@ export function prepareNotificationSound(
     return {
       silent: true,
       afterShow: async () => {
-        if (platform === 'win32' && !(await canPlayWindowsNotificationSound(options))) {
-          return
+        const token = ++latestRendererSoundToken
+        if (platform === 'win32') {
+          const allowed = await canPlayWindowsNotificationSound(options)
+          if (!allowed || token !== latestRendererSoundToken) {
+            return
+          }
         }
         sendToRenderer(soundId)
       },
