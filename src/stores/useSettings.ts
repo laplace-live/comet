@@ -1,6 +1,14 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
+import type {
+  NotificationSoundCategory,
+  NotificationSoundId,
+  NotificationSoundSettings,
+} from '@/lib/notification-sounds'
+
+import { DEFAULT_NOTIFICATION_SOUNDS, normalizeNotificationSoundSettings } from '@/lib/notification-sounds'
+
 // ============================================================================
 // Settings Types
 // ============================================================================
@@ -19,6 +27,9 @@ interface SettingsState {
    */
   keepChatsOnDevice: boolean
   setKeepChatsOnDevice: (enabled: boolean) => void
+  /** Per-category notification sound IDs ('default', 'none', 'custom:*', or 'system:*') */
+  notificationSounds: NotificationSoundSettings
+  setNotificationSound: (category: NotificationSoundCategory, soundId: NotificationSoundId) => void
 
   // UI state (not persisted)
   /** Whether the settings modal is open */
@@ -39,7 +50,7 @@ interface SettingsState {
 
 export const useSettings = create<SettingsState>()(
   persist(
-    set => ({
+    (set, get) => ({
       // Persisted settings
       developerMode: false,
       setDeveloperMode: enabled => set({ developerMode: enabled }),
@@ -50,6 +61,19 @@ export const useSettings = create<SettingsState>()(
         })),
       keepChatsOnDevice: true,
       setKeepChatsOnDevice: enabled => set({ keepChatsOnDevice: enabled }),
+      notificationSounds: { ...DEFAULT_NOTIFICATION_SOUNDS },
+      setNotificationSound: (category, soundId) => {
+        if (get().notificationSounds[category] === soundId) return
+        set(state => ({
+          notificationSounds: {
+            ...state.notificationSounds,
+            [category]: soundId,
+          },
+        }))
+        if (category === 'system') {
+          void window.electronAPI?.notificationSounds?.setSystemSoundPref({ soundId })
+        }
+      },
 
       // UI state
       settingsOpen: false,
@@ -68,7 +92,16 @@ export const useSettings = create<SettingsState>()(
         developerMode: state.developerMode,
         customerServiceMutedMids: state.customerServiceMutedMids,
         keepChatsOnDevice: state.keepChatsOnDevice,
+        notificationSounds: state.notificationSounds,
       }),
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<SettingsState>
+        return {
+          ...currentState,
+          ...persisted,
+          notificationSounds: normalizeNotificationSoundSettings(persisted.notificationSounds),
+        }
+      },
     }
   )
 )

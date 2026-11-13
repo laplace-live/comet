@@ -3,6 +3,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
 import type { AccountSnapshot, ChatMatch, SavedChat } from './lib/account-cache'
+import type { SystemNotificationSoundOption } from './lib/notification-sounds'
 import type { BilibiliCredentials } from './types/bilibili'
 import type {
   AccountParams,
@@ -20,6 +21,8 @@ import type {
   GetAccountsResult,
   NavigateToSessionParams,
   NewMessageNotification,
+  NotificationSoundParams,
+  PlayNotificationSoundEvent,
   QRGenerateResult,
   QRPollParams,
   QRPollResult,
@@ -192,6 +195,27 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clipboard: {
     copyImage: (params: CopyImageParams): Promise<CopyImageResult> =>
       ipcRenderer.invoke(IpcChannel.CLIPBOARD_COPY_IMAGE, params),
+  },
+
+  // Notification sound customization & playback
+  notificationSounds: {
+    listSystemSounds: (): Promise<SystemNotificationSoundOption[]> =>
+      ipcRenderer.invoke(IpcChannel.NOTIFICATION_SOUNDS_LIST_SYSTEM),
+    readSoundData: (params: NotificationSoundParams): Promise<Uint8Array | null> =>
+      ipcRenderer.invoke(IpcChannel.NOTIFICATION_SOUNDS_READ_DATA, params),
+    preview: (params: NotificationSoundParams): Promise<void> =>
+      ipcRenderer.invoke(IpcChannel.NOTIFICATION_SOUNDS_PREVIEW, params),
+    setSystemSoundPref: (params: NotificationSoundParams): Promise<void> =>
+      ipcRenderer.invoke(IpcChannel.NOTIFICATION_SOUNDS_SET_SYSTEM_PREF, params),
+    onPlaySound: (callback: (payload: PlayNotificationSoundEvent) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: PlayNotificationSoundEvent) => {
+        callback(payload)
+      }
+      ipcRenderer.on(IpcEvent.APP_PLAY_NOTIFICATION_SOUND, listener)
+      return () => {
+        ipcRenderer.removeListener(IpcEvent.APP_PLAY_NOTIFICATION_SOUND, listener)
+      }
+    },
   },
 
   // App menu event listeners

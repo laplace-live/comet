@@ -71,6 +71,10 @@ export function AboutDialog() {
                   Version <span className='select-text'>{version}</span> ·{' '}
                   <a href='https://github.com/laplace-live/comet' target='_blank' rel='noopener noreferrer'>
                     Source
+                  </a>{' '}
+                  ·{' '}
+                  <a href='https://snd.dev' target='_blank' rel='noopener noreferrer'>
+                    Sounds by SND
                   </a>
                 </p>
 

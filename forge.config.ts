@@ -6,6 +6,7 @@ import { VitePlugin } from '@electron-forge/plugin-vite'
 import type { ForgeConfig } from '@electron-forge/shared-types'
 
 import { UPDATE_BASE_URL } from './src/lib/const'
+import { CUSTOM_NOTIFICATION_SOUND_FILES } from './src/lib/notification-sounds'
 
 // Environment-specific app icon without extension: Packager picks the format per platform, and
 // the Windows installer reuses the .ico
@@ -17,6 +18,9 @@ const config: ForgeConfig = {
     icon: APP_ICON,
     executableName: 'comet',
     appBundleId: 'live.laplace.comet',
+    // Bundled notification WAVs sit in Contents/Resources/ (macOS) and resources/ (Windows/Linux)
+    // so macOS UNNotificationSound can load them directly by filename and main can read them without asar limits.
+    extraResource: CUSTOM_NOTIFICATION_SOUND_FILES.map(file => `src/assets/sounds/${file}`),
     osxSign: process.env.APPLE_IDENTITY
       ? {
           identity: process.env.APPLE_IDENTITY,

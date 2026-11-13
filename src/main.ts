@@ -18,9 +18,22 @@ import type { ShowNotificationParams, UpdateStatusInfo } from './types/electron'
 
 import { registerBilibiliIpcHandlers } from './api/bilibili'
 import { cleanupBroadcastWebSocket, initBroadcastWebSocket } from './api/broadcast-websocket'
+import {
+  prepareNotificationSound,
+  registerNotificationSoundIpcHandlers,
+  stopActiveSoundPlayback,
+} from './api/notification-sounds'
 import { UPDATE_BASE_URL } from './lib/const'
 import { IpcChannel, IpcEvent } from './lib/ipc'
-import { createTray, destroyTray, focusMainWindow, maybeShowTrayHint, updateTrayUnread } from './tray'
+import { WINDOWS_APP_USER_MODEL_ID } from './lib/notification-sounds'
+import {
+  createTray,
+  destroyTray,
+  focusMainWindow,
+  maybeShowTrayHint,
+  setSystemNotificationSoundPref,
+  updateTrayUnread,
+} from './tray'
 
 // Set to true once the user explicitly quits (tray menu, Ctrl+Q, or an update
 // install) so the window 'close' handler stops hiding to the tray and lets the
@@ -98,7 +111,7 @@ autoUpdater.on('update-downloaded', (_event, _releaseNotes, releaseName) => {
 // Set AppUserModelId for Windows - required for proper notification behavior
 // This must match the Squirrel installer name for notifications to work correctly
 if (process.platform === 'win32') {
-  app.setAppUserModelId('live.laplace.comet')
+  app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID)
 }
 
 // Security helper: only allow http(s) URLs to be opened externally
@@ -111,10 +124,16 @@ const isSafeForExternalOpen = (url: string): boolean => {
   }
 }
 
+// Allow Web Audio notification playback in the renderer on Windows/Linux even before a user gesture
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+
 // Skip initialization if this is a secondary instance (will exit shortly)
 if (isSingleInstance) {
   // Register IPC handlers
   registerBilibiliIpcHandlers()
+  registerNotificationSoundIpcHandlers({
+    onSetSystemSoundPref: setSystemNotificationSoundPref,
+  })
 
   // Initialize WebSocket for real-time notifications
   initBroadcastWebSocket()
@@ -185,11 +204,14 @@ ipcMain.handle(IpcChannel.SHOW_NOTIFICATION, async (_event, params: ShowNotifica
     icon = await fetchImageAsNativeImage(params.icon)
   }
 
+  const soundOpts = prepareNotificationSound(params.sound)
+
   const notification = new Notification({
     title: params.title,
     body: params.body,
     icon,
-    silent: false,
+    silent: soundOpts.silent,
+    ...(soundOpts.sound ? { sound: soundOpts.sound } : {}),
   })
 
   // Keep reference to prevent garbage collection
@@ -215,10 +237,19 @@ ipcMain.handle(IpcChannel.SHOW_NOTIFICATION, async (_event, params: ShowNotifica
     activeNotifications.delete(notification)
   })
 
-  // Also clean up on close (dismissed without clicking)
+  // Also clean up on close (dismissed without clicking) or native failure
   notification.on('close', () => {
     activeNotifications.delete(notification)
   })
+  notification.on('failed', () => {
+    activeNotifications.delete(notification)
+  })
+  if (soundOpts.afterShow) {
+    const onShown = soundOpts.afterShow
+    notification.once('show', () => {
+      void onShown()
+    })
+  }
 
   notification.show()
   console.log('[Notification] Shown for:', params.title)
@@ -513,6 +544,7 @@ app.on('ready', () => {
 // Cleanup WebSocket on quit
 app.on('before-quit', () => {
   isQuitting = true
+  stopActiveSoundPlayback()
   destroyTray()
   cleanupBroadcastWebSocket()
 })

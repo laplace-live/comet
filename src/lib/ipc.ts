@@ -6,6 +6,7 @@
  */
 
 import type { AccountSnapshot, ChatMatch, SavedChat } from '@/lib/account-cache'
+import type { SystemNotificationSoundOption } from '@/lib/notification-sounds'
 import type {
   BilibiliCredentials,
   BilibiliLinkSettingResponse,
@@ -35,6 +36,8 @@ import type {
   GetAccountsResult,
   NavigateToSessionParams,
   NewMessageNotification,
+  NotificationSoundParams,
+  PlayNotificationSoundEvent,
   QRGenerateResult,
   QRPollParams,
   QRPollResult,
@@ -79,6 +82,10 @@ export const IpcChannel = {
 
   // Notifications
   SHOW_NOTIFICATION: 'show-notification',
+  NOTIFICATION_SOUNDS_LIST_SYSTEM: 'notification-sounds:list-system',
+  NOTIFICATION_SOUNDS_READ_DATA: 'notification-sounds:read-data',
+  NOTIFICATION_SOUNDS_PREVIEW: 'notification-sounds:preview',
+  NOTIFICATION_SOUNDS_SET_SYSTEM_PREF: 'notification-sounds:set-system-pref',
 
   // Clipboard
   CLIPBOARD_COPY_IMAGE: 'clipboard:copy-image',
@@ -142,6 +149,7 @@ export const IpcEvent = {
   APP_OPEN_ABOUT: 'app:open-about',
   APP_OPEN_SETTINGS: 'app:open-settings',
   APP_UPDATE_STATUS: 'app:update-status',
+  APP_PLAY_NOTIFICATION_SOUND: 'app:play-notification-sound',
 
   // Bilibili real-time events
   BILIBILI_NEW_MESSAGE: 'bilibili:new-message',
@@ -178,6 +186,22 @@ export interface IpcInvokeContract {
   [IpcChannel.SHOW_NOTIFICATION]: {
     params: ShowNotificationParams
     result: { shown: boolean; reason?: string }
+  }
+  [IpcChannel.NOTIFICATION_SOUNDS_LIST_SYSTEM]: {
+    params: undefined
+    result: SystemNotificationSoundOption[]
+  }
+  [IpcChannel.NOTIFICATION_SOUNDS_READ_DATA]: {
+    params: NotificationSoundParams
+    result: Uint8Array | null
+  }
+  [IpcChannel.NOTIFICATION_SOUNDS_PREVIEW]: {
+    params: NotificationSoundParams
+    result: undefined
+  }
+  [IpcChannel.NOTIFICATION_SOUNDS_SET_SYSTEM_PREF]: {
+    params: NotificationSoundParams
+    result: undefined
   }
 
   // Clipboard
@@ -349,6 +373,7 @@ export interface IpcEventContract {
   [IpcEvent.APP_OPEN_ABOUT]: undefined
   [IpcEvent.APP_OPEN_SETTINGS]: undefined
   [IpcEvent.APP_UPDATE_STATUS]: UpdateStatusInfo
+  [IpcEvent.APP_PLAY_NOTIFICATION_SOUND]: PlayNotificationSoundEvent
   [IpcEvent.BILIBILI_NEW_MESSAGE]: NewMessageNotification
   [IpcEvent.BILIBILI_SESSION_UPDATE]: SessionUpdateNotification
   [IpcEvent.BILIBILI_WS_CONNECTED]: undefined
