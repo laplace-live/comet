@@ -14,12 +14,22 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Check, GripVertical } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { Check, GripVertical, Volume2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
+import type { SystemNotificationSoundOption } from '@/lib/notification-sounds'
 import type { StoredAccountInfo } from '@/types/electron'
 
 import { LOGIN_CONFIG } from '@/lib/const'
+import {
+  CUSTOM_NOTIFICATION_SOUNDS,
+  getSystemSoundGroupLabel,
+  NOTIFICATION_SOUND_CATEGORIES,
+  NOTIFICATION_SOUND_DEFAULT,
+  NOTIFICATION_SOUND_NONE,
+  SYSTEM_SOUND_PREFIX,
+} from '@/lib/notification-sounds'
+import { previewNotificationSound, stopPreviewPlayback } from '@/lib/sound-player'
 
 import { enforceHttps } from '@/utils/enforceHttps'
 import { formatDateShort } from '@/utils/formatTimeWithZone'
@@ -28,7 +38,18 @@ import { timeFromNowGranular } from '@/utils/timeFromNow'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Dialog, DialogDescription, DialogHeader, DialogPanel, DialogPopup, DialogTitle } from '@/components/ui/dialog'
+import {
+  Select,
+  SelectGroup,
+  SelectGroupLabel,
+  SelectItem,
+  SelectPopup,
+  SelectSeparator,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 
@@ -131,10 +152,65 @@ export function SettingsDialog({
     setDeveloperMode,
     keepChatsOnDevice,
     setKeepChatsOnDevice,
+    notificationSounds,
+    setNotificationSound,
     settingsOpen,
     openSettings,
     closeSettings,
   } = useSettings()
+
+  const [systemSounds, setSystemSounds] = useState<SystemNotificationSoundOption[] | null>(null)
+  const systemGroupLabel = getSystemSoundGroupLabel(window.electronAPI?.platform)
+
+  useEffect(() => {
+    if (!settingsOpen || systemSounds !== null) return
+    const listSystemSounds = window.electronAPI?.notificationSounds?.listSystemSounds
+    if (!listSystemSounds) {
+      setSystemSounds([])
+      return
+    }
+    let cancelled = false
+    void listSystemSounds()
+      .then(items => {
+        if (!cancelled) setSystemSounds(items)
+      })
+      .catch(() => {
+        if (!cancelled) setSystemSounds([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [settingsOpen, systemSounds])
+
+  useEffect(() => {
+    if (!settingsOpen) return
+    return () => {
+      stopPreviewPlayback()
+    }
+  }, [settingsOpen])
+
+  const soundItemLabels = useMemo(() => {
+    const labels: Record<string, string> = {
+      [NOTIFICATION_SOUND_DEFAULT]: '系统默认',
+      [NOTIFICATION_SOUND_NONE]: '无（静音）',
+    }
+    for (const sound of CUSTOM_NOTIFICATION_SOUNDS) {
+      labels[sound.id] = sound.label
+    }
+    if (systemSounds) {
+      for (const sound of systemSounds) {
+        labels[sound.id] = sound.label
+      }
+    } else {
+      for (const category of NOTIFICATION_SOUND_CATEGORIES) {
+        const id = notificationSounds[category.id]
+        if (id && !Object.hasOwn(labels, id) && id.startsWith(SYSTEM_SOUND_PREFIX)) {
+          labels[id] = id.slice(SYSTEM_SOUND_PREFIX.length).replace(/\.[^.]+$/, '')
+        }
+      }
+    }
+    return labels
+  }, [systemSounds, notificationSounds])
 
   // 收起未关注人消息 as the user just set it, while Bilibili saves it
   const [pendingUnfollowFold, setPendingUnfollowFold] = useState<boolean | null>(null)
@@ -339,6 +415,94 @@ export function SettingsDialog({
                   disabled={unfollowFold === null || pendingUnfollowFold !== null}
                   onCheckedChange={handleUnfollowFoldChange}
                 />
+              </div>
+            </div>
+
+            {/* Notification Sounds Section */}
+            <div className='space-y-4'>
+              <Separator />
+              <div className='space-y-0.5'>
+                <h3 className='text-sm font-medium'>通知音效</h3>
+                <p className='text-xs text-muted-foreground'>
+                  为不同类型的通知选择专属提示音（应用处于前台时不会发出通知）
+                </p>
+              </div>
+              <div className='space-y-3'>
+                {NOTIFICATION_SOUND_CATEGORIES.map(category => {
+                  const selectId = `notification-sound-${category.id}`
+                  const descId = `notification-sound-${category.id}-desc`
+                  const storedValue = notificationSounds[category.id]
+                  const value = Object.hasOwn(soundItemLabels, storedValue) ? storedValue : NOTIFICATION_SOUND_DEFAULT
+                  const isMuted = value === NOTIFICATION_SOUND_NONE
+
+                  return (
+                    <div key={category.id} className='flex items-center justify-between gap-4'>
+                      <div className='min-w-0 space-y-0.5'>
+                        <label htmlFor={selectId} className='text-sm font-medium'>
+                          {category.label}
+                        </label>
+                        <p id={descId} className='text-xs text-muted-foreground'>
+                          {category.description}
+                        </p>
+                      </div>
+                      <div className='flex shrink-0 items-center gap-1.5'>
+                        <Select
+                          id={selectId}
+                          name={selectId}
+                          items={soundItemLabels}
+                          value={value}
+                          onValueChange={nextValue => {
+                            if (!nextValue) return
+                            setNotificationSound(category.id, nextValue)
+                            void previewNotificationSound(nextValue)
+                          }}
+                        >
+                          <SelectTrigger size='sm' className='w-44' aria-describedby={descId}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectPopup alignItemWithTrigger={false}>
+                            <SelectItem value={NOTIFICATION_SOUND_DEFAULT}>系统默认</SelectItem>
+                            <SelectItem value={NOTIFICATION_SOUND_NONE}>无（静音）</SelectItem>
+                            <SelectSeparator />
+                            <SelectGroup>
+                              <SelectGroupLabel>内置音效</SelectGroupLabel>
+                              {CUSTOM_NOTIFICATION_SOUNDS.map(sound => (
+                                <SelectItem key={sound.id} value={sound.id}>
+                                  {sound.label}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                            {systemSounds && systemSounds.length > 0 && (
+                              <>
+                                <SelectSeparator />
+                                <SelectGroup>
+                                  <SelectGroupLabel>{systemGroupLabel}</SelectGroupLabel>
+                                  {systemSounds.map(sound => (
+                                    <SelectItem key={sound.id} value={sound.id}>
+                                      {sound.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectGroup>
+                              </>
+                            )}
+                          </SelectPopup>
+                        </Select>
+                        <Button
+                          type='button'
+                          variant='ghost'
+                          size='icon-sm'
+                          disabled={isMuted}
+                          aria-label={`试听${category.label}提示音`}
+                          onClick={() => {
+                            void previewNotificationSound(value)
+                          }}
+                        >
+                          <Volume2 className='size-4' aria-hidden='true' />
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                })}
               </div>
             </div>
 

@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react'
 
 import { LOGIN_CONFIG } from '@/lib/const'
+import { playNotificationSoundInRenderer } from '@/lib/sound-player'
 
 import { usePrivateMessages } from '@/hooks/usePrivateMessages'
 
@@ -72,6 +73,23 @@ export default function App() {
 
   const openSettings = useSettings(state => state.openSettings)
   const openAbout = useSettings(state => state.openAbout)
+
+  // Sync persisted system notification sound to main process on launch (updates sync from setNotificationSound)
+  useEffect(() => {
+    void window.electronAPI?.notificationSounds?.setSystemSoundPref({
+      soundId: useSettings.getState().notificationSounds.system,
+    })
+  }, [])
+
+  // Play notification audio in renderer when main process suppresses native toast sound (Windows/Linux)
+  useEffect(() => {
+    const cleanup = window.electronAPI?.notificationSounds?.onPlaySound(payload => {
+      void playNotificationSoundInRenderer(payload.soundId)
+    })
+    return () => {
+      cleanup?.()
+    }
+  }, [])
 
   // Listen for About menu event from main process (always available)
   useEffect(() => {

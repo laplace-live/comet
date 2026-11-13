@@ -18,9 +18,21 @@ import type { ShowNotificationParams, UpdateStatusInfo } from './types/electron'
 
 import { registerBilibiliIpcHandlers } from './api/bilibili'
 import { cleanupBroadcastWebSocket, initBroadcastWebSocket } from './api/broadcast-websocket'
+import {
+  prepareNotificationSound,
+  registerNotificationSoundIpcHandlers,
+  stopActiveSoundPlayback,
+} from './api/notification-sounds'
 import { UPDATE_BASE_URL } from './lib/const'
 import { IpcChannel, IpcEvent } from './lib/ipc'
-import { createTray, destroyTray, focusMainWindow, maybeShowTrayHint, updateTrayUnread } from './tray'
+import {
+  createTray,
+  destroyTray,
+  focusMainWindow,
+  maybeShowTrayHint,
+  setSystemNotificationSoundPref,
+  updateTrayUnread,
+} from './tray'
 
 // Set to true once the user explicitly quits (tray menu, Ctrl+Q, or an update
 // install) so the window 'close' handler stops hiding to the tray and lets the
@@ -111,10 +123,16 @@ const isSafeForExternalOpen = (url: string): boolean => {
   }
 }
 
+// Allow Web Audio notification playback in the renderer on Windows/Linux even before a user gesture
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+
 // Skip initialization if this is a secondary instance (will exit shortly)
 if (isSingleInstance) {
   // Register IPC handlers
   registerBilibiliIpcHandlers()
+  registerNotificationSoundIpcHandlers({
+    onSetSystemSoundPref: setSystemNotificationSoundPref,
+  })
 
   // Initialize WebSocket for real-time notifications
   initBroadcastWebSocket()
@@ -185,11 +203,14 @@ ipcMain.handle(IpcChannel.SHOW_NOTIFICATION, async (_event, params: ShowNotifica
     icon = await fetchImageAsNativeImage(params.icon)
   }
 
+  const soundOpts = prepareNotificationSound(params.sound)
+
   const notification = new Notification({
     title: params.title,
     body: params.body,
     icon,
-    silent: false,
+    silent: soundOpts.silent,
+    ...(soundOpts.sound ? { sound: soundOpts.sound } : {}),
   })
 
   // Keep reference to prevent garbage collection
@@ -221,6 +242,7 @@ ipcMain.handle(IpcChannel.SHOW_NOTIFICATION, async (_event, params: ShowNotifica
   })
 
   notification.show()
+  soundOpts.afterShow?.()
   console.log('[Notification] Shown for:', params.title)
   return { shown: true }
 })
@@ -513,6 +535,7 @@ app.on('ready', () => {
 // Cleanup WebSocket on quit
 app.on('before-quit', () => {
   isQuitting = true
+  stopActiveSoundPlayback()
   destroyTray()
   cleanupBroadcastWebSocket()
 })

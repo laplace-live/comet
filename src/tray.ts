@@ -1,6 +1,9 @@
 import { app, BrowserWindow, Menu, type NativeImage, Notification, nativeImage, Tray } from 'electron'
 import Store from 'electron-store'
 
+import { DEFAULT_NOTIFICATION_SOUNDS } from '@/lib/notification-sounds'
+
+import { prepareNotificationSound } from '@/api/notification-sounds'
 import { TRAY_ICONS } from '@/assets/tray-icons.generated'
 
 // The tray is only meaningful on Windows and Linux. macOS keeps its dock UX.
@@ -19,9 +22,11 @@ let unreadIcon: NativeImage | null = null
 // the zero boundary (e.g. 3 -> 4 updates the tooltip but not the image).
 let lastHadUnread: boolean | null = null
 
-// One-shot "still running in the tray" hint, persisted so it shows only once.
+// One-shot "still running in the tray" hint, persisted so it shows only once,
+// plus the user's chosen system notification sound for main-process notifications.
 interface AppPrefsSchema {
   hasShownTrayHint: boolean
+  systemNotificationSound: string
 }
 // Constructed lazily inside maybeShowTrayHint's try/catch, never at module load:
 // `new Store()` reads and writes the prefs file on construction, which can throw
@@ -33,11 +38,26 @@ function getPrefsStore(): Store<AppPrefsSchema> {
   if (!prefsStore) {
     prefsStore = new Store<AppPrefsSchema>({
       name: 'app-prefs',
-      defaults: { hasShownTrayHint: false },
+      defaults: {
+        hasShownTrayHint: false,
+        systemNotificationSound: DEFAULT_NOTIFICATION_SOUNDS.system,
+      },
       clearInvalidConfig: true,
     })
   }
   return prefsStore
+}
+
+/** Sync the renderer's `notificationSounds.system` setting for main-process notifications. */
+export function setSystemNotificationSoundPref(soundId: string): void {
+  if (!isTraySupported()) return
+  try {
+    const store = getPrefsStore()
+    if (store.get('systemNotificationSound') === soundId) return
+    store.set('systemNotificationSound', soundId)
+  } catch (err) {
+    console.error('[Tray] saving systemNotificationSound failed (non-fatal):', err)
+  }
 }
 
 function getIcons(): { normal: NativeImage; unread: NativeImage } {
@@ -135,10 +155,17 @@ export function maybeShowTrayHint(): void {
     if (store.get('hasShownTrayHint')) return
     if (!Notification.isSupported()) return
 
-    new Notification({
+    const soundId = store.get('systemNotificationSound') || DEFAULT_NOTIFICATION_SOUNDS.system
+    const soundOpts = prepareNotificationSound(soundId)
+
+    const notification = new Notification({
       title: 'LAPLACE Comet',
       body: 'LAPLACE Comet 仍在后台运行，可从系统托盘重新打开。',
-    }).show()
+      silent: soundOpts.silent,
+      ...(soundOpts.sound ? { sound: soundOpts.sound } : {}),
+    })
+    notification.show()
+    soundOpts.afterShow?.()
 
     store.set('hasShownTrayHint', true)
   } catch (err) {

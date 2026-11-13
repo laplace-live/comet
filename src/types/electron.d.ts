@@ -1,4 +1,5 @@
 import type { AccountSnapshot, ChatMatch, SavedChat } from '../lib/account-cache'
+import type { SystemNotificationSoundOption } from '../lib/notification-sounds'
 import type {
   BilibiliCredentials,
   BilibiliLinkSettingResponse,
@@ -324,8 +325,18 @@ export interface ShowNotificationParams {
   icon?: string
   talkerId: number
   sessionType: number
+  /** Notification sound ID ('default', 'none', 'custom:*', or 'system:*') */
+  sound?: string
   /** For 客服消息, the customer service chat the notification is for */
   customerServiceShop?: CustomerServiceShop
+}
+
+export interface NotificationSoundParams {
+  soundId: string
+}
+
+export interface PlayNotificationSoundEvent {
+  soundId: string
 }
 
 export interface NavigateToSessionParams {
@@ -440,6 +451,15 @@ export interface ElectronAPI {
   // Clipboard utilities
   clipboard: {
     copyImage: (params: CopyImageParams) => Promise<CopyImageResult>
+  }
+
+  // Notification sound customization & playback
+  notificationSounds: {
+    listSystemSounds: () => Promise<SystemNotificationSoundOption[]>
+    readSoundData: (params: NotificationSoundParams) => Promise<Uint8Array | null>
+    preview: (params: NotificationSoundParams) => Promise<void>
+    setSystemSoundPref: (params: NotificationSoundParams) => Promise<void>
+    onPlaySound: (callback: (event: PlayNotificationSoundEvent) => void) => () => void
   }
 
   // App menu event listeners (return cleanup function)

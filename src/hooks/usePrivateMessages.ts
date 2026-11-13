@@ -59,6 +59,7 @@ import {
   isUnfollowedChat,
   parseMessageContent,
 } from '@/lib/message-utils'
+import { getNotificationSoundCategory } from '@/lib/notification-sounds'
 
 import { toastManager } from '@/components/ui/toast'
 
@@ -1113,6 +1114,12 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
 
       // Parse message content
       const messageText = parseMessageContent(message)
+      const soundCategory = getNotificationSoundCategory({
+        sessionType,
+        systemMsgType: session?.system_msg_type,
+        msgType: message.msg_type,
+      })
+      const sound = useSettings.getState().notificationSounds[soundCategory]
 
       try {
         const result = await window.electronAPI.bilibili.showNotification({
@@ -1121,6 +1128,7 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
           icon: senderAvatar,
           talkerId,
           sessionType,
+          sound,
         })
         console.log('[usePrivateMessages] Notification result:', result)
       } catch (err) {
@@ -3085,13 +3093,20 @@ export function usePrivateMessages(): UsePrivateMessagesReturn {
         return
       }
 
+      const sessionType = session?.session_type ?? SESSION_TYPE.USER
+      const soundCategory = getNotificationSoundCategory({
+        sessionType,
+        isCustomerService: true,
+      })
+
       try {
         const result = await window.electronAPI.bilibili.showNotification({
           title: session ? getSessionName(session) : '客服消息',
           body: getCustomerServicePreview(latest) || '[新消息]',
           icon: (session && getSessionAvatar(session)) || undefined,
           talkerId: session?.talker_id ?? 0,
-          sessionType: session?.session_type ?? SESSION_TYPE.USER,
+          sessionType,
+          sound: useSettings.getState().notificationSounds[soundCategory],
           // Clicking it opens 客服消息 on this chat
           customerServiceShop: getCustomerServiceShop(chat),
         })
