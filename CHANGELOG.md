@@ -1,5 +1,12 @@
 # laplace-comet
 
+## 1.7.1
+
+### Patch Changes
+
+- 80b972a: Update Electron to 45.3.0 with the latest Chromium security fixes
+- 02aff06: Update Electron to 45.3.1 with the latest TLS security fixes
+
 ## 1.7.0
 
 ### Minor Changes
