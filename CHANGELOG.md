@@ -1,5 +1,12 @@
 # laplace-comet
 
+## 1.8.1
+
+### Patch Changes
+
+- 831f83e: Update Electron to 45.3.2 with the latest Chromium security fixes
+- 70dbf2c: Update Electron to 45.3.3 with Node.js 24.22.3
+
 ## 1.8.0
 
 ### Minor Changes
