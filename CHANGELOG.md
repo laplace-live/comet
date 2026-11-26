@@ -1,5 +1,12 @@
 # laplace-comet
 
+## 1.8.3
+
+### Patch Changes
+
+- 891fc97: Update Electron to 45.5.0
+- 4bdccac: Update Electron to 45.4.1
+
 ## 1.8.2
 
 ### Patch Changes
